@@ -48,17 +48,30 @@ export function createFileSource(path) {
   };
 }
 
-export function createR2Source({ accountId, bucket, objectKey, accessKeyId, secretAccessKey }, fetcher = fetch) {
-  const parts = typeof objectKey === 'string' ? objectKey.split('/') : [];
+function r2Request({ accountId, bucket, jurisdiction = 'default', accessKeyId, secretAccessKey }, suffix, fetcher) {
   if (!/^[a-f0-9]{32}$/.test(accountId) || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket) ||
-      !parts.length || parts.some(p => !p || p === '.' || p === '..') || !accessKeyId || !secretAccessKey) {
+      !['default', 'eu', 'us', 'fedramp'].includes(jurisdiction) || !accessKeyId || !secretAccessKey) {
     throw new Error('Invalid private R2 configuration.');
   }
-  const url = 'https://' + accountId + '.r2.cloudflarestorage.com/' + bucket + '/' + parts.map(encodeURIComponent).join('/');
+  const region = jurisdiction === 'default' ? '' : '.' + jurisdiction;
+  const url = 'https://' + accountId + region + '.r2.cloudflarestorage.com/' + bucket + suffix;
   const client = new AwsClient({ accessKeyId, secretAccessKey, service: 's3', region: 'auto' });
-  const request = async (method, headers) => fetcher(await client.sign(url, {
+  return async (method, headers) => fetcher(await client.sign(url, {
     method, headers, redirect: 'error', signal: AbortSignal.timeout(15000), aws: { allHeaders: true }
   }));
+}
+
+export async function checkR2Bucket(settings, fetcher = fetch) {
+  const response = await r2Request(settings, '', fetcher)('HEAD');
+  if (response.status !== 200) throw new Error('Bucket is unavailable.');
+}
+
+export function createR2Source(settings, fetcher = fetch) {
+  const parts = typeof settings.objectKey === 'string' ? settings.objectKey.split('/') : [];
+  if (!parts.length || parts.some(p => !p || p === '.' || p === '..')) {
+    throw new Error('Invalid private R2 configuration.');
+  }
+  const request = r2Request(settings, '/' + parts.map(encodeURIComponent).join('/'), fetcher);
   return {
     async head() {
       const response = await request('HEAD');

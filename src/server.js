@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { createRentalAuthority } from './rental.js';
 import { openFilm } from './media.js';
+import { createSetup } from './setup.js';
 import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
@@ -50,7 +51,11 @@ function encrypt(bytes, key, index) {
   return Buffer.concat([cipher.update(bytes), cipher.final()]);
 }
 
-export async function makeServer(openMaker) {
+export async function makeServer(openMaker, { setup, publicOrigin } = {}) {
+  if (publicOrigin) {
+    const url = new URL(publicOrigin);
+    if (url.protocol !== 'https:' || url.origin !== publicOrigin) throw new Error('Set STREAM_PUBLIC_ORIGIN to an HTTPS origin.');
+  }
   const connections = new Map();
   function connection(maker) {
     // Concurrent embeds share their own maker's index. A failed provider can
@@ -70,8 +75,22 @@ export async function makeServer(openMaker) {
       404: 'Unavailable.', 405: 'Method unavailable.', 413: 'Request too large.', 503: 'Film temporarily unavailable.' }[status]);
     try {
       const host = req.headers.host || '';
-      if (!/^(localhost|127\.0\.0\.1)(:\d{1,5})?$/.test(host)) return fail(400);
+      if (publicOrigin ? host !== new URL(publicOrigin).host : !/^(localhost|127\.0\.0\.1)(:\d{1,5})?$/.test(host)) return fail(400);
+      const origin = publicOrigin || 'http://' + host;
       const path = req.url.split('?')[0];
+      const sendMp4 = (data, extra = {}) => {
+        const mediaHeaders = { ...extra, 'Accept-Ranges': 'bytes' };
+        if (!req.headers.range) return send(200, 'video/mp4', data, mediaHeaders);
+        const range = rangeFor(req.headers.range, data.length);
+        if (!range) return send(416, 'text/plain', '', { ...extra, 'Content-Range': 'bytes */' + data.length });
+        const [from, to] = range;
+        return send(206, 'video/mp4', data.subarray(from, to + 1), {
+          ...mediaHeaders, 'Content-Range': 'bytes ' + from + '-' + to + '/' + data.length
+        });
+      };
+      if (setup && (path === '/setup' || path.startsWith('/setup/'))) {
+        return await setup.handle(req, { path, origin, send, sendMp4 });
+      }
       const read = req.method === 'GET' || req.method === 'HEAD';
       if (read && staticFiles.has(path)) {
         const { type, data } = staticFiles.get(path);
@@ -93,7 +112,7 @@ export async function makeServer(openMaker) {
       if (asset && !grant) return fail(403);
       if (action === 'session') {
         if (req.method !== 'POST') return fail(405);
-        if (req.headers.origin !== 'http://' + host || req.headers['content-type'] !== 'text/plain') return fail(403);
+        if (req.headers.origin !== origin || req.headers['content-type'] !== 'text/plain') return fail(403);
         const chunks = [];
         let size = 0;
         for await (const chunk of req) {
@@ -108,16 +127,7 @@ export async function makeServer(openMaker) {
         } catch { return fail(403); }
       }
       const { film, authority } = await connection(spec.maker);
-      if (action === 'preview.mp4') {
-        const data = await film.preview();
-        if (!req.headers.range) return send(200, 'video/mp4', data, { 'Accept-Ranges': 'bytes' });
-        const range = rangeFor(req.headers.range, data.length);
-        if (!range) return send(416, 'text/plain', '', { 'Content-Range': 'bytes */' + data.length });
-        const [from, to] = range;
-        return send(206, 'video/mp4', data.subarray(from, to + 1), {
-          'Accept-Ranges': 'bytes', 'Content-Range': 'bytes ' + from + '-' + to + '/' + data.length
-        });
-      }
+      if (action === 'preview.mp4') return sendMp4(await film.preview());
       const scope = { film: spec.scope, revision: film.revision };
       let key;
       try {
@@ -139,6 +149,7 @@ export async function makeServer(openMaker) {
   server.on('close', () => {
     for (const pending of connections.values()) pending.then(({ film }) => film.close(), () => {});
     connections.clear();
+    setup?.close();
   });
   return server;
 }
@@ -148,7 +159,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     const env = await playbackSettings({ signing: true, maker });
     const authority = createRentalAuthority(env.STREAM_RENTAL_SECRET);
     return { film: await openFilm(sourceFromEnv(env, maker)), authority };
-  });
+  }, { setup: await createSetup(), publicOrigin: process.env.STREAM_PUBLIC_ORIGIN });
   server.listen(Number(process.env.PORT || 8787), '127.0.0.1', () =>
-    console.log('Stream is listening at http://127.0.0.1:' + server.address().port + '/embed/clock'));
+    console.log('Filmmaker setup: ' + (process.env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + server.address().port) + '/setup'));
 }

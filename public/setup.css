@@ -1,0 +1,76 @@
+:root {
+  color-scheme: light;
+  --ink: #20231f;
+  --muted: #535b50;
+  --line: #d5dbd1;
+  --paper: #fafbf8;
+  --accent: #214d35;
+  font: 100%/1.55 Inter, "Helvetica Neue", Arial, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+}
+* { box-sizing: border-box; }
+body { margin: 0; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: .18em; }
+a:hover { text-decoration-thickness: .14em; }
+:is(a, button, input, select, summary, main):focus-visible { outline: 3px solid #2875bd; outline-offset: 3px; }
+.skip { position: absolute; left: .5rem; top: -5rem; background: white; padding: .7rem; }
+.skip:focus { top: .4rem; }
+.masthead { border-bottom: 1px solid var(--line); background: #fff; }
+.bar, main { width: min(100% - 2.5rem, 47rem); margin-inline: auto; }
+.bar { display: flex; align-items: center; justify-content: space-between; min-height: 4.25rem; gap: 1rem; }
+.brand { font-size: 1.08rem; letter-spacing: -.035em; }
+.brand strong { font-weight: 750; }
+main { padding-block: clamp(1.75rem, 5vw, 3.4rem) 4rem; }
+h1, h2, h3 { line-height: 1.18; text-wrap: balance; }
+h1 { font-size: clamp(2rem, 6vw, 3.1rem); letter-spacing: -.055em; margin: 0; }
+h2 { margin: 0; font-size: clamp(1.28rem, 4vw, 1.65rem); letter-spacing: -.035em; }
+h3 { font-size: 1rem; margin-block: 1rem .3rem; }
+p { margin: .55rem 0 .85rem; }
+.account, .hint, .provider-card p, .film-card > p, .film-guide p { color: var(--muted); }
+.section-links { display: flex; gap: 1.4rem; margin: .9rem 0 1.45rem; }
+.section-links a { display: inline-flex; align-items: center; min-height: 2.75rem; font-weight: 600; }
+.provider-card, .film-card {
+  background: #fff; border: 1px solid var(--line); border-radius: .75rem;
+  margin-block: 0 1rem; padding: clamp(1.1rem, 4vw, 1.85rem);
+}
+[id] { scroll-margin-block-start: .8rem; }
+.provider-status { display: inline-block; border: 1px solid var(--line); border-radius: 1rem; padding: .15rem .6rem; font-size: .85rem; }
+.feedback { margin-block: .5rem 1rem; border-inline-start: .24rem solid var(--accent); padding: .75rem 1rem; background: #e8f1e7; }
+.feedback.error { color: #682416; border-color: #9a3828; background: #fff0e8; }
+details { border-block-start: 1px solid var(--line); padding: .2rem 0; }
+summary { cursor: pointer; padding: .65rem 0; min-height: 2.75rem; font-weight: 650; color: var(--ink); }
+summary::marker { color: var(--muted); }
+ol, ul { margin: .4rem 0 1rem; padding-inline-start: 1.5rem; }
+li + li { margin-block-start: .4rem; }
+form { margin: 0; }
+.provider-card form, .film-card form { margin-top: 1rem; }
+label { font-weight: 650; display: block; }
+input:not([type="hidden"]):not([type="checkbox"]), select {
+  display: block; width: min(100%, 35rem); min-width: 0; min-height: 2.75rem;
+  margin: .25rem 0 1rem; padding: .55rem .65rem; font: inherit; color: var(--ink);
+  background: white; border: 1px solid #899486; border-radius: .35rem;
+}
+input[type="checkbox"] { inline-size: 1.15rem; block-size: 1.15rem; accent-color: var(--accent); flex: none; }
+label:has(input[type="checkbox"]) { display: flex; align-items: baseline; gap: .55rem; margin: .75rem 0 1rem; font-weight: 500; }
+button, .primary-link {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 2.75rem;
+  border: 1px solid var(--accent); border-radius: .35rem; font: inherit; font-weight: 650;
+  padding: .53rem .9rem; color: white; background: var(--accent); cursor: pointer; text-decoration: none;
+}
+button:hover, .primary-link:hover { background: #163e28; }
+.sign-out, .secondary, .provider-card button + button { color: var(--ink); background: white; border-color: var(--line); }
+.sign-out:hover, .secondary:hover, .provider-card button + button:hover { background: #eef2eb; }
+.sign-out { border: 0; font-size: .91rem; }
+.provider-card button { margin: .15rem .3rem .15rem 0; }
+.film-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; margin-top: 1rem; }
+.film-actions form { margin: 0; }
+.hint, .provider-card small { font-size: .92rem; }
+.provider-card small { display: block; color: var(--muted); font-weight: 400; margin: -.65rem 0 .9rem; }
+.setup-shell video { display: block; width: 100%; max-height: 70vh; background: #111; margin-block: 1rem; }
+input[aria-describedby="object-hint"] { margin-bottom: .25rem !important; }
+@media (max-width: 30rem) {
+  .bar, main { width: calc(100% - 1.5rem); }
+  .provider-card button, .film-card :is(button, .primary-link) { width: 100%; margin-inline: 0; }
+  .film-actions { display: grid; }
+}
