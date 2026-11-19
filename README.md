@@ -57,7 +57,7 @@ STREAM_STATE_DIR="/path/to/operator/feature" npm run rental:test -- maker-b/feat
 npm start
 ```
 
-The feature operator gets a separate signing key, test order and receipt. The short and feature routes are `/embed/clock` and `/embed/feature`. Each has its own offer and permission scope. The public embedding page contains only the public iframe URLs. Supply the rental receipt to the buyer's individual player.
+The feature operator gets a separate signing key, test order and receipt. Keep the order journal for retries. After a receipt expires, archive that filmmaker’s completed `test-order.json` privately before starting a fresh sandbox purchase. The signing key and R2 object can be reused. The short and feature routes are `/embed/clock` and `/embed/feature`. Each has its own offer and permission scope. The public embedding page contains only the public iframe URLs. Supply the rental receipt to the buyer's individual player.
 
 ## Exercise a paid rental
 
@@ -87,6 +87,22 @@ STREAM_RECEIPT_FILE="/path/to/operator/receipt.txt" npm run check:browser
 ```
 
 The full check uses the ordinary extension popup on the player and on a separate embedding origin. It measures saved media with FFprobe, decodes it with FFmpeg, and checks the paid stream at two minutes. The combined page has two copies of the first player and a second film ID. Both IDs deliberately share the single synthetic source in this test. To scan browser-visible responses for your actual storage identifiers, run the check with the nonsecret source settings loaded, for example with `node --env-file="/path/to/operator/source.env" scripts/check-browser.js`.
+
+### Safari playback rehearsal
+
+The 90-minute fixture passed on macOS Safari 27.2, iPhone Simulator and a physical iPhone 16 Pro Max with iOS 27.2.1. Its clock matched the original after seeks to 45:00, 89:00 and back to 5:00. In both rental directions the neighboring film stopped at ten seconds while the rental kept playing.
+
+Configure both R2 films and their sandbox receipts, and keep the two local fixture originals for frame comparisons. Start the player with `PORT=8895 npm start`. In a second terminal on macOS, run `node scripts/check-safari.js desktop` with Safari’s WebDriver available. The harness opens an external embedding page, rents one film while leaving its neighbor preview-only, and repeats with the roles reversed. It compares the clock in presented video frames against the original MP4s. Set `EVIDENCE_DIR` to save the JSON report to a private directory of your choice.
+
+For an iPhone on the same private Wi-Fi, leave the loopback player running. On the Mac run the following, substituting the Wi-Fi interface if it differs from `en0`.
+
+```sh
+STREAM_PUBLISHER_BIND="$(ipconfig getifaddr en0)" \
+STREAM_PUBLISHER_HOST="$(scutil --get LocalHostName).local" \
+node scripts/check-safari-manual.js
+```
+
+Scan the QR image at the path the command prints. In ordinary iPhone Safari, tap **Play rental**, then **Play 10-second preview**. The test switches the films after the preview ends. Repeat the two taps and wait for the completion message. The invitation is single-use, lasts ten minutes, and exercises only the synthetic fixtures. The relay keeps the receipts on the player side and closes after the test. The Mac saves the frame comparisons and the preview endpoint in the evidence directory. This local HTTP fixture test can run with the iPhone’s Developer Mode off.
 
 ## Path to a hosted pilot
 
