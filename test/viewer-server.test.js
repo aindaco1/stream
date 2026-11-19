@@ -47,3 +47,75 @@ test('the public server exposes published embeds and selects checkout from the v
   assert.deepEqual(await event.json(), { received: true });
   assert.deepEqual(calls, [['verify', 'film-a'], ['checkout', 'acct_sellerA'], ['status', 'acct_sellerB'], ['event', '  {"event":true}\n', 'test-signature']]);
 });
+
+test('only a verified purchase can stream the saved original, including a byte range or a native download', async t => {
+  const original = Buffer.from('original-film');
+  let paid = true;
+  const streamCalls = [];
+  const offer = { id: 'test-film', scope: 'saved/test', revision: 'r1', prices: { rent: 99, buy: 299 }, title: 'My film', authority: {
+    async exchange(receipt) {
+      if (receipt !== 'purchase-receipt') throw Error();
+      return { grant: 'purchase-grant' };
+    },
+    async verifyDownloadGrant(grant) {
+      if (grant !== 'purchase-grant') throw Error();
+      return { orderId: 'buy-1' };
+    }
+  } };
+  const starts = [];
+  const server = await makeServer(null, {
+    catalog: {
+      get: id => id === offer.id && offer, verify: async () => offer,
+      async download(id, grant) {
+        assert.equal(id, offer.id);
+        assert.equal(grant, 'purchase-grant');
+        return { size: original.length, title: 'Film\r\nÉ', async *stream(from, end) {
+          streamCalls.push([from, end]);
+          yield original.subarray(from, end);
+        } };
+      }
+    },
+    checkout: {
+      async start({ kind }) { starts.push(kind); return { status: 'pending' }; },
+      async verifyPurchase(input) {
+        assert.equal(input.offer, offer);
+        assert.equal(input.orderId, 'buy-1');
+        return paid;
+      }
+    }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const prefix = origin + '/film/test-film/';
+  const url = prefix + 'download';
+  const auth = { Authorization: 'Bearer purchase-grant' };
+  const token = randomBytes(32).toString('base64url');
+  for (const action of ['checkout', 'buy']) {
+    const response = await fetch(prefix + action, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'text/plain' }, body: token });
+    assert.equal(response.status, 200);
+  }
+  assert.deepEqual(starts, ['rent', 'buy']);
+  assert.equal((await fetch(url)).status, 403);
+  assert.equal((await fetch(url, { headers: { Authorization: 'Bearer rental-grant' } })).status, 403);
+  paid = false;
+  assert.equal((await fetch(url, { headers: auth })).status, 403);
+  paid = true;
+  const head = await fetch(url, { method: 'HEAD', headers: auth });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-length'), String(original.length));
+  assert.equal((await fetch(url, { headers: { ...auth, Range: 'bytes=15-21' } })).status, 416);
+  assert.deepEqual(streamCalls, []);
+  const range = await fetch(url, { headers: { ...auth, Range: 'bytes=1-3' } });
+  assert.equal(range.status, 206);
+  assert.equal(range.headers.get('content-range'), 'bytes 1-3/' + original.length);
+  assert.equal(await range.text(), 'rig');
+  const body = new URLSearchParams({ receipt: 'purchase-receipt' });
+  const crossSite = await fetch(url, { method: 'POST', headers: { Origin: 'https://publisher.example' }, body });
+  assert.equal(crossSite.status, 403);
+  const download = await fetch(url, { method: 'POST', headers: { Origin: origin }, body });
+  assert.equal(download.status, 200);
+  assert.match(download.headers.get('content-disposition'), /attachment;.*filename\*=UTF-8''Film%C3%89.mp4/);
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), original);
+  assert.deepEqual(streamCalls, [[1, 4], [0, original.length]]);
+});

@@ -85,3 +85,72 @@ test('receipt issuance requires a captured matching undisputed sandbox payment',
   }
   assert.throws(() => createRentalAuthority('short-secret'));
 });
+
+test('a delayed rental starts at verified settlement and still expires exactly 48 hours later', async () => {
+  const paidAt = purchasedAt + 3 * 86400;
+  let current = paidAt + 1;
+  const authority = createRentalAuthority(randomBytes(32), { now: () => current * 1000 });
+  const payment = purchase();
+  await assert.rejects(authority.issueReceipt(payment, film));
+  for (const invalid of [null, 'later', NaN, paidAt + 0.5, purchasedAt - 1, current + 1]) {
+    await assert.rejects(authority.issueReceipt(payment, film, { paidAt: invalid }));
+  }
+  const receipt = await authority.issueReceipt(payment, film, { paidAt });
+  const expires = paidAt + 48 * 3600;
+  assert.equal((await authority.exchange(receipt, film)).rentalExpiresAt, expires);
+  await assert.rejects(authority.issueReceipt({ ...payment, status: 'processing' }, film, { paidAt }));
+  current = expires;
+  await assert.rejects(authority.exchange(receipt, film));
+  await assert.rejects(authority.issueReceipt(payment, film, { paidAt }));
+});
+
+function pricedIntent(kind, amount, order) {
+  const intent = purchase();
+  Object.assign(intent, { amount, amount_received: amount });
+  Object.assign(intent.metadata, { kind, amount: String(amount), order });
+  Object.assign(intent.latest_charge, { amount, amount_captured: amount, currency: 'usd' });
+  return intent;
+}
+
+test('buy receipts renew from the same confirmed order and authorize scoped original downloads', async () => {
+  let now = purchasedAt + 30 * 86400;
+  const authority = createRentalAuthority(randomBytes(32), { now: () => now * 1000 });
+  const payment = pricedIntent('buy', 299, 'order_1');
+  const order = { amount: 299, orderId: 'order_1' };
+  const receipt = await authority.issuePurchaseReceipt(payment, film, order);
+  const first = await authority.exchange(receipt, film);
+  assert.equal(first.access, 'buy');
+  assert.equal(first.rentalExpiresAt, null);
+  assert.deepEqual(await authority.verifyDownloadGrant(first.grant, film), { orderId: order.orderId, expiresAt: now + 600 });
+  const second = await authority.exchange(receipt, film);
+  assert.notDeepEqual(await authority.keyForGrant(first.grant, film), await authority.keyForGrant(second.grant, film));
+  await assert.rejects(authority.verifyDownloadGrant(receipt, film));
+  await assert.rejects(authority.verifyDownloadGrant(first.grant, { ...film, revision: 'changed' }));
+  now += 3600;
+  await assert.rejects(authority.verifyDownloadGrant(first.grant, film));
+  await assert.rejects(authority.exchange(receipt, film));
+  const renewed = await authority.issuePurchaseReceipt(payment, film, order);
+  assert.equal((await authority.exchange(renewed, film)).orderId, order.orderId);
+  payment.latest_charge.amount_refunded = 1;
+  await assert.rejects(authority.issuePurchaseReceipt(payment, film, order));
+});
+
+test('the order, amount, offer type and capture must match before either entitlement can be issued', async () => {
+  const authority = createRentalAuthority(randomBytes(32), { now: () => purchasedAt * 1000 });
+  const order = { amount: 299, orderId: 'order_1' };
+  const bought = pricedIntent('buy', 299, order.orderId);
+  await assert.rejects(authority.issuePurchaseReceipt(bought, film, { ...order, orderId: 'another' }));
+  await assert.rejects(authority.issuePurchaseReceipt(bought, film, { ...order, amount: 99 }));
+  await assert.rejects(authority.issueReceipt(bought, film, order));
+  bought.latest_charge.amount_captured = 99;
+  await assert.rejects(authority.issuePurchaseReceipt(bought, film, order));
+  const rent = pricedIntent('rent', 299, order.orderId);
+  await assert.rejects(authority.issuePurchaseReceipt(rent, film, order));
+  const receipt = await authority.issueReceipt(rent, film, { amount: 299 });
+  const access = await authority.exchange(receipt, film);
+  assert.equal(access.rentalExpiresAt, rentalEnd);
+  await assert.rejects(authority.verifyDownloadGrant(access.grant, film));
+  rent.metadata.amount = '99';
+  await assert.rejects(authority.issueReceipt(rent, film, { amount: 299 }));
+  await assert.rejects(authority.issuePurchaseReceipt(purchase(), film, { ...order, amount: 99 }));
+});

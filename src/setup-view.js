@@ -1,3 +1,4 @@
+import { filmPrices, usdInput } from './prices.js';
 import { stripeBusinessCountries } from './setup-stripe.js';
 import { renderR2Card, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
@@ -86,13 +87,30 @@ function formatDuration(duration) {
     .filter(Boolean).join(' ');
 }
 
+function priceFields(stored) {
+  const prices = filmPrices(stored) ?? { rent: null, buy: null };
+  return `<fieldset><legend>Viewer prices</legend>
+    <p class="hint">Renters can stream for 48 hours after payment. Buyers can save the original MP4. Leave a price blank to turn off that offer for new viewers.</p>
+    <label>48-hour rental (USD) <input type="number" name="rentPrice" min="0.50" max="999999.99" step="0.01" inputmode="decimal" value="${usdInput(prices.rent)}"></label>
+    <label>Download purchase (USD) <input type="number" name="buyPrice" min="0.50" max="999999.99" step="0.01" inputmode="decimal" value="${usdInput(prices.buy)}"></label>
+  </fieldset>`;
+}
+
+function priceEditor(film, csrf) {
+  return `<details><summary>Edit prices for ${escapeHtml(film.title)}</summary>
+    <form method="post" action="/setup/film/prices">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
+      ${priceFields(film.prices)}<button type="submit">Save prices</button>
+    </form></details>`;
+}
+
 function filmSection({ r2, rights, film, draft, csrf }) {
   const fields = hidden('csrf', csrf) + hidden('draftId', draft.id);
   if (film) {
     const duration = formatDuration(film.duration);
     const preview = privatePreview(film.previewPath) ?
       `<a class="primary-link" href="${escapeHtml(film.previewPath)}">Watch private preview</a>` : '';
-    return `<h2>${escapeHtml(film.title)}</h2><p>Private film${duration ? ' · ' + duration : ''}</p>
+    return `<h2>${escapeHtml(film.title)}</h2><p>Saved film${duration ? ' · ' + duration : ''}</p>
+      ${priceEditor(film, csrf)}
       <div class="film-actions">${preview}<form method="post" action="/setup/next">${fields}
       <button class="secondary" type="submit">Add another film</button></form></div>`;
   }
@@ -125,6 +143,7 @@ function filmSection({ r2, rights, film, draft, csrf }) {
       <label for="object-key">Object key</label><input id="object-key" name="objectKey" type="text" maxlength="1024" spellcheck="false"
         autocapitalize="none" required aria-describedby="object-hint" value="${escapeHtml(draft.objectKey)}">
       <p class="hint" id="object-hint">For example, films/My Feature.mp4. Copy the spelling and spaces exactly.</p>
+      ${priceFields(draft.prices)}
       <div class="film-actions"><button type="submit">Check film and create preview</button>
         <button class="secondary" type="submit" name="intent" value="save" formnovalidate>Save draft</button></div>
     </form>`;
@@ -132,8 +151,8 @@ function filmSection({ r2, rights, film, draft, csrf }) {
 
 export function renderSetupPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, rights = {}, film, films = [], draft = {}, error, notice }) {
   const filmHTML = `<section class="film-card" id="film">${filmSection({ r2, rights, film, draft, csrf })}</section>`;
-  const saved = !film && films.length ? films.filter(item => privatePreview(item.previewPath)).map(item =>
-    `<li><a href="${escapeHtml(item.previewPath)}">${escapeHtml(item.title)}</a></li>`).join('') : '';
+  const saved = films.length ? films.filter(item => privatePreview(item.previewPath) && item.id !== film?.id).map(item =>
+    `<li><a href="${escapeHtml(item.previewPath)}">${escapeHtml(item.title)}</a>${priceEditor(item, csrf)}</li>`).join('') : '';
   const library = saved ? `<section class="film-card"><h2>Saved films</h2><ul>${saved}</ul></section>` : '';
   const connections = `<div id="payments">${stripeCard(stripe, csrf)}</div>
     <div id="storage">${storageCard(r2, draft, csrf)}</div>`;

@@ -7,20 +7,34 @@
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" type="module"></script>
 </head>
-<body data-checkout="{{checkout}}">
+<body data-checkout="{{checkout}}" data-rent="{{rent}}" data-buy="{{buy}}">
   <main aria-labelledby="film-title">
     <video controls playsinline preload="none" aria-label="{{title}}"></video>
     <div class="details">
       <div><h1 id="film-title">{{title}}</h1><p>Dust Wave Stream · Playback prototype</p></div>
       <button type="button" id="play">Play 10-second preview</button>
     </div>
-    <section id="purchase" aria-label="Rental checkout" hidden>
-      <p>$0.99 USD · 48 hours from purchase</p>
+    <section id="purchase" aria-label="Film offers" hidden>
+      <p id="terms"></p>
       <div class="actions">
-        <button type="button" id="rent">Start test rental</button>
+        <button type="button" id="rent" hidden>Rent</button>
+        <button type="button" id="buy" hidden>Buy</button>
         <button type="button" id="check-payment" class="secondary" hidden>Check payment</button>
-        <a id="checkout-here" target="_top" rel="noreferrer noopener" hidden>Use this tab for checkout</a>
       </div>
+    </section>
+    <section id="payment" aria-labelledby="checkout-heading" hidden>
+      <header><h2 id="checkout-heading" tabindex="-1">Test checkout</h2>
+        <button type="button" id="close-checkout" class="secondary">Back to film</button></header>
+      <div id="stripe-checkout"></div>
+    </section>
+    <section id="ownership" aria-label="Your purchase" hidden>
+      <form id="download" method="post"><input type="hidden" name="receipt"><button>Download film</button></form>
+      <details><summary>Save purchase link</summary>
+        <p>Save this private link to watch or download again. Anyone with the link can use your purchase.</p>
+        <label for="access-link">Private purchase link</label>
+        <div class="actions"><input id="access-link" type="text" readonly autocomplete="off" spellcheck="false">
+          <button type="button" class="secondary" id="copy-link">Copy link</button></div>
+      </details>
     </section>
     <p id="status" role="status" aria-live="polite"></p>
   </main>

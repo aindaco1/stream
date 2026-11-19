@@ -10,8 +10,9 @@ import { createViewerCheckout } from './viewer-checkout.js';
 
 const directory = operatorDirectory();
 if (!/^(sk|rk)_test_[A-Za-z0-9]+$/.test(process.env.STRIPE_CONNECT_SECRET_KEY ?? '') ||
+    !/^pk_test_[A-Za-z0-9]+$/.test(process.env.STRIPE_CONNECT_PUBLISHABLE_KEY ?? '') ||
     process.env.STRIPE_CONNECT_LIVE === '1' || !process.env.STRIPE_CONNECT_WEBHOOK_SECRET?.startsWith('whsec_')) {
-  throw new Error('Configure a Stripe sandbox key and Connect webhook signing secret for viewer checkout.');
+  throw new Error('Configure Stripe sandbox secret and publishable keys and a Connect webhook signing secret for viewer checkout.');
 }
 const secret = process.env.STREAM_RENTAL_SECRET ||
   parseEnv(await readFile(join(directory, 'rental.env'), 'utf8')).STREAM_RENTAL_SECRET;

@@ -11,9 +11,9 @@ function checkedHead(size, revision) {
   return { size, revision };
 }
 
-function checkRange({ size }, start, end) {
+function checkRange({ size }, start, end, limit = BLOCK_SIZE) {
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
-      start < 0 || end <= start || end > size || end - start > BLOCK_SIZE) {
+      start < 0 || end <= start || end > size || end - start > limit) {
     throw new Error('Invalid source range.');
   }
 }
@@ -56,8 +56,8 @@ function r2Request({ accountId, bucket, jurisdiction = 'default', accessKeyId, s
   const region = jurisdiction === 'default' ? '' : '.' + jurisdiction;
   const url = 'https://' + accountId + region + '.r2.cloudflarestorage.com/' + bucket + suffix;
   const client = new AwsClient({ accessKeyId, secretAccessKey, service: 's3', region: 'auto' });
-  return async (method, headers) => fetcher(await client.sign(url, {
-    method, headers, redirect: 'error', signal: AbortSignal.timeout(15000), aws: { allHeaders: true }
+  return async (method, headers, signal = AbortSignal.timeout(15000)) => fetcher(await client.sign(url, {
+    method, headers, redirect: 'error', signal, aws: { allHeaders: true }
   }));
 }
 
@@ -72,6 +72,17 @@ export function createR2Source(settings, fetcher = fetch) {
     throw new Error('Invalid private R2 configuration.');
   }
   const request = r2Request(settings, '/' + parts.map(encodeURIComponent).join('/'), fetcher);
+  async function rangeResponse(head, start, end, signal) {
+    const response = await request('GET', { Range: `bytes=${start}-${end - 1}`, 'If-Match': head.revision }, signal);
+    const expected = `bytes ${start}-${end - 1}/${head.size}`;
+    if (response.status !== 206 || response.headers.get('etag') !== head.revision ||
+        response.headers.get('content-range') !== expected ||
+        Number(response.headers.get('content-length')) !== end - start || !response.body) {
+      await response.body?.cancel();
+      throw new Error('Source revision or range is unavailable.');
+    }
+    return response;
+  }
   return {
     async head() {
       const response = await request('HEAD');
@@ -83,14 +94,7 @@ export function createR2Source(settings, fetcher = fetch) {
     },
     async read(head, start, end) {
       checkRange(head, start, end);
-      const response = await request('GET', { Range: `bytes=${start}-${end - 1}`, 'If-Match': head.revision });
-      const expected = `bytes ${start}-${end - 1}/${head.size}`;
-      if (response.status !== 206 || response.headers.get('etag') !== head.revision ||
-          response.headers.get('content-range') !== expected ||
-          Number(response.headers.get('content-length')) !== end - start || !response.body) {
-        await response.body?.cancel();
-        throw new Error('Source revision or range is unavailable.');
-      }
+      const response = await rangeResponse(head, start, end);
       const data = new Uint8Array(end - start);
       const reader = response.body.getReader();
       let offset = 0;
@@ -110,6 +114,37 @@ export function createR2Source(settings, fetcher = fetch) {
       }
       if (offset !== data.length) throw new Error('Incomplete source range.');
       return data;
+    },
+    // An authorized buyer receives the original in one conditional upstream
+    // GET. Time only active network operations; the downstream can pause reads.
+    async *stream(head, start, end, signal) {
+      checkRange(head, start, end, head.size);
+      const controller = new AbortController();
+      const abort = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      async function timed(operation) {
+        const timer = setTimeout(() => controller.abort(), 15000);
+        try { return await operation(); } finally { clearTimeout(timer); }
+      }
+      let reader;
+      try {
+        const response = await timed(() => rangeResponse(head, start, end, abort));
+        reader = response.body.getReader();
+        let received = 0;
+        while (true) {
+          abort.throwIfAborted();
+          const { done, value } = await timed(() => reader.read());
+          if (done) break;
+          received += value.byteLength;
+          if (received > end - start) throw new Error('Unexpected source range length.');
+          yield value;
+        }
+        if (received !== end - start) throw new Error('Incomplete source range.');
+      } finally {
+        controller.abort();
+        if (reader) {
+          try { await reader.cancel(); } finally { reader.releaseLock(); }
+        }
+      }
     }
   };
 }

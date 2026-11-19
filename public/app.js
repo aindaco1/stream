@@ -12,14 +12,26 @@ let renewal;
 let library;
 let paid = false;
 let checkout;
+let purchase = false;
+let purchaseCheckedAt = 0;
 if (receipt) play.textContent = 'Play rental';
 if (!receipt && document.body.dataset.checkout === 'true') {
   import('/checkout.js').then(({ attachViewerCheckout }) => {
-    checkout = attachViewerCheckout(filmId, fragment.get('attempt'), value => {
-      receipt = value;
-      play.textContent = 'Play rental';
+    checkout = attachViewerCheckout(filmId, fragment.get('attempt'), (order, watchNow) => {
+      receipt = order.receipt;
+      purchase = order.kind === 'buy';
+      purchaseCheckedAt = Date.now();
+      document.body.dataset.access = order.kind;
+      video.classList.remove('preview-ended');
+      play.textContent = purchase ? 'Play film' : 'Play rental';
+      if (paid && stream) {
+        status.textContent = 'Your purchase is ready.';
+        if (watchNow && video.paused) startVideo();
+        return;
+      }
       play.hidden = false;
-      status.textContent = 'Your rental is ready. Select Play rental to watch.';
+      status.textContent = purchase ? 'Your purchase is ready.' : 'Your rental is ready.';
+      if (watchNow) { window.scrollTo(0, 0); play.click(); }
     });
     if (video.ended) checkout.showOffer();
   }).catch(() => {
@@ -46,18 +58,37 @@ function loadLibrary() {
     script.onerror = () => {
       script.remove();
       library = undefined;
-      reject(new Error('The rental player could not load. Select Play rental to try again.'));
+      reject(new Error('The player could not load. Select ' + play.textContent + ' to try again.'));
     };
     document.head.appendChild(script);
   });
   return library;
 }
 
+async function startVideo() {
+  try {
+    await video.play();
+    play.hidden = true;
+    status.textContent = '';
+  } catch {
+    play.hidden = false;
+    status.textContent = 'Select ' + play.textContent + ' to watch.';
+  } finally {
+    play.disabled = false;
+  }
+}
+
 async function rental(resumeAt = 0, autoplay = true) {
+  // The first session can use the receipt just confirmed by the order check.
+  // A new play after a pause or a ten-minute grant renewal rechecks the sale.
+  if (purchase && Date.now() - purchaseCheckedAt > 30000) {
+    receipt = await checkout.purchaseReceipt();
+    purchaseCheckedAt = Date.now();
+  }
   const [response] = await Promise.all([fetch(prefix + '/session', {
     method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: receipt, credentials: 'omit'
   }), loadLibrary()]);
-  if (!response.ok) throw new Error('This rental is unavailable or has expired.');
+  if (!response.ok) throw new Error(purchase ? 'This purchase is unavailable.' : 'This rental is unavailable or has expired.');
   const { grant, expiresAt, rentalExpiresAt } = await response.json();
   if (!window.Hls?.isSupported()) throw new Error('Open this prototype in a browser with Media Source playback.');
   stream?.destroy();
@@ -72,20 +103,20 @@ async function rental(resumeAt = 0, autoplay = true) {
   });
   stream = player;
   player.on(window.Hls.Events.ERROR, (_, event) => {
-    if (event.fatal && stream === player) fail('Playback stopped. Select Play rental to try again.');
+    if (event.fatal && stream === player) fail('Playback stopped. Select ' + play.textContent + ' to try again.');
   });
   player.on(window.Hls.Events.MANIFEST_PARSED, () => {
     play.hidden = true;
     play.disabled = false;
     status.textContent = '';
-    if (autoplay) video.play().catch(() => { status.textContent = 'Press play on the video to continue.'; });
+    if (autoplay) startVideo();
   });
   player.attachMedia(video);
   player.loadSource(new URL('index.m3u8', base).href);
   // Reattach with a new grant and encryption key while preserving the viewer's position.
   clearTimeout(renewal);
   const remaining = expiresAt * 1000 - Date.now();
-  if (expiresAt === rentalExpiresAt) {
+  if (!purchase && expiresAt === rentalExpiresAt) {
     renewal = setTimeout(() => fail('Your rental has expired.'), Math.max(0, remaining));
   } else {
     renewal = setTimeout(() => {
@@ -99,6 +130,7 @@ play.addEventListener('click', async () => {
   status.textContent = 'Loading…';
   try {
     if (receipt) {
+      if (paid && stream) { await startVideo(); return; }
       if (!video.paused) video.pause();
       paid = true;
       await rental();
@@ -117,15 +149,15 @@ play.addEventListener('click', async () => {
 video.addEventListener('playing', () => video.classList.remove('preview-ended'));
 video.addEventListener('ended', () => {
   if (paid) {
-    fail('Rental screening complete.');
+    fail(purchase ? 'Screening complete.' : 'Rental screening complete.');
     return;
   }
   clearTimeout(renewal);
   play.hidden = false;
   if (receipt) {
-    status.textContent = 'Your rental is ready. Select Play rental to watch.';
+    status.textContent = purchase ? 'Your purchase is ready.' : 'Your rental is ready.';
   } else {
-    status.textContent = 'Preview complete. A rental unlocks the full film.';
+    status.textContent = document.body.dataset.checkout === 'true' ? 'Preview complete.' : 'Preview complete. A rental unlocks the full film.';
     if (document.body.dataset.checkout === 'true') {
       video.classList.add('preview-ended');
       play.textContent = 'Replay preview';
