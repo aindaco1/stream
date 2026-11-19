@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
+import { renderSetupPage } from '../src/setup-view.js';
 import assert from 'node:assert/strict';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from '../src/setup-stripe.js';
 
@@ -316,5 +317,36 @@ test('mixed required capabilities surface the next action before a pending revie
     assert.deepEqual(await f.adapter.refresh(ctx), { status: expected });
     if (reason) assert.match(ctx.state.reason, reason);
     else assert.equal(ctx.state.reason, undefined);
+  }
+});
+
+
+test('post-submit Stripe review overrides a stale past-due capability instruction only for Stripe-owned requirements', async () => {
+  const f = fixture(), ctx = f.context();
+  await f.adapter.start(ctx, 'new', 'US');
+  const entry = (deadline, actor, errors = []) => ({ minimum_deadline: { status: deadline }, awaiting_action_from: actor, errors });
+  const submitted = { card: 'restricted', payouts: 'pending', due: 'past_due',
+    cardDetails: [{ code: 'requirements_past_due', resolution: 'provide_info' }],
+    payoutDetails: [{ code: 'requirements_pending_verification', resolution: 'no_resolution' }],
+    entries: [entry('past_due', 'stripe'), entry('currently_due', 'stripe'), entry('eventually_due', 'user')] };
+  f.provider.snapshot = submitted;
+  assert.deepEqual(await f.adapter.refresh(ctx), { status: 'pending' });
+  assert.equal(ctx.state.chargesEnabled, false);
+  assert.equal(ctx.state.payoutsEnabled, false);
+  const stripe = { ...ctx.state, configured: true, hasAccount: true };
+  const html = renderSetupPage({ csrf: 'token', stripe });
+  assert.match(html, /Under review/);
+  assert.match(html, /Check Stripe status/);
+  assert.doesNotMatch(html, /Continue on Stripe to review|Continue Stripe setup|action="\/setup\/stripe\/start"/);
+  for (const [update, status] of [
+    [{ entries: [entry('past_due', 'stripe'), entry('currently_due', 'user')] }, 'action_required'],
+    [{ entries: [entry('past_due', 'stripe', [{ code: 'document_invalid' }])] }, 'action_required'],
+    [{ entries: undefined }, 'action_required'],
+    [{ entries: [entry('currently_due', 'stripe')] }, 'action_required'],
+    [{ cardDetails: [{ code: 'restricted_other', resolution: 'provide_info' }] }, 'action_required'],
+    [{ card: 'rejected' }, 'restricted']
+  ]) {
+    f.provider.snapshot = { ...submitted, ...update };
+    assert.equal((await f.adapter.refresh(ctx)).status, status);
   }
 });

@@ -157,3 +157,22 @@ test('the connected USD ledger separates Stripe fees, pass-through fees and taxe
     await assert.rejects(connectedTestRental(f.args), /Unexpected fee/);
   }
 });
+
+test('a hosted seller under post-submit Stripe review cannot create a rental charge', async t => {
+  const f = await fixture(t);
+  const account = f.cfg.accountId;
+  f.store.saveStripe(f.args.owner, { byMode: { test: { ...f.cfg, channel: 'hosted' } } });
+  const fetchImpl = async (href, options) => {
+    if (new URL(href).pathname !== '/v2/core/accounts/' + account) return f.args.fetchImpl(href, options);
+    return Response.json({ id: account, object: 'v2.core.account', livemode: false,
+      configuration: { merchant: { capabilities: {
+        card_payments: { status: 'restricted', status_details: [{ code: 'requirements_past_due', resolution: 'provide_info' }] },
+        stripe_balance: { payouts: { status: 'pending', status_details: [{ code: 'requirements_pending_verification', resolution: 'no_resolution' }] } }
+      } } },
+      requirements: { summary: { minimum_deadline: { status: 'past_due' } },
+        entries: [{ minimum_deadline: { status: 'past_due' }, awaiting_action_from: 'stripe', errors: [] }] }
+    });
+  };
+  await assert.rejects(connectedTestRental({ ...f.args, fetchImpl }), /ready for both charges and payouts/);
+  assert.equal(f.calls.filter(call => call.method === 'POST').length, 0);
+});

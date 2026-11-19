@@ -67,14 +67,25 @@ function hostedPaymentStatus(account) {
   }
 
   const isDue = deadline => ['currently_due', 'past_due'].includes(deadline?.status);
-  const due = isDue(account.requirements?.summary?.minimum_deadline);
-  const dueEntries = account.requirements?.entries?.filter(entry => isDue(entry.minimum_deadline)) || [];
-  const awaitingStripe = due && dueEntries.length > 0 && dueEntries.every(entry => entry.awaiting_action_from === 'stripe');
+  const summary = account.requirements?.summary?.minimum_deadline;
+  const entries = account.requirements?.entries || [];
+  const dueEntries = entries.filter(entry => isDue(entry.minimum_deadline));
+  const hasErrors = entries.some(entry => entry.errors?.length);
+  const awaitingStripe = isDue(summary) && !hasErrors &&
+    dueEntries.some(entry => entry.minimum_deadline.status === summary.status) &&
+    dueEntries.every(entry => entry.awaiting_action_from === 'stripe');
   const restricted = capabilities.filter(([, cap]) => cap?.status === 'restricted');
-  const requiresAction = restricted.some(([, cap]) => !cap.status_details?.length ||
-    cap.status_details.some(detail => detail.resolution !== 'no_resolution'));
+  function needsUser(detail) {
+    if (detail.resolution === 'no_resolution') return false;
+    // Stripe can retain the past-due capability reason while it reviews every
+    // submitted requirement. Other restrictions still require their own action.
+    return !(awaitingStripe && detail.code === 'requirements_past_due' && detail.resolution === 'provide_info');
+  }
+  const requiresAction = restricted.some(([, cap]) => !cap.status_details?.length || cap.status_details.some(needsUser));
   const reason = flags.needsCards ? 'Continue setup to enable card payments for this business in Stripe.' : undefined;
-  if (flags.needsCards || requiresAction || (due && !awaitingStripe)) return { ...flags, status: 'action_required', reason };
+  if (flags.needsCards || hasErrors || requiresAction || (isDue(summary) && !awaitingStripe)) {
+    return { ...flags, status: 'action_required', reason };
+  }
   if (awaitingStripe || restricted.length || capabilities.some(([, cap]) => cap?.status === 'pending')) {
     return { ...flags, status: 'pending', reason };
   }

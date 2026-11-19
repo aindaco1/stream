@@ -41,7 +41,9 @@ function stripeCard(stripe, csrf) {
   return renderStripeCard({
     title: 'Get paid with Stripe',
     status: stripe.configured ? (statuses[stripe.status] || 'Not connected') : 'Payments setup unavailable',
-    description, csrfToken: csrf, ready, existingOAuth: stripe.existingAvailable === true,
+    // The shared renderer uses this flag to hide onboarding controls. Status
+    // text and payment authorization retain their independent provider values.
+    description, csrfToken: csrf, ready: ready || stripe.status === 'pending', existingOAuth: stripe.existingAvailable === true,
     resume: stripe.hasAccount === true || stripe.creating === true,
     action: stripe.configured ? '/setup/stripe/start' : undefined,
     checkAction: stripe.configured && stripe.hasAccount ? '/setup/stripe/check' : undefined
