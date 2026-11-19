@@ -83,7 +83,11 @@ async function confirm(id) {
   order.status = 'paid';
 }
 
-const player = await makeServer(null, { catalog, checkout });
+const recovery = { request(offer, email) {
+  assert.equal(offer.id, 'first');
+  assert.equal(email, 'viewer@example.test');
+} };
+const player = await makeServer(null, { catalog, checkout, recovery });
 const downloadResponses = [];
 player.on('request', (req, res) => {
   if (req.url.endsWith('/download')) res.on('close', () => downloadResponses.push({
@@ -407,6 +411,17 @@ try {
   await page.goto(host);
   const frames = async () => Promise.all((await page.locator('iframe').elementHandles()).map(e => e.contentFrame()));
   let [renter, buyer, neighbor, legacy] = await frames();
+  await renter.getByText('Restore film access', { exact: true }).click();
+  const email = renter.getByLabel('Email used at checkout');
+  const send = renter.getByRole('button', { name: 'Send access link' });
+  await email.fill('viewer@example.test');
+  await send.click();
+  const feedback = renter.locator('#restore-feedback');
+  await feedback.getByText(/If this email has access/).waitFor();
+  const [fieldBox, sendBox, feedbackBox] = await Promise.all([email, send, feedback].map(item => item.boundingBox()));
+  assert.ok(sendBox.y - (fieldBox.y + fieldBox.height) >= 8);
+  assert.ok(feedbackBox.y - (sendBox.y + sendBox.height) >= 8);
+  await renter.getByText('Restore film access', { exact: true }).click();
   await preview(renter);
   await preview(buyer);
   await preview(neighbor);

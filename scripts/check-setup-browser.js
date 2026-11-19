@@ -220,7 +220,22 @@ try {
         assert.ok(!(await code.inputValue()).includes(savedKey));
         await page.getByRole('button', { name: 'Copy embed code' }).click();
         await page.locator('.copy-status').filter({ hasText: /copied|selected/ }).waitFor();
-        await page.getByText('Edit prices and playback for Projection test <first cut>', { exact: true }).click();
+        const editor = page.getByRole('form', { name: 'Edit prices and playback for Projection test <first cut>' });
+        for (const [width, columns] of [[320, 2], [390, 2], [1024, 4]]) {
+          await page.setViewportSize({ width, height: 844 });
+          const inputs = await editor.locator('input[type=number]').all();
+          const bounds = await Promise.all(inputs.map(input => input.boundingBox()));
+          assert.equal(bounds.length, 4);
+          assert.ok(bounds.every(box => box && box.width <= 160 && box.height >= 44));
+          assert.equal(new Set(bounds.map(box => box.y)).size, 4 / columns);
+          assert.equal(bounds[0].y, bounds[1].y, 'Keep rental price and duration together');
+          const fieldset = await editor.getByRole('group').boundingBox();
+          const save = await editor.getByRole('button', { name: 'Save settings' }).boundingBox();
+          const share = await page.getByRole('link', { name: 'Open public player' }).boundingBox();
+          assert.ok(save.y - (fieldset.y + fieldset.height) >= 12);
+          assert.ok(share.y - (save.y + save.height) >= 16);
+          assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        }
         await page.getByLabel('Free preview (seconds)').fill('0');
         await page.getByLabel('Rental duration (hours)').fill('12');
         await page.getByRole('button', { name: 'Save settings' }).click();

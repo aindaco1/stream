@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{title}} · Dust Wave Stream</title>
+  <title>{{title}} · Stream</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" type="module"></script>
 </head>
@@ -11,7 +11,7 @@
   <main aria-labelledby="film-title">
     <video controls playsinline preload="none" aria-label="{{title}}"></video>
     <div class="details">
-      <div><h1 id="film-title">{{title}}</h1><p>Dust Wave Stream · Playback prototype</p></div>
+      <div><h1 id="film-title">{{title}}</h1><p>Stream · Playback prototype</p></div>
       <button type="button" id="play">Play {{preview}}-second preview</button>
     </div>
     <section id="purchase" aria-label="Film offers" hidden>
@@ -39,7 +39,7 @@
       </div>
       <div class="payment-action">
         <button type="submit" form="card-form" id="confirm-payment" disabled>Pay</button>
-        <p class="payment-credit">Dust Wave Stream · All sales are final · Payments by Stripe</p>
+        <p class="payment-credit">Stream · All sales are final · Payments by Stripe</p>
       </div>
     </section>
     <section id="ownership" aria-label="Your purchase" hidden>
@@ -56,8 +56,8 @@
     </section>
     <div id="email-return" hidden><button id="redeem-link" type="button">Restore and watch</button></div>
     <details id="restore-tools" hidden><summary>Restore film access</summary>
-      <form id="restore-form"><label for="restore-email">Email used at checkout</label>
-        <input id="restore-email" type="email" name="email" autocomplete="email" required maxlength="254">
+      <form id="restore-form"><label>Email used at checkout
+        <input id="restore-email" type="email" name="email" autocomplete="email" required maxlength="254"></label>
         <button>Send access link</button></form>
       <p id="restore-feedback" role="status"></p>
     </details>
