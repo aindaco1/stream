@@ -34,6 +34,9 @@ const stripe = {
     }
     starts.push(intent);
     ctx.state.accountId = 'acct_qa' + ctx.creatorId.replace(/[^a-z0-9]/gi, '');
+    ctx.state.creatorId = ctx.creatorId;
+    ctx.state.channel = intent === 'existing' ? 'oauth' : 'hosted';
+    assert.ok(ctx.claimAccount(ctx.state.accountId, 'test'));
     ctx.state.status = 'action_required';
     await ctx.save();
     return { redirect: '/fixture/provider' };
@@ -42,6 +45,7 @@ const stripe = {
     const count = (callbacks.get(ctx.creatorId) || 0) + 1;
     callbacks.set(ctx.creatorId, count);
     ctx.state.status = ctx.creatorId === 'qa-new-new' && count === 1 ? 'action_required' : 'ready';
+    ctx.state.chargesEnabled = ctx.state.payoutsEnabled = ctx.state.status === 'ready';
     ctx.state.businessName = 'Screening room test';
     await ctx.save();
     return { status: ctx.state.status };
@@ -141,7 +145,7 @@ try {
   const generated = spawnSync(process.execPath, ['scripts/fixture.js', fixture], { stdio: 'pipe' });
   assert.equal(generated.status, 0, 'Generate the synthetic clip using FFmpeg');
   setup = await createSetup({
-    directory: path.join(temporary, 'state'), stripe,
+    directory: path.join(temporary, 'state'), stripe, env: { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' },
     async checkBucket(settings) { if (settings.secretAccessKey !== secret) throw Error('Test credential rejected'); },
     sourceFor(settings) {
       if (settings.objectKey !== savedKey) throw Error('Unknown test object');
@@ -206,6 +210,26 @@ try {
       assert.equal(await page.locator('video').count(), 0);
       await signIn(page, origin, owner);
       assert.ok(await page.getByRole('heading', { name: 'Saved films' }).isVisible());
+      if (first) {
+        await page.getByRole('link', { name: 'Film dashboard' }).click();
+        await page.getByRole('heading', { name: 'Film dashboard' }).waitFor();
+        await page.getByRole('button', { name: 'Publish film' }).click();
+        const code = page.getByLabel('Embed code');
+        await code.waitFor();
+        assert.match(await code.inputValue(), /<iframe src="http:\/\/127\.0\.0\.1:8793\/embed\/f-/);
+        assert.ok(!(await code.inputValue()).includes(savedKey));
+        await page.getByRole('button', { name: 'Copy embed code' }).click();
+        await page.locator('.copy-status').filter({ hasText: /copied|selected/ }).waitFor();
+        await page.getByText('Edit prices and playback for Projection test <first cut>', { exact: true }).click();
+        await page.getByLabel('Free preview (seconds)').fill('0');
+        await page.getByLabel('Rental duration (hours)').fill('12');
+        await page.getByRole('button', { name: 'Save settings' }).click();
+        await page.getByRole('button', { name: 'Unpublish film' }).click();
+        await page.getByRole('button', { name: 'Publish film' }).waitFor();
+        assert.equal(await page.getByLabel('Embed code').count(), 0);
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        report.filmmakerDashboard = 'publish, copy embed, change settings, unpublish';
+      }
       report.scenarios.push({ stripe: mode, cloudflare: storage, savedPreviewSeconds: 10, resumed: true, previewWithoutPayments });
     } finally { await context.close(); }
   }

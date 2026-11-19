@@ -6,9 +6,21 @@ const prefix = '/film/' + encodeURIComponent(filmId);
 const fragment = new URLSearchParams(location.hash.slice(1));
 let receipt = fragment.get('receipt');
 if (location.hash) history.replaceState(history.state, '', location.pathname + location.search);
+window.addEventListener('hashchange', () => {
+  const next = new URLSearchParams(location.hash.slice(1));
+  if (['attempt', 'restore', 'receipt'].some(key => next.has(key))) location.reload();
+});
 
 let stream;
 let renewal;
+let resumePosition = 0;
+let viewId;
+let playGrant;
+let counted = false;
+let lastSave = 0;
+let savedSecond = -1;
+const previewSeconds = Number(document.body.dataset.preview ?? 10);
+if (!previewSeconds) play.hidden = true;
 let library;
 let paid = false;
 let checkout;
@@ -16,10 +28,30 @@ let purchase = false;
 let purchaseCheckedAt = 0;
 if (receipt) play.textContent = 'Play rental';
 if (!receipt && document.body.dataset.checkout === 'true') {
-  import('/checkout.js').then(({ attachViewerCheckout }) => {
+  import('/checkout.js').then(async ({ attachViewerCheckout }) => {
+    const restoreCode = fragment.get('restore');
+    if (restoreCode) {
+      const box = document.querySelector('#email-return');
+      const button = document.querySelector('#redeem-link');
+      box.hidden = false;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          const response = await fetch(prefix + '/redeem', { method: 'POST', headers: { 'Content-Type': 'text/plain' },
+            body: restoreCode, credentials: 'omit', redirect: 'error' });
+          if (!response.ok) throw new Error('Unavailable');
+          await checkout.restoreAttempt((await response.json()).token);
+          box.hidden = true;
+        } catch { status.textContent = 'This email link could not be used. Try again or request a new link below.'; }
+        finally { button.disabled = false; }
+      });
+    } else if (document.body.dataset.published === 'false' && !fragment.has('attempt')) {
+      status.textContent = 'This film is closed to new viewers. Open your private access link to continue watching.';
+    }
     checkout = attachViewerCheckout(filmId, fragment.get('attempt'), (order, watchNow) => {
       receipt = order.receipt;
       purchase = order.kind === 'buy';
+      resumePosition = Number(order.position) || 0;
       purchaseCheckedAt = Date.now();
       document.body.dataset.access = order.kind;
       video.classList.remove('preview-ended');
@@ -33,7 +65,7 @@ if (!receipt && document.body.dataset.checkout === 'true') {
       status.textContent = purchase ? 'Your purchase is ready.' : 'Your rental is ready.';
       if (watchNow) { window.scrollTo(0, 0); play.click(); }
     });
-    if (video.ended) checkout.showOffer();
+    if (video.ended || !previewSeconds) checkout.showOffer();
   }).catch(() => {
     status.textContent = 'Checkout could not load. Refresh this player to try again.';
   });
@@ -90,6 +122,7 @@ async function rental(resumeAt = 0, autoplay = true) {
   }), loadLibrary()]);
   if (!response.ok) throw new Error(purchase ? 'This purchase is unavailable.' : 'This rental is unavailable or has expired.');
   const { grant, expiresAt, rentalExpiresAt } = await response.json();
+  playGrant = grant;
   if (!window.Hls?.isSupported()) throw new Error('Open this prototype in a browser with Media Source playback.');
   stream?.destroy();
   const base = new URL(prefix + '/play/', location.origin);
@@ -103,7 +136,13 @@ async function rental(resumeAt = 0, autoplay = true) {
   });
   stream = player;
   player.on(window.Hls.Events.ERROR, (_, event) => {
-    if (event.fatal && stream === player) fail('Playback stopped. Select ' + play.textContent + ' to try again.');
+    if (stream !== player) return;
+    if (event.response?.code === 403 || event.networkDetails?.status === 403) {
+      fail('Checking your film access…');
+      checkout?.checkAccess();
+    } else if (event.fatal) {
+      fail('Playback stopped. Select ' + play.textContent + ' to try again.');
+    }
   });
   player.on(window.Hls.Events.MANIFEST_PARSED, () => {
     play.hidden = true;
@@ -133,8 +172,13 @@ play.addEventListener('click', async () => {
       if (paid && stream) { await startVideo(); return; }
       if (!video.paused) video.pause();
       paid = true;
-      await rental();
+      counted = false;
+      viewId = crypto.randomUUID();
+      await rental(resumePosition);
     } else {
+      if (!previewSeconds) return;
+      counted = false;
+      viewId = crypto.randomUUID();
       video.src = prefix + '/preview.mp4';
       await video.play();
       play.hidden = true;
@@ -146,9 +190,40 @@ play.addEventListener('click', async () => {
   }
 });
 
-video.addEventListener('playing', () => video.classList.remove('preview-ended'));
+function bookmark(force = false) {
+  if (!paid || !counted || !stream || !checkout || !Number.isFinite(video.duration) || video.readyState < 2) return;
+  if (!force && Date.now() - lastSave < 30000) return;
+  const second = video.ended || video.duration - video.currentTime < 2 ? 0 : Math.floor(video.currentTime);
+  if (second === savedSecond) return;
+  checkout.savePosition(second);
+  savedSecond = second;
+  lastSave = Date.now();
+}
+video.addEventListener('timeupdate', () => bookmark());
+for (const event of ['pause','seeked','ended']) video.addEventListener(event, () => bookmark(true));
+document.addEventListener('visibilitychange', () => { if (document.hidden) bookmark(true); });
+window.addEventListener('pagehide', () => bookmark(true));
+document.addEventListener('stream-access-ended', () => {
+  receipt = undefined;
+  paid = false;
+  delete document.body.dataset.access;
+  fail('Film access ended.');
+  play.hidden = !previewSeconds;
+  play.textContent = 'Play ' + previewSeconds + '-second preview';
+  checkout?.showOffer();
+});
+video.addEventListener('playing', () => {
+  video.classList.remove('preview-ended');
+  if (counted || !viewId || document.body.dataset.checkout !== 'true') return;
+  counted = true;
+  const headers = { 'Content-Type': 'text/plain' };
+  if (paid) headers.Authorization = 'Bearer ' + playGrant;
+  fetch(prefix + '/view', { method: 'POST', headers, body: (paid ? 'paid ' : 'preview ') + viewId,
+    credentials: 'omit', referrerPolicy: 'no-referrer' }).catch(() => {});
+});
 video.addEventListener('ended', () => {
   if (paid) {
+    resumePosition = 0;
     fail(purchase ? 'Screening complete.' : 'Rental screening complete.');
     return;
   }

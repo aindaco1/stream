@@ -68,7 +68,7 @@ body.paying {
   --pay-paper: #f5f5f2; --pay-surface: #fff; --pay-ink: #101215; --pay-text: #252930;
   --pay-muted: #5d6573; --pay-line: #d2d7df; --pay-field: #858d98;
   --pay-focus: #185cad; --pay-error: #a52c2d;
-  color-scheme: light; background: var(--pay-paper); color: var(--pay-text); min-height: 100dvh;
+  display: flow-root; color-scheme: light; background: var(--pay-paper); color: var(--pay-text); min-height: var(--checkout-viewport, 100dvh);
 }
 body.paying main {
   display: flex; flex-direction: column; width: min(100%, 32rem); height: auto;
@@ -93,7 +93,22 @@ body.paying #payment { order: -1; min-width: 0; }
 #card-form > div { min-width: 0; }
 .payment-credit { color: var(--pay-muted); margin: 0; font-size: .8125rem; text-align: center; }
 #contact-element:empty, #payment-element:empty { display: none; }
-#card-form button, body.paying #check-payment { min-height: 44px; font-size: 1rem; }
+.payment-action { display: none; }
+/* The card fields and feedback scroll together. Native form ownership keeps
+   the submit button usable by keyboard outside the scrolling region. */
+body.paying main:has(#card-form:not([hidden])) {
+  display: flex; max-height: calc(var(--checkout-viewport, 100dvh) - var(--checkout-margin, 0px));
+}
+#payment:has(#card-form:not([hidden])) { display: flex; flex-direction: column; min-height: 0; }
+#payment:has(#card-form:not([hidden])) #checkout-scroll {
+  min-height: 0; overflow-y: auto; overscroll-behavior-y: contain;
+  padding: 3px; scroll-padding-block: 3px;
+}
+#payment:has(#card-form:not([hidden])) .payment-action {
+  display: grid; flex: none; gap: .2rem; padding: .4rem 3px 0;
+}
+body.paying #purchase:has(#check-payment[hidden]) { display: none; }
+#confirm-payment, body.paying #check-payment { min-height: 44px; font-size: 1rem; }
 #confirm-payment {
   width: 100%; padding: .75rem 1rem; background: var(--pay-ink); color: #fff;
   border-radius: 6px; line-height: 1.3;
@@ -109,12 +124,12 @@ body.paying :focus-visible { outline: 3px solid var(--pay-focus); outline-offset
 body.paying #status { color: var(--pay-muted); padding: 0 0 .7rem; margin: 0; }
 @media (min-width: 42rem) {
   body.paying main {
-    padding: 1.25rem 1.75rem; margin-block: 1rem;
+    --checkout-margin: 2rem; padding: 1.25rem 1.75rem; margin-block: 1rem;
     background: var(--pay-surface); border: 1px solid var(--pay-line); border-radius: 10px;
   }
 }
 @media (max-height: 400px) {
-  body.paying main { padding-block: .4rem; margin-block: 0; }
+  body.paying main { --checkout-margin: 0px; padding-block: .4rem; margin-block: 0; }
 }
 
 @media (max-width: 26rem) {
@@ -122,3 +137,11 @@ body.paying #status { color: var(--pay-muted); padding: 0 0 .7rem; margin: 0; }
   .payment-header { margin-bottom: .65rem; padding-bottom: .55rem; }
   #card-form { gap: .6rem; }
 }
+
+#access-tools, #restore-tools { margin: .35rem 1.25rem .75rem; }
+#access-tools summary, #restore-tools summary { cursor: pointer; color: #f2d6ad; padding: .5rem 0; }
+#access-tools label, #restore-tools label { display: block; font-size: .875rem; }
+#restore-form input { width: min(100%, 22rem); padding: .6rem; font: inherit; }
+body.paying :is(#access-tools, #restore-tools) { display: none; }
+
+#email-return { padding: .5rem 1.25rem; }

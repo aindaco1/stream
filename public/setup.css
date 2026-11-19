@@ -74,3 +74,9 @@ input[aria-describedby="object-hint"] { margin-bottom: .25rem !important; }
   .provider-card button, .film-card :is(button, .primary-link) { width: 100%; margin-inline: 0; }
   .film-actions { display: grid; }
 }
+.film-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(7rem,1fr)); gap:.75rem; padding:0; }
+.film-stats dt { font-size:.85rem; }
+.film-stats dd { margin:0; font-weight:650; font-variant-numeric:tabular-nums; }
+.dashboard-film details, .dashboard-film form, .dashboard-film > label { margin-top:1rem; }
+.dashboard-film textarea { width:100%; margin:.35rem 0; padding:.5rem; font:inherit; resize:vertical; }
+.copy-status { margin-inline-start:.5rem; }

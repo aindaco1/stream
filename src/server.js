@@ -92,29 +92,55 @@ const checkoutHeaders = {
   'X-Robots-Tag': 'noindex'
 };
 
-export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout } = {}) {
+export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout, recovery, maxIndexes = 32 } = {}) {
+  if (!Number.isSafeInteger(maxIndexes) || maxIndexes < 1) throw new Error('A positive media index limit is required.');
   if (publicOrigin) {
     const url = new URL(publicOrigin);
     if (url.protocol !== 'https:' || url.origin !== publicOrigin) throw new Error('Set STREAM_PUBLIC_ORIGIN to an HTTPS origin.');
   }
   const connections = new Map();
-  function connection(spec) {
-    const key = spec.id || spec.maker;
-    // Concurrent embeds share their own maker's index. A failed provider can
-    // retry independently and does not block another maker's screening.
-    if (!connections.has(key)) {
-      const opening = spec.id ? catalog.open(spec.id).then(film => ({ film, authority: spec.authority })) : openMaker(spec.maker);
-      const pending = opening.catch(error => { connections.delete(key); throw error; });
-      connections.set(key, pending);
+  let stopping = false;
+  function retire(entry) {
+    if (connections.get(entry.key) !== entry) return;
+    connections.delete(entry.key);
+    entry.ready.then(({ film }) => film.close(), () => {});
+  }
+  function acquire(spec, entitled, held) {
+    if (stopping) throw new Error('Film service is closing.');
+    const key = spec.id ? [spec.id, spec.revision, entitled].join(':') : spec.maker;
+    let entry = connections.get(key);
+    if (!entry) {
+      if (connections.size >= maxIndexes) {
+        const idle = [...connections.values()].find(item => item.users === 0);
+        if (!idle) throw new Error('Film indexes are busy.');
+        retire(idle);
+      }
+      entry = { key, users: 0 };
+      entry.ready = Promise.resolve().then(async () => spec.id ?
+        { film: await catalog.open(spec.id, { entitled }), authority: spec.authority } : openMaker(spec.maker)
+      ).catch(error => {
+        if (connections.get(key) === entry) connections.delete(key);
+        throw error;
+      });
+    } else {
+      // Refresh insertion order so only the least recently used idle index retires.
+      connections.delete(key);
     }
-    return connections.get(key);
+    connections.set(key, entry);
+    if (!held.has(entry)) {
+      held.add(entry);
+      entry.users++;
+    }
+    return entry.ready;
   }
   const [template, payPage, returnPage, screening] = await Promise.all(
     ['player', 'checkout', 'return', 'screening'].map(name => readFile(new URL('../public/' + name + '.html', import.meta.url), 'utf8')));
-  const lookup = id => catalog?.get(id) || (openMaker && filmSpec(id));
+  const lookup = (id, entitled = false) => catalog?.get(id, { entitled }) || (openMaker && filmSpec(id));
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, { type, data: await readFile(new URL(file, import.meta.url)) }])));
   const server = createServer(async (req, res) => {
+    const held = new Set();
+    const connection = (spec, entitled = false) => acquire(spec, entitled, held);
     const send = (status, type, data, extra) => reply(req, res, status, type, data, extra);
     const fail = status => send(status, 'text/plain', { 400: 'Invalid request.', 403: 'Film access unavailable.',
       404: 'Unavailable.', 405: 'Method unavailable.', 409: 'Offer unavailable.', 410: 'Order expired.',
@@ -145,7 +171,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       if (catalog && read && (path === '/screening' || path === '/')) {
         const embeds = catalog.list().map(({ id, title }) =>
           '<iframe src="/embed/' + encodeURIComponent(id) + '" title="' + escapeHtml(title) +
-          '" allow="autoplay; fullscreen; encrypted-media; payment" allowfullscreen></iframe>').join('\n');
+          '" loading="lazy" allow="autoplay; fullscreen; encrypted-media; payment" allowfullscreen></iframe>').join('\n');
         return send(200, 'text/html; charset=utf-8', screening.replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
           { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
       }
@@ -169,22 +195,64 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       }
       const embed = /^\/embed\/([a-z0-9-]+)$/.exec(path);
       if (read && (embed || path === '/')) {
-        const spec = lookup(embed?.[1] || 'clock');
+        const id = embed?.[1] || 'clock';
+        const published = lookup(id);
+        const spec = published || lookup(id, true);
         if (!spec) return fail(404);
         const payable = Boolean(checkout && spec.id);
         const html = template.replaceAll('{{checkout}}', String(payable))
-          .replaceAll('{{rent}}', String(spec.prices?.rent ?? ''))
-          .replaceAll('{{buy}}', String(spec.prices?.buy ?? ''))
-          .replaceAll('{{title}}', () => escapeHtml(spec.title));
+          .replaceAll('{{preview}}', String(published ? spec.previewSeconds ?? 10 : 0))
+          .replaceAll('{{emailRecovery}}', String(Boolean(recovery && payable)))
+          .replaceAll('{{published}}', String(Boolean(published)))
+          .replaceAll('{{rent}}', String(published?.prices?.rent ?? ''))
+          .replaceAll('{{rentalHours}}', String(published?.rentalHours ?? 48))
+          .replaceAll('{{buy}}', String(published?.prices?.buy ?? ''))
+          .replaceAll('{{title}}', () => escapeHtml(published?.title || 'Private screening'));
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
-      const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|order|session|download|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
+      const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|order|session|download|restore|redeem|position|view|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
       if (!route) return fail(404);
       const [, id, action, asset] = route;
-      const spec = lookup(id);
+      const entitled = ['order', 'session', 'download', 'restore', 'redeem', 'position', 'view'].includes(action) || Boolean(asset);
+      const spec = lookup(id, entitled);
       if (!spec) return fail(404);
       const grant = /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(req.headers.authorization || '')?.[1];
       if (asset && !grant) return fail(403);
+      if (['restore', 'redeem', 'position', 'view'].includes(action)) {
+        if (!checkout || !spec.id) return fail(404);
+        if (req.method !== 'POST') return fail(405);
+        if (req.headers.origin !== origin || req.headers['content-type'] !== 'text/plain') return fail(403);
+        const value = (await body(req, 512)).toString('utf8');
+        if (action === 'restore' || action === 'redeem') {
+          if (!recovery) return fail(404);
+          if (action === 'restore') {
+            recovery.request(spec, value, origin);
+            return send(202, 'application/json', '{}');
+          }
+          const token = recovery.redeem(spec, value);
+          return token ? send(200, 'application/json', JSON.stringify({ token })) : fail(403);
+        }
+        const [first, second, ...extra] = value.split(' ');
+        if (extra.length) return fail(400);
+        if (action === 'position') {
+          if (!/^[\w-]{43}$/.test(first) || !/^\d{1,5}$/.test(second) || Number(second) > 14400) return fail(400);
+          if (!await checkout.position({ offer: spec, token: first, seconds: Number(second) })) return fail(403);
+        } else {
+          if (!['preview','paid'].includes(first) || !/^[a-f0-9-]{36}$/.test(second)) return fail(400);
+          if (first === 'preview') {
+            const published = lookup(id);
+            if (!published || (published.previewSeconds ?? 10) <= 0) return fail(403);
+          } else {
+            if (!grant) return fail(403);
+            try {
+              const verified = await spec.authority.verifyGrant(grant, { film: spec.scope, revision: spec.revision });
+              if (!await checkout.accessAllowed({ offer: spec, kind: verified.access || 'rent', orderId: verified.orderId, rentalExpiresAt: verified.rentalExpiresAt })) return fail(403);
+            } catch { return fail(403); }
+          }
+          catalog.recordView?.(id, first, second);
+        }
+        return send(200, 'application/json', '{}');
+      }
       if (action === 'download') {
         if (!checkout || !spec.id) return fail(404);
         let downloadGrant = grant;
@@ -201,6 +269,8 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         catch { return fail(403); }
         if (!await checkout.verifyPurchase({ offer: spec, orderId: purchase.orderId })) return fail(403);
         const file = await catalog.download(id, downloadGrant);
+        const authorized = () => checkout.accessAllowed({offer:spec,orderId:purchase.orderId,kind:'buy'});
+        if (!authorized()) return fail(403);
         const range = req.headers.range && rangeFor(req.headers.range, file.size);
         if (req.headers.range && !range) return send(416, 'text/plain', '', { 'Content-Range': 'bytes */' + file.size });
         const [from, to] = range || [0, file.size - 1];
@@ -212,7 +282,13 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const controller = new AbortController();
         const cancel = () => controller.abort();
         res.once('close', cancel);
-        try { await pipeline(file.stream(from, to + 1, controller.signal), res, { signal: controller.signal }); }
+        async function* original() {
+          for await (const chunk of file.stream(from,to + 1,controller.signal)) {
+            if (!authorized()) throw new Error('Purchase revoked.');
+            yield chunk;
+          }
+        }
+        try { await pipeline(original(), res, { signal: controller.signal }); }
         finally { res.off('close', cancel); }
         return;
       }
@@ -227,36 +303,60 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
             await checkout.start({ offer: await catalog.verify(id), kind: action === 'buy' ? 'buy' : 'rent', token, origin });
           return send(200, 'application/json', JSON.stringify(result), checkoutHeaders);
         }
-        const { film, authority } = await connection(spec);
+        // Published orders have a saved revision, so invalid receipts never open R2.
+        const runtime = spec.id ? { authority: spec.authority, revision: spec.revision } : await connection(spec);
         try {
-          const grant = await authority.exchange(token, { film: spec.scope, revision: film.revision });
+          const grant = await runtime.authority.exchange(token, { film: spec.scope, revision: runtime.revision ?? runtime.film.revision });
+          if (spec.id && !await checkout.verifyPlayback({ offer: spec, kind: grant.access || 'rent',
+            orderId: grant.orderId, rentalExpiresAt: grant.rentalExpiresAt })) return fail(403);
           return send(200, 'application/json', JSON.stringify(grant));
         } catch { return fail(403); }
       }
       if (!read) return fail(405);
-      const { film, authority } = await connection(spec);
-      if (action === 'preview.mp4') return sendMp4(await film.preview());
-      const scope = { film: spec.scope, revision: film.revision };
-      let key;
+      if (action === 'preview.mp4') {
+        const seconds = spec.previewSeconds ?? 10;
+        if (!seconds) return fail(403);
+        const { film } = await connection(spec);
+        const clip = await film.preview(seconds);
+        const published = lookup(id);
+        if (!published || (published.previewSeconds ?? 10) !== seconds || published.revision !== spec.revision) return fail(403);
+        return sendMp4(clip);
+      }
+      const runtime = spec.id ? { authority: spec.authority, revision: spec.revision } : await connection(spec);
+      const { authority } = runtime;
+      const scope = { film: spec.scope, revision: runtime.revision ?? runtime.film.revision };
+      let key, access;
+      const authorized = () => !spec.id || (access?.expiresAt > Date.now()/1000 && checkout.accessAllowed({
+        offer:spec,kind:access.access || 'rent',orderId:access.orderId,rentalExpiresAt:access.rentalExpiresAt}));
       try {
-        if (asset === 'index.m3u8') await authority.verifyGrant(grant, scope);
-        else key = await authority.keyForGrant(grant, scope);
+        if (spec.id || asset === 'index.m3u8') access = await authority.verifyGrant(grant, scope);
+        if (!authorized()) return fail(403);
+        if (asset !== 'index.m3u8') key = await authority.keyForGrant(grant, scope);
       } catch { return fail(403); }
-      if (asset === 'index.m3u8') return send(200, 'application/vnd.apple.mpegurl', playlist(film.segments));
       if (asset === 'key') return send(200, 'application/octet-stream', key);
+      const film = runtime.film || (await connection(spec, true)).film;
+      if (!authorized()) return fail(403);
+      if (asset === 'index.m3u8') return send(200, 'application/vnd.apple.mpegurl', playlist(film.segments));
       const index = Number(asset.slice(0, -3));
       if (index >= film.segments.length) return fail(404);
-      return send(200, 'video/mp2t', encrypt(await film.segment(index), key, index));
+      const segment = await film.segment(index);
+      if (!authorized()) return fail(403);
+      return send(200, 'video/mp2t', encrypt(segment, key, index));
     } catch (error) {
       if (!res.headersSent && !res.destroyed) fail([400, 403, 404, 409, 410, 413, 429].includes(error.statusCode) ? error.statusCode : 503);
+    } finally {
+      for (const entry of held) {
+        entry.users--;
+        if (stopping && !entry.users) retire(entry);
+      }
     }
   });
   server.headersTimeout = 10000;
   server.requestTimeout = 20000;
   server.maxConnections = 64;
   server.on('close', () => {
-    for (const pending of connections.values()) pending.then(({ film }) => film.close(), () => {});
-    connections.clear();
+    stopping = true;
+    for (const entry of connections.values()) if (!entry.users) retire(entry);
     setup?.close();
   });
   return server;

@@ -55,6 +55,11 @@ const checkout = {
     if (order.submissions && order.status === 'pending') order.pendingChecks++;
     return { status: order.status, kind: order.kind, receipt: order.receipt };
   },
+  accessAllowed({ offer, orderId, kind }) {
+    const order = sessions.get(orderId);
+    return order?.offer === offer && order.kind === kind && order.status === 'paid';
+  },
+  verifyPlayback(request) { return checkout.accessAllowed(request); },
   async verifyPurchase({ offer, orderId }) {
     downloadChecks++;
     const order = sessions.get(orderId);
@@ -74,7 +79,7 @@ async function confirm(id) {
       amount_captured: amount, currency: 'usd', paid: true, refunded: false, amount_refunded: 0, disputed: false,
       created: Math.floor(Date.now() / 1000) } };
   order.receipt = order.kind === 'buy' ? await authority.issuePurchaseReceipt(intent, entitlement, { amount, orderId: id }) :
-    await authority.issueReceipt(intent, entitlement, { amount });
+    await authority.issueReceipt(intent, entitlement, { amount, orderId:id });
   order.status = 'paid';
 }
 
@@ -257,22 +262,33 @@ async function waitFor(check, message) {
   assert.ok(check(), message);
 }
 
-async function checkoutFits(frame, width) {
+async function checkoutFits(frame, [width, height]) {
   const element = await frame.frameElement();
-  await element.evaluate((iframe, size) => { iframe.width = size; }, width);
-  await frame.waitForFunction(size => innerWidth === size, width);
+  await element.evaluate((iframe, [w, h]) => { iframe.width = w; iframe.height = h; }, [width, height]);
+  await frame.waitForFunction(([w, h]) => innerWidth === w && innerHeight === h, [width, height]);
   const bounds = await frame.locator('#payment').evaluate(node => {
+    const scroll = node.querySelector('#checkout-scroll');
+    const button = node.querySelector('#confirm-payment');
+    const top = button.getBoundingClientRect().top;
+    scroll.scrollTop = scroll.scrollHeight;
+    const action = button.getBoundingClientRect();
+    const lastField = node.querySelector('#payment-element iframe').getBoundingClientRect();
     const selectors = ['#checkout-heading', '#close-checkout', '#confirm-payment', '#contact-element iframe', '#payment-element iframe'];
     return {
-      overflow: document.documentElement.scrollWidth - innerWidth,
+      overflow: Math.max(document.documentElement.scrollWidth - innerWidth, document.documentElement.scrollHeight - innerHeight),
       hasNames: selectors.slice(0, 3).every(selector => node.querySelector(selector)?.innerText.trim()),
+      visibleAction: action.top >= 0 && action.bottom <= innerHeight + 1 && action.height >= 44 &&
+        document.elementFromPoint(action.x + action.width / 2, action.y + action.height / 2) === button,
+      scrollsIndependently: Math.abs(action.top - top) <= 1 && lastField.bottom <= scroll.getBoundingClientRect().bottom + 1 &&
+        scroll.getBoundingClientRect().bottom <= action.top + 1,
       fits: selectors.every(selector => {
         const box = node.querySelector(selector)?.getBoundingClientRect();
         return box && box.width > 0 && box.left >= -1 && box.right <= innerWidth + 1;
       })
     };
   });
-  assert.ok(bounds.overflow <= 1 && bounds.fits && bounds.hasNames, width + 'px checkout: ' + JSON.stringify(bounds));
+  assert.ok(bounds.overflow <= 1 && bounds.fits && bounds.visibleAction && bounds.scrollsIndependently && bounds.hasNames,
+    width + '×' + height + ' checkout: ' + JSON.stringify(bounds));
 }
 
 async function fillCard(frame) {
@@ -291,18 +307,40 @@ async function fillCard(frame) {
   return { email, number };
 }
 
-async function payByCard(frame, order, { retry = false, widths = [] } = {}) {
+async function payByCard(frame, order, { retry = false, sizes = [] } = {}) {
   const amount = '$' + (order.amount / 100).toFixed(2);
   const submit = frame.getByRole('button', { name: 'Pay ' + amount, exact: true });
   await submit.waitFor();
-  for (const width of widths) await checkoutFits(frame, width);
+  for (const size of sizes) await checkoutFits(frame, size);
   const { email, number } = await fillCard(frame);
   if (retry) {
+    // Model a publisher resizing its iframe while the keyboard is up and CVC is focused.
+    const cvc = frame.frameLocator('iframe[title="Test payment details"]').getByLabel('Security code');
+    await cvc.focus();
+    // Mobile engines can shrink the visual viewport without resizing the iframe.
+    const actionBottom = await frame.locator('#confirm-payment').evaluate(button => {
+      const viewport = window.visualViewport;
+      Object.defineProperty(viewport, 'height', { configurable: true, value: 150 });
+      try {
+        viewport.dispatchEvent(new Event('resize'));
+        return button.getBoundingClientRect().bottom;
+      } finally {
+        delete viewport.height;
+        viewport.dispatchEvent(new Event('resize'));
+      }
+    });
+    assert.ok(actionBottom <= 150, 'Pay must remain in the keyboard-reduced viewport.');
+    await checkoutFits(frame, [390, 150]);
+    assert.ok(await cvc.evaluate(input => document.activeElement === input));
     order.declineNext = true;
     await submit.click();
     const error = frame.getByRole('alert').filter({ hasText: 'The test card was declined. Try another card.' });
     await error.waitFor();
-    assert.ok(await error.evaluate(node => document.activeElement === node));
+    assert.ok(await error.evaluate(node => {
+      const box = node.getBoundingClientRect();
+      return document.activeElement === node && box.top >= document.querySelector('#checkout-scroll').getBoundingClientRect().top - 1 &&
+        box.bottom <= document.querySelector('#confirm-payment').getBoundingClientRect().top;
+    }));
     assert.equal(await number.inputValue(), '4242424242424242');
     assert.equal(await email.inputValue(), 'stream-viewer@example.test');
     assert.equal(order.submissions, 0);
@@ -324,7 +362,7 @@ async function payByCard(frame, order, { retry = false, widths = [] } = {}) {
   }
 }
 
-async function complete(frame, kind, { blockAutoplay = false, retry = false, widths = [], beforeEntry } = {}) {
+async function complete(frame, kind, { blockAutoplay = false, retry = false, sizes = [], beforeEntry } = {}) {
   if (blockAutoplay) await frame.locator('video').evaluate(video => {
     video.play = () => {
       delete video.play;
@@ -348,7 +386,7 @@ async function complete(frame, kind, { blockAutoplay = false, retry = false, wid
     const order = [...orders.values()].findLast(order => order.offer.id === id && order.kind === kind && order.status === 'pending');
     assert.ok(order);
     if (beforeEntry) await beforeEntry(order);
-    await payByCard(frame, order, { retry, widths });
+    await payByCard(frame, order, { retry, sizes });
   }
   if (blockAutoplay) {
     await frame.getByText('Select Play film to watch.', { exact: true }).waitFor();
@@ -408,12 +446,13 @@ try {
     await renter.getByRole('button', { name: 'Back to film' }).click();
     assert.equal(held.attempts, 0);
   }
-  await complete(renter, 'rent', { retry: true, widths: [320, 375, 900, 320], beforeEntry(order) { assert.equal(order.amount, 149); } });
+  await complete(renter, 'rent', { retry: true, sizes: [[320, 200], [375, 211], [390, 300], [900, 660], [390, 300]], beforeEntry(order) { assert.equal(order.amount, 149); } });
   await renter.locator('video').evaluate(video => { video.currentTime = 120; });
   await renter.waitForFunction(() => document.querySelector('video').currentTime > 120.25, null, { polling: 100 });
   assert.equal(await renter.locator('#ownership').isHidden(), true);
-  await complete(buyer, 'buy', { widths: [375] });
+  await complete(buyer, 'buy', { sizes: [[375, 211]] });
   assert.equal(await legacy.locator('video').evaluate(video => video.ended && video.duration < 10.1), true);
+  await (await legacy.frameElement()).evaluate(iframe => { iframe.width = 320; iframe.height = 200; });
   await complete(legacy, 'rent');
   assert.equal(await legacy.locator('#ownership').isHidden(), true);
   assert.equal(await neighbor.locator('video').evaluate(video => video.ended && video.duration < 10.1), true);
@@ -466,7 +505,7 @@ try {
     assert.ok(!requests.some(({ url, referrer }) => [url, referrer].some(address =>
       address.includes(token) || (order.receipt && address.includes(order.receipt)))), 'A private credential appeared in a URL or referrer');
   }
-  console.log('Inline checkout passed at 320, 375 and 900px: provider fields, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, download and recovery.');
+  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: visible Pay, reachable fields, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, download and recovery.');
 } finally {
   await browser.close();
   await Promise.all([player, publisher].map(server => new Promise(resolve => server.close(resolve))));

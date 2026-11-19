@@ -2,11 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { operatorDirectory } from './operator.js';
 import { openFilm } from './media.js';
-import { filmPrices, priceFromInput } from './prices.js';
+import { filmPrices, priceFromInput, previewSeconds, rentalHours } from './prices.js';
+import { createPublicFilms } from './public-films.js';
 import { checkR2Bucket, createR2Source } from './source.js';
 import { openSetupStore } from './setup-store.js';
+import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { escapeHtml, renderSetupPage, renderStripeCountryForm } from './setup-view.js';
+import { escapeHtml, renderDashboard, renderSetupPage, renderStripeCountryForm } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
@@ -52,6 +54,27 @@ function priceForm(data) {
   return prices;
 }
 
+function settingsForm(data, saved) {
+  const read = (name, validate) => data[name] === undefined ? validate(saved[name]) :
+    /^\d{1,3}$/.test(data[name]) ? validate(Number(data[name])) : null;
+  const seconds = read('previewSeconds', previewSeconds), hours = read('rentalHours', rentalHours);
+  if (seconds === null || (saved.duration && seconds >= saved.duration)) {
+    throw new SetupError('Choose 0 to 30 seconds for the free preview. The preview must be shorter than the film.', 422);
+  }
+  if (hours === null) throw new SetupError('Choose a rental duration from 1 to 720 whole hours.', 422);
+  const prices = data.buyPrice === undefined && data.rentPrice === undefined ? filmPrices(saved.prices) : priceForm(data);
+  if (!prices) throw new SetupError('Check the film prices.', 422);
+  return { prices, previewSeconds: seconds, rentalHours: hours };
+}
+
+function viewerOrigin(env, origin) {
+  const value = env.STREAM_VIEWER_ORIGIN || (new URL(origin).protocol === 'http:' ? 'http://127.0.0.1:8793' : origin);
+  const url = new URL(value);
+  if (url.origin !== value || !(url.protocol === 'https:' ||
+      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) throw new Error('Invalid viewer origin.');
+  return url.origin;
+}
+
 function bucketForm(data) {
   const { accountId = '', bucket = '', jurisdiction = 'default', accessKeyId = '', secretAccessKey = '' } = data;
   if (!/^[a-f0-9]{32}$/i.test(accountId.trim()) || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket.trim()) ||
@@ -62,19 +85,24 @@ function bucketForm(data) {
 }
 
 export async function createSetup({
-  directory = join(operatorDirectory(), 'filmmakers'), stripe, env = process.env,
+  directory = join(operatorDirectory(), 'filmmakers'), stripe, viewerCheckout, env = process.env,
   sourceFor = createR2Source, checkBucket = checkR2Bucket
 } = {}) {
   const style = await readFile(new URL('../public/setup.css', import.meta.url));
+  const dashboardScript = await readFile(new URL('../public/setup-dashboard.js', import.meta.url));
   const store = openSetupStore(directory);
+  const checkout = viewerCheckout ?? createViewerCheckout({store,env});
+  const publications = createPublicFilms({ store, env, sourceFor });
   const busy = new Set();
   const activePreviews = new Map();
 
-  async function inspect(owner, bucket, objectKey, expectedRevision) {
-    const film = await openFilm(sourceFor({ ...store.credentials(owner, bucket), objectKey }));
+  async function inspect(owner, bucket, objectKey, expectedRevision, seconds = 10) {
+    const film = await openFilm(sourceFor({ ...store.credentials(owner, bucket), objectKey }), { previewSeconds: seconds });
     try {
       if (expectedRevision && film.revision !== expectedRevision) throw new Error('The original changed.');
-      const preview = await film.preview();
+      if (seconds >= film.duration) throw new SetupError('Choose a free preview shorter than this film, or set the preview to 0.', 422);
+      const preview = seconds ? await film.preview() : null;
+      if (!seconds) await film.segment(0);
       return { revision: film.revision, duration: film.duration, preview };
     } finally { film.close(); }
   }
@@ -103,11 +131,13 @@ export async function createSetup({
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
         r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
         rights: { accepted: Boolean(draft.rights), statement: rightsStatement }, draft: { ...draft, ...store.storageDraft(session.owner) },
-        films: store.films(session.owner).map(row => ({ id: row.id, title: row.title, prices: row.prices, previewPath: '/setup/preview/' + row.id })),
-        film: film && { id: film.id, title: film.title, prices: film.prices, duration: film.duration, previewPath: '/setup/preview/' + draft.id }, ...feedback
+        films: store.films(session.owner).map(row => ({ ...row, previewPath: '/setup/preview/' + row.id })),
+        film: film && { id: film.id, title: film.title, prices: film.prices, duration: film.duration, previewSeconds: film.previewSeconds,
+          rentalHours: film.rentalHours, previewPath: '/setup/preview/' + draft.id }, ...feedback
       }));
     };
     if (get && path === '/setup/style.css') return send(200, 'text/css', style, commonHeaders);
+    if (get && path === '/setup/dashboard.js') return send(200, 'text/javascript', dashboardScript, commonHeaders);
     if (get && path === '/setup/sign-in.js') {
       return send(200, 'text/javascript', "const code=location.hash.slice(1); if(code){history.replaceState(null,'',location.pathname); if(/^[\\w-]{43}$/.test(code)) document.querySelector('[name=code]').value=code;}", commonHeaders);
     }
@@ -124,21 +154,28 @@ export async function createSetup({
     }
     const preview = previewPattern.exec(path);
     if (!session) {
-      if (get && path === '/setup') return redirect('/setup/sign-in');
+      if (get && (path === '/setup' || path === '/setup/dashboard')) return redirect('/setup/sign-in');
       if (get && callbackPattern.test(path)) return html(401, signInPage('Your Stream session has ended. Sign in again and continue from the Stripe card.'));
       return reject(401, 'Sign in to your filmmaker workspace.');
     }
     if (get && path === '/setup') return display();
     const owner = session.owner;
+    const dashboard = (status = 200, error) => html(status, renderDashboard({ csrf: session.csrf, owner, error,
+      origin: viewerOrigin(env, origin), films: store.dashboardFilms(owner).map(film => ({
+        ...film, published: publications.isPublished(owner, film.id)
+      })) }));
+    if (get && path === '/setup/dashboard') return dashboard();
     if (get && preview) {
       const film = store.film(owner, preview[1]);
-      if (!film) return reject(404, 'Preview unavailable.');
-      if (!preview[2]) return html(200, page(film.title, '<p>Private 10-second preview</p><video controls playsinline preload="metadata" src="' +
+      const seconds = film && previewSeconds(film.previewSeconds);
+      if (!film || !seconds) return reject(404, 'Preview unavailable.');
+      if (!preview[2]) return html(200, page(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata" src="' +
         path + '/clip.mp4"></video><p><a href="/setup">Back to filmmaker setup</a></p>'));
-      if (!activePreviews.has(film.id)) {
-        activePreviews.set(film.id, inspect(owner, film.bucket, film.objectKey, film.revision).finally(() => activePreviews.delete(film.id)));
+      const key = film.id + '/' + seconds;
+      if (!activePreviews.has(key)) {
+        activePreviews.set(key, inspect(owner, film.bucket, film.objectKey, film.revision, seconds).finally(() => activePreviews.delete(key)));
       }
-      try { return sendMp4((await activePreviews.get(film.id)).preview, commonHeaders); }
+      try { return sendMp4((await activePreviews.get(key)).preview, commonHeaders); }
       catch { return reject(409, 'The film changed or storage is unavailable. Check the original in Cloudflare.'); }
     }
     const callback = callbackPattern.exec(path);
@@ -167,9 +204,22 @@ export async function createSetup({
         store.saveBucket(owner, config);
         return redirect('/setup#storage');
       }
-      if (path === '/setup/film/prices') {
-        if (!store.setFilmPrices(owner, data.filmId || '', priceForm(data))) throw new SetupError('Saved film unavailable.', 404);
-        return redirect('/setup#film');
+      if (['/setup/film/prices', '/setup/dashboard/settings', '/setup/dashboard/publication'].includes(path)) {
+        const saved = store.film(owner, data.filmId || '');
+        if (!saved) throw new SetupError('Saved film unavailable.', 404);
+        if (path === '/setup/dashboard/publication') {
+          if (data.visibility === 'private') {
+            store.setFilmPublication(owner, saved.id, false);
+            if (await checkout.closeWithdrawnSessions(owner,saved.id)) {
+              throw new SetupError('Your film is private. Stripe is still closing unfinished checkouts. Stream will retry automatically.',503);
+            }
+          }
+          else if (data.visibility === 'public') {
+            try { await publications.publish(owner, saved.id); }
+            catch { throw new SetupError('Publishing requires a ready Stripe test account, confirmed rights and access to the saved original in R2. Check your connections and try again.', 422); }
+          } else throw new SetupError('Choose whether to publish this film.');
+        } else store.setFilmSettings(owner, saved.id, settingsForm(data, saved));
+        return redirect(path.startsWith('/setup/dashboard/') ? '/setup/dashboard#' + saved.id : '/setup#film');
       }
       if (!['/setup/rights', '/setup/film', '/setup/next'].includes(path)) return reject(404, 'Page unavailable.');
       if (data.draftId !== draft.id) throw new SetupError('This tab has an older draft. Reload setup to continue.', 409);
@@ -194,17 +244,21 @@ export async function createSetup({
           throw new SetupError('Enter a film title and the exact object key from your bucket, including any folder.');
         }
         // Previously saved drafts and older forms retain their rental default.
-        const prices = data.buyPrice === undefined && data.rentPrice === undefined ? filmPrices(draft.prices) : priceForm(data);
-        if (!prices) throw new SetupError('Check the film prices.', 422);
-        store.saveDraft(owner, { ...draft, title, objectKey, prices });
+        const settings = settingsForm(data, draft);
+        store.saveDraft(owner, { ...draft, title, objectKey, ...settings });
         if (saving) return display(200, { notice: 'Draft saved. You can return to this film any time.' });
         let film;
-        try { film = await inspect(owner, r2, objectKey); }
-        catch { throw new SetupError('Stream could not make a preview. Check the exact object key, read access and supported MP4 settings below. You can retry this film.', 422); }
-        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, prices, rights: draft.rights, duration: film.duration, revision: film.revision });
+        try { film = await inspect(owner, r2, objectKey, undefined, settings.previewSeconds); }
+        catch (error) {
+          if (error instanceof SetupError) throw error;
+          throw new SetupError('Stream could not read this film. Check the exact object key, read access and supported MP4 settings below. You can retry this film.', 422);
+        }
+        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision });
       }
       return redirect('/setup#film');
     } catch (e) {
+      if (path.startsWith('/setup/dashboard/')) return dashboard(e instanceof SetupError ? e.statusCode : 503,
+        e instanceof SetupError ? e.message : 'This change could not finish. Try again.');
       if (e instanceof SetupError || e instanceof StripeSetupError) return display(e.statusCode || 400, { error: e.message });
       return display(503, { error: 'This step could not finish. Your completed steps are saved. Try again.' });
     } finally { busy.delete(owner); }

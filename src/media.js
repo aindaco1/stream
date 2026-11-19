@@ -162,7 +162,7 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
     }
     // Several embeds can ask for the same public interval simultaneously. Share only in-flight work.
     function render(start, end, preview) {
-      const key = (preview ? 'preview:' : 'segment:') + start;
+      const key = preview ? 'preview:' + end : 'segment:' + start;
       if (pending.has(key)) return pending.get(key);
       if (pending.size >= 20) throw new Error('Media renderer is busy.');
       const budget = { reads: 0, maxReads: 128, deadline: Date.now() + 45000 };
@@ -172,10 +172,11 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
     }
     return Object.freeze({
       revision: revisionFor(head), duration, segments,
-      async preview() {
-        if (!previewSeconds) throw new Error('Preview is disabled.');
-        if (previewSeconds >= duration) throw new Error('Preview must end before the film ends.');
-        return render(0, previewSeconds, true);
+      async preview(seconds = previewSeconds) {
+        if (!Number.isFinite(seconds) || seconds < 0 || seconds > 30) throw new Error('Unsupported preview length.');
+        if (!seconds) throw new Error('Preview is disabled.');
+        if (seconds >= duration) throw new Error('Preview must end before the film ends.');
+        return render(0, seconds, true);
       },
       async segment(index) {
         if (!Number.isInteger(index) || index < 0 || index >= segments.length) throw new Error('Unknown segment.');

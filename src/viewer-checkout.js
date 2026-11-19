@@ -3,13 +3,24 @@ import { verifyStripeSignature } from '@dustwave/worker-core/stripe';
 import { connectedClient, platformAccount, verifyReadySeller } from './connected-test-rental.js';
 import { rentalScope } from './rental.js';
 import { isPrice } from './prices.js';
+import { adjustmentEvents, adjustmentReader, adjustmentReference } from './payment-adjustments.js';
 
 const LEGACY_FLOW = 'stream-viewer-rental';
 const FLOW = 'stream-viewer-checkout';
 const CHECKOUT_API = { stripeVersion: '2026-10-28.endive' };
 const SESSION = /^cs_test_[a-zA-Z0-9]+$/;
 const INTENT = /^pi_[a-zA-Z0-9]+$/;
-const RENTAL_SECONDS = 48 * 3600;
+
+function expiresAt(order) {
+  return order.kind === 'rent' && order.paidAt ? order.paidAt + order.rentalHours * 3600 : null;
+}
+
+function localStatus(order) {
+  if (order.revocationReason === 'dispute' && order.disputeStatus !== 'lost') return 'suspended';
+  if (order.revocationReason) return 'revoked';
+  const end = expiresAt(order);
+  return end && end <= Math.floor(Date.now()/1000) ? 'expired' : order.status;
+}
 
 // Stop retrying before Stripe can discard the original creation idempotency key.
 function abandoned(order) {
@@ -96,6 +107,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
   let platform;
   const creating = new Map();
   const checking = new Map();
+  const withdrawing = new Map();
   const checkingPlatform = () => {
     if (!serverConfigured) throw new ViewerCheckoutError('Sandbox checkout is unavailable.', 503);
     platform ??= platformAccount(key, fetchImpl).catch(error => { platform = undefined; throw error; });
@@ -112,11 +124,62 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return map.get(id);
   }
 
+  async function closeWithdrawnSession(order) {
+    return shared(withdrawing, order.orderId, async () => {
+      // Re-read the durable request before changing anything at Stripe. The
+      // checked Session metadata also binds the account, order, film and cut.
+      order = store.viewerOrderById(order.orderId);
+      if (order?.withdrawalState !== 'requested' || !order.sessionId) return;
+      if (!order.paidAt) {
+        if (!store.ownsTestAccount(order.owner,order.account) || !SESSION.test(order.sessionId)) throw mismatch();
+        const stripe = await client(order);
+        const options = order.uiMode === 'hosted' ? undefined : CHECKOUT_API;
+        const read = () => stripe.checkout.sessions.retrieve(order.sessionId, options);
+        let session = await read();
+        checkSession(session, order);
+        if (session.status === 'open' && session.payment_status === 'unpaid') {
+          try {
+            session = await stripe.checkout.sessions.expire(session.id,options);
+          } catch {
+            // Confirmation, another expiration, or a lost network response
+            // can win the race. Only Stripe's current status decides the result.
+            session = await read();
+          }
+          checkSession(session,order);
+        }
+        if (session.status === 'expired') store.expireViewerOrder(order.orderId);
+        else if (session.status === 'complete') await reconcile(order,session);
+        else throw new ViewerCheckoutError('The unfinished checkout still needs to close.',503);
+      }
+      store.finishWithdrawal(order.orderId,order.sessionId);
+    });
+  }
+
+  async function closeWithdrawnSessions(owner,filmId) {
+    const orders = store.requestedWithdrawals(owner,filmId);
+    for (let i=0; i<orders.length; i+=4) {
+      await Promise.all(orders.slice(i,i+4).map(async order => {
+        try { await closeWithdrawnSession(order); }
+        catch { store.retryWithdrawal(order.orderId); }
+      }));
+    }
+    return owner ? store.pendingWithdrawals(owner,filmId) : undefined;
+  }
+
   async function openSession(order) {
     const expired = () => new ViewerCheckoutError('This order has expired. Start a new checkout.', 410);
     if (order.status === 'expired' || abandoned(order)) throw expired();
     if (order.status === 'paid') {
       if ((await reconcile(order)).status === 'paid') return { status: 'paid' };
+      throw expired();
+    }
+    if (order.withdrawalState) {
+      await closeWithdrawnSession(order);
+      const current = store.viewerOrderById(order.orderId);
+      if (localStatus(current) === 'paid') return { status:'paid' };
+      if (current.sessionId && current.status === 'pending' && current.withdrawalState === 'closed') {
+        throw new ViewerCheckoutError('Your payment is still processing.',409);
+      }
       throw expired();
     }
     const stripe = await client(order);
@@ -128,6 +191,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
       if (order.uiMode === 'hosted') throw new ViewerCheckoutError('Start a new checkout for this film.', 410);
       if (order.uiMode !== 'embedded_page' && order.uiMode !== 'elements') throw mismatch();
       await verifyReadySeller({ store, env, fetchImpl, owner: order.owner, account: order.account });
+      if (store.viewerOrderById(order.orderId).withdrawalState) throw expired();
       const markers = metadata(order);
       // Retried creates must send the parameters from the order's original UI.
       const redirect = order.uiMode === 'elements' ?
@@ -139,12 +203,19 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
         client_reference_id: order.orderId, metadata: markers, payment_intent_data: { metadata: markers },
         line_items: [{ quantity: 1, price_data: { currency: 'usd', unit_amount: order.amount,
           product_data: { name: order.title, description: order.kind === 'rent' ?
-            '48-hour streaming rental, starting at purchase.' : 'One-time purchase with original file download.' } } }]
+            order.rentalHours + '-hour streaming rental, starting at purchase.' : 'One-time purchase with original file download.' } } }]
       }, { ...options, idempotencyKey: 'stream-viewer-' + order.orderId });
       checkSession(session, order);
       store.bindViewerSession(order.orderId, session.id);
     }
     checkSession(session, order);
+    if (session.status === 'open' && store.viewerOrderById(order.orderId).withdrawalState) {
+      // A different process may have unpublished this film while create/get
+      // was outstanding. Never return a withdrawn Session's client secret.
+      await closeWithdrawnSession(order);
+      if (localStatus(store.viewerOrderById(order.orderId)) === 'paid') return {status:'paid'};
+      throw expired();
+    }
     if (session.status === 'expired') {
       store.expireViewerOrder(order.orderId);
       throw expired();
@@ -161,7 +232,8 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     if (session.status !== 'open' || typeof session.client_secret !== 'string' ||
         !session.client_secret.startsWith(session.id + '_secret_') || session.client_secret.length > 1024) throw mismatch();
     return { clientSecret: session.client_secret, publishableKey, account: order.account,
-      uiMode: order.uiMode, orderId: order.orderId, title: order.title, kind: order.kind, amount: order.amount, currency: session.currency };
+      uiMode: order.uiMode, orderId: order.orderId, title: order.title, kind: order.kind, amount: order.amount, currency: session.currency,
+      ...(order.kind === 'rent' && {rentalHours:order.rentalHours}) };
   }
 
   async function start({ offer, token, origin, kind = 'rent' }) {
@@ -179,74 +251,130 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return shared(creating, order.orderId, () => openSession(order));
   }
 
-  async function reconcile(order, retrievedSession, paidEvent) {
-    return shared(checking, order.orderId, async () => {
-      const stripe = await client(order);
-      const options = order.uiMode === 'hosted' ? undefined : CHECKOUT_API;
-      const session = retrievedSession ?? await stripe.checkout.sessions.retrieve(order.sessionId, options);
-      checkSession(session, order);
-      if (session.status === 'expired') {
+  async function reconcileOnce(order, retrievedSession, paidEvent, adjustment) {
+    const stripe = await client(order);
+    const options = order.uiMode === 'hosted' ? undefined : CHECKOUT_API;
+    const session = retrievedSession ?? await stripe.checkout.sessions.retrieve(order.sessionId, options);
+    checkSession(session, order);
+    if (session.status === 'expired') {
+      store.expireViewerOrder(order.orderId);
+      return { status: 'expired' };
+    }
+    if (session.status === 'open' && session.payment_status === 'unpaid') return { status: 'pending' };
+    if (session.status !== 'complete' || !['unpaid','paid'].includes(session.payment_status) || !INTENT.test(session.payment_intent)) throw mismatch();
+    const intent = await stripe.paymentIntents.retrieve(session.payment_intent, { expand: ['latest_charge'] }, options);
+    checkIntent(intent, order, session.payment_intent);
+    if (session.payment_status === 'unpaid') {
+      if (['canceled','requires_payment_method'].includes(intent.status)) {
         store.expireViewerOrder(order.orderId);
         return { status: 'expired' };
       }
-      if (session.status === 'open' && session.payment_status === 'unpaid') return { status: 'pending' };
-      if (session.status !== 'complete' || !['unpaid','paid'].includes(session.payment_status) || !INTENT.test(session.payment_intent)) throw mismatch();
-      const intent = await stripe.paymentIntents.retrieve(session.payment_intent, { expand: ['latest_charge'] }, options);
-      checkIntent(intent, order, session.payment_intent);
-      if (session.payment_status === 'unpaid') {
-        if (['canceled','requires_payment_method'].includes(intent.status)) {
-          store.expireViewerOrder(order.orderId);
-          return { status: 'expired' };
-        }
-        return { status: 'pending' };
+      return { status: 'pending' };
+    }
+    const charge = checkCharge(intent, order);
+    if ((adjustment && (charge.id !== adjustment.chargeId || (adjustment.intentId && intent.id !== adjustment.intentId))) ||
+        (order.intentId && order.intentId !== intent.id) || (order.chargeId && order.chargeId !== charge.id)) throw mismatch();
+    const paymentState = await adjustmentReader(key,order.account,fetchImpl).state(order,charge,adjustment);
+    const now = Math.floor(Date.now() / 1000);
+    const useConfirmation = order.uiMode !== 'hosted' && order.kind === 'rent' && charge.payment_method_details?.type !== 'card';
+    // A bank debit can create its Charge days before it succeeds. Stripe's
+    // paid event dates that success; a missed webhook uses first verified payment.
+    const datedEvent = paidEvent?.intent === intent.id && Number.isSafeInteger(paidEvent.created) &&
+      paidEvent.created >= charge.created && paidEvent.created <= now;
+    const confirmed = datedEvent ? paidEvent.created : now;
+    const paidAt = order.paidAt ?? (useConfirmation ? confirmed : charge.created);
+    if (paidAt < charge.created || paidAt > now || (!useConfirmation && paidAt !== charge.created)) throw mismatch();
+    const saved = store.reconcileViewerPayment(order,{intentId:intent.id,paidAt,...paymentState});
+    if (!saved) return;
+    const status = localStatus(saved);
+    if (status === 'paid') store.rememberViewerEmail(order.orderId, session.customer_details?.email || charge.billing_details?.email);
+    return status === 'paid' ? {status,intent,paidAt:saved.paidAt,paymentState} : {status};
+  }
+
+  async function reconcile(order, retrievedSession, paidEvent, adjustment) {
+    async function fresh() {
+      // Start each Stripe read from the current ledger revision. A racing write
+      // discards this read and reconciles again against Stripe under the seller.
+      for (let i = 0; i < 3; i++) {
+        const current = store.viewerOrderById(order.orderId);
+        const result = await reconcileOnce(current,i === 0 ? retrievedSession : undefined,paidEvent,adjustment);
+        if (result) return result;
       }
-      const charge = checkCharge(intent, order);
-      if (charge.refunded || charge.amount_refunded > 0 || charge.disputed) {
-        store.expireViewerOrder(order.orderId);
-        return { status: 'expired' };
-      }
-      const now = Math.floor(Date.now() / 1000);
-      const useConfirmation = order.uiMode !== 'hosted' && order.kind === 'rent' && charge.payment_method_details?.type !== 'card';
-      // A bank debit can create its Charge days before it succeeds. Stripe's
-      // paid event dates that success; a missed webhook uses first verified payment.
-      const datedEvent = paidEvent?.intent === intent.id && Number.isSafeInteger(paidEvent.created) &&
-        paidEvent.created >= charge.created && paidEvent.created <= now;
-      const confirmed = datedEvent ? paidEvent.created : now;
-      const paidAt = store.fulfillViewerOrder(order.orderId, session.id, intent.id, useConfirmation ? confirmed : charge.created);
-      if (paidAt === undefined) {
-        if (store.viewerOrderById(order.orderId)?.status === 'expired') return { status: 'expired' };
-        throw mismatch();
-      }
-      if (paidAt < charge.created || paidAt > now || (!useConfirmation && paidAt !== charge.created)) throw mismatch();
-      if (order.kind === 'rent' && paidAt + RENTAL_SECONDS <= now) {
-        store.expireViewerOrder(order.orderId);
-        return { status: 'expired' };
-      }
-      return { status: 'paid', intent, paidAt };
-    });
+      throw new ViewerCheckoutError('Payment is being updated. Try again.',503);
+    }
+    // A new adjustment must fetch its own current snapshot, even during viewer polling.
+    return adjustment ? fresh() : shared(checking,order.orderId,fresh);
   }
 
   async function status({ offer, token }) {
-    const order = store.viewerOrderForToken(await viewerHash(token));
+    const order = store.viewerOrderForAccess(await viewerHash(token));
     if (!order || !matchingOffer(order, offer)) return { status: 'pending' };
-    if (order.status === 'expired' || abandoned(order) ||
-        (order.kind === 'rent' && order.paidAt && order.paidAt + RENTAL_SECONDS <= Math.floor(Date.now() / 1000))) return { status: 'expired' };
-    if (!order.sessionId) return { status: 'pending' };
+    // Older versions marked partial refunds expired without recording a reason.
+    // Recheck a settled, still-current order under the current refund policy.
+    const end = expiresAt(order);
+    if ((end && end <= Math.floor(Date.now()/1000)) || (order.status === 'expired' && !order.intentId) || abandoned(order)) return {status:'expired'};
+    if (!order.sessionId) return { status: order.withdrawalState ? 'expired' : 'pending' };
     if (order.status === 'pending' && !checking.has(order.orderId) && !store.checkPendingViewerOrder(order.orderId)) return { status: 'pending' };
     const result = await reconcile(order);
     if (result.status !== 'paid') return result;
     const film = { film: offer.scope, revision: offer.revision };
-    const receipt = order.kind === 'buy' ?
-      await offer.authority.issuePurchaseReceipt(result.intent, film, { amount: order.amount, orderId: order.orderId }) :
-      await offer.authority.issueReceipt(result.intent, film, { amount: order.amount, paidAt: result.paidAt });
-    return { status: 'paid', kind: order.kind, receipt };
+    const options = { amount:order.amount, orderId:order.orderId, paymentState:result.paymentState };
+    const receipt = order.kind === 'buy' ? await offer.authority.issuePurchaseReceipt(result.intent,film,options) :
+      await offer.authority.issueReceipt(result.intent,film,{...options,paidAt:result.paidAt,rentalHours:order.rentalHours});
+    return { status:'paid',kind:order.kind,receipt,title:order.title,position:order.position || 0,
+      expiresAt:expiresAt({...order,paidAt:result.paidAt}),...(order.kind === 'rent' && {rentalHours:order.rentalHours}) };
+  }
+
+  function accessAllowed({offer,orderId,kind,rentalExpiresAt}) {
+    if (!orderId) return kind === 'rent' && Number.isSafeInteger(rentalExpiresAt) && rentalExpiresAt > Date.now()/1000 &&
+      store.accessForLegacyRental(offer,rentalExpiresAt);
+    const order = store.viewerAccessById(orderId);
+    return Boolean(order && matchingOffer(order,offer) && order.kind === kind && order.intentId && localStatus(order) === 'paid');
+  }
+
+  async function verifyPlayback(request) {
+    if (!accessAllowed(request)) return false;
+    const order = request.orderId ? store.viewerOrderById(request.orderId) :
+      store.legacyOrderForRenewal(request.offer, request.rentalExpiresAt);
+    if (!order) return false;
+    if (order.verifiedAt > Date.now() / 1000 - 300) return true;
+    return (await reconcile(order)).status === 'paid';
+  }
+
+  async function position({offer,token,seconds}) {
+    const order = store.viewerOrderForAccess(await viewerHash(token));
+    if (!order || !Number.isSafeInteger(seconds) || seconds < 0 ||
+        !accessAllowed({offer,orderId:order.orderId,kind:order.kind})) throw new ViewerCheckoutError('Playback unavailable.',403);
+    store.setViewerPosition(order.orderId, seconds >= offer.duration ? 0 : seconds);
+    return {saved:true};
   }
 
   async function verifyPurchase({ offer, orderId }) {
     if (typeof orderId !== 'string' || orderId.length > 64) return false;
     const order = store.viewerOrderById(orderId);
-    if (order?.kind !== 'buy' || order.status !== 'paid' || !order.intentId || !matchingOffer(order, offer)) return false;
+    if (order?.kind !== 'buy' || !order.intentId || !matchingOffer(order, offer)) return false;
     return (await reconcile(order)).status === 'paid';
+  }
+
+  async function adjustmentWebhook(event) {
+    const hint = adjustmentReference(event);
+    if (!hint || !store.hasViewerSellerAccount(event.account) || store.paymentEventSeen(event.account,event.id)) return;
+    let order = store.viewerOrderByPayment(event.account,hint.intentId,hint.chargeId);
+    if (!order) {
+      // A refund can arrive before the paid Session event has bound the intent.
+      const platformId = await checkingPlatform();
+      if (platformId === event.account) return;
+      const intentId = hint.intentId ?? await adjustmentReader(key,event.account,fetchImpl).chargeIntent(hint.chargeId);
+      if (!INTENT.test(intentId)) return;
+      const intent = await connectedClient(key,event.account,platformId,fetchImpl).paymentIntents.retrieve(intentId,{expand:['latest_charge']},CHECKOUT_API);
+      if (![FLOW,LEGACY_FLOW].includes(intent.metadata?.flow) || intent.latest_charge?.id !== hint.chargeId) return;
+      order = store.viewerOrderById(intent.metadata.order);
+      if (!order || order.account !== event.account || !sameMetadata(intent.metadata,order)) return;
+    }
+    if (!order.sessionId) throw new ViewerCheckoutError('Session registration is still pending.',503);
+    const result = await reconcile(order,undefined,undefined,hint);
+    if (result.status === 'pending') throw new ViewerCheckoutError('Payment confirmation is pending.',503);
+    store.notePaymentEvent(event.account,event.id,order.orderId);
   }
 
   async function webhook(rawBody, signature) {
@@ -260,7 +388,9 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     try { event = JSON.parse(text); } catch { throw new ViewerCheckoutError('Invalid webhook payload.'); }
     const object = event?.data?.object;
     if (event?.object !== 'event' || event.livemode !== false || !/^evt_[a-zA-Z0-9]+$/.test(event.id) ||
-        !['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed'].includes(event.type) ||
+        !/^acct_[a-zA-Z0-9]+$/.test(event.account)) return {received:true};
+    if (adjustmentEvents.has(event.type)) { await adjustmentWebhook(event); return {received:true}; }
+    if (!['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed'].includes(event.type) ||
         ![FLOW, LEGACY_FLOW].includes(object?.metadata?.flow) || !SESSION.test(object.id)) return { received: true };
     const order = store.viewerOrderById(object.metadata.order);
     if (!order || event.account !== order.account) return { received: true };
@@ -272,6 +402,20 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     if (confirmsPayment && result.status === 'pending') throw new ViewerCheckoutError('Payment confirmation is still pending.', 503);
     store.noteViewerWebhook(order.orderId, event.id);
     return { received: true };
+  }
+
+  // Populate address fingerprints for older, still-valid orders without mailing viewers.
+  async function indexPreviousOrders() {
+    let cursor = 0;
+    for (;;) {
+      const rows = store.previousRecoveryOrders(cursor);
+      if (!rows.length) return;
+      for (const order of rows) {
+        cursor = order.cursor;
+        try { await reconcile(order); }
+        catch { console.error('A previous Stream payment could not be indexed for email recovery.'); }
+      }
+    }
   }
 
   function guarded(fn) {
@@ -286,5 +430,6 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     };
   }
 
-  return { configured, start: guarded(start), status: guarded(status), verifyPurchase: guarded(verifyPurchase), webhook: guarded(webhook) };
+  return { configured, indexPreviousOrders, closeWithdrawnSessions, start: guarded(start), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
+    verifyPurchase: guarded(verifyPurchase), webhook: guarded(webhook) };
 }
