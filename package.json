@@ -15,7 +15,9 @@
     "inspect": "node --env-file-if-exists=.env scripts/inspect.js",
     "check:browser": "node scripts/check-browser.js",
     "invite": "node --env-file-if-exists=.env scripts/invite.js",
-    "check:setup": "node scripts/check-setup-browser.js"
+    "check:setup": "node scripts/check-setup-browser.js",
+    "viewers": "node --env-file-if-exists=.env src/viewer-server.js",
+    "check:viewer-checkout": "node scripts/check-viewer-checkout.js"
   },
   "dependencies": {
     "@dustwave/admin-shell": "file:shared/dust-wave-platform/packages/admin-shell",

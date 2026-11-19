@@ -7,13 +7,21 @@
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" type="module"></script>
 </head>
-<body>
+<body data-checkout="{{checkout}}">
   <main aria-labelledby="film-title">
     <video controls playsinline preload="none" aria-label="{{title}}"></video>
     <div class="details">
       <div><h1 id="film-title">{{title}}</h1><p>Dust Wave Stream · Playback prototype</p></div>
       <button type="button" id="play">Play 10-second preview</button>
     </div>
+    <section id="purchase" aria-label="Rental checkout" hidden>
+      <p>$0.99 USD · 48 hours from purchase</p>
+      <div class="actions">
+        <button type="button" id="rent">Start test rental</button>
+        <button type="button" id="check-payment" class="secondary" hidden>Check payment</button>
+        <a id="checkout-here" target="_top" rel="noreferrer noopener" hidden>Use this tab for checkout</a>
+      </div>
+    </section>
     <p id="status" role="status" aria-live="polite"></p>
   </main>
 </body>

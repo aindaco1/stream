@@ -3,14 +3,29 @@ const play = document.querySelector('#play');
 const status = document.querySelector('#status');
 const filmId = location.pathname.split('/')[2] || 'clock';
 const prefix = '/film/' + encodeURIComponent(filmId);
-const receipt = new URLSearchParams(location.hash.slice(1)).get('receipt');
-if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+const fragment = new URLSearchParams(location.hash.slice(1));
+let receipt = fragment.get('receipt');
+if (location.hash) history.replaceState(history.state, '', location.pathname + location.search);
 
 let stream;
 let renewal;
 let library;
 let paid = false;
+let checkout;
 if (receipt) play.textContent = 'Play rental';
+if (!receipt && document.body.dataset.checkout === 'true') {
+  import('/checkout.js').then(({ attachViewerCheckout }) => {
+    checkout = attachViewerCheckout(filmId, fragment.get('attempt'), value => {
+      receipt = value;
+      play.textContent = 'Play rental';
+      play.hidden = false;
+      status.textContent = 'Your rental is ready. Select Play rental to watch.';
+    });
+    if (video.ended) checkout.showOffer();
+  }).catch(() => {
+    status.textContent = 'Checkout could not load. Refresh this player to try again.';
+  });
+}
 
 function fail(message) {
   clearTimeout(renewal);
@@ -84,6 +99,7 @@ play.addEventListener('click', async () => {
   status.textContent = 'Loading…';
   try {
     if (receipt) {
+      if (!video.paused) video.pause();
       paid = true;
       await rental();
     } else {
@@ -98,6 +114,7 @@ play.addEventListener('click', async () => {
   }
 });
 
+video.addEventListener('playing', () => video.classList.remove('preview-ended'));
 video.addEventListener('ended', () => {
   if (paid) {
     fail('Rental screening complete.');
@@ -105,5 +122,14 @@ video.addEventListener('ended', () => {
   }
   clearTimeout(renewal);
   play.hidden = false;
-  status.textContent = 'Preview complete. A rental unlocks the full film.';
+  if (receipt) {
+    status.textContent = 'Your rental is ready. Select Play rental to watch.';
+  } else {
+    status.textContent = 'Preview complete. A rental unlocks the full film.';
+    if (document.body.dataset.checkout === 'true') {
+      video.classList.add('preview-ended');
+      play.textContent = 'Replay preview';
+      checkout?.showOffer();
+    }
+  }
 });

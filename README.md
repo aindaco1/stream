@@ -1,6 +1,6 @@
 # Dust Wave Stream
 
-An open-source film player for filmmakers who keep their originals in their own storage. Each test filmmaker connects a private Cloudflare R2 object, offers a ten-second preview, and unlocks a 48-hour rental after a Stripe sandbox purchase. The player runs on localhost. It makes no persistent streaming copies.
+An open-source film player for filmmakers who keep their originals in their own storage. Each test filmmaker connects a private Cloudflare R2 object, offers a ten-second preview, and unlocks a 48-hour rental after a Stripe sandbox purchase. The setup and viewer services bind to loopback and can sit behind HTTPS. Stream reads the original from the filmmaker’s bucket and creates each playable segment on demand.
 
 ## Guided filmmaker setup
 
@@ -24,7 +24,7 @@ Stream runs as one Node server bound to loopback. For a hosted pilot, terminate 
 
 | Setting | Purpose |
 | --- | --- |
-| `STREAM_STATE_DIR` | Private state directory, outside the checkout and cloud sync. The `filmmakers/` subdirectory holds SQLite and its owner-only credential encryption key. Back up both privately. Run one web process per state directory. |
+| `STREAM_STATE_DIR` | Private state directory, outside the checkout and cloud sync. The `filmmakers/` subdirectory holds SQLite and its owner-only credential encryption key. Back up both privately. Run one filmmaker setup service and one viewer service per state directory on the same host. |
 | `STRIPE_CONNECT_SECRET_KEY` | Dust Wave’s server-side Connect platform key. Use a sandbox key for rehearsal. Filmmakers enter identity and bank information on Stripe. |
 | `STRIPE_CONNECT_CLIENT_ID` | Optional, mode-matching Standard OAuth client ID. Enable eligible existing-account connections in the Connect platform and register the exact `/setup/stripe/oauth` redirect on your origin. |
 | `STRIPE_CONNECT_LIVE` | Test mode is the default. Live onboarding requires an explicit value of `1`, a matching live platform key and an HTTPS origin. Test and live connections are stored independently. |
@@ -32,6 +32,34 @@ Stream runs as one Node server bound to loopback. For a hosted pilot, terminate 
 Configure the platform for Accounts v2 merchant onboarding with a full Stripe Dashboard, direct charges and Stripe-managed fees and losses. Set Connect branding, enable networked onboarding to reuse eligible details, and configure collection of external payout details. The card stays available for explanation when the operator has not configured Connect. Storage and private previews work independently. [Stripe-hosted onboarding](https://docs.stripe.com/connect/hosted-onboarding?accounts-namespace=v2) · [Networked onboarding](https://docs.stripe.com/connect/networked-onboarding) · [Existing Standard accounts](https://docs.stripe.com/connect/oauth-standard-accounts)
 
 The setup cards come from Admin Shell **0.16.0** in the pinned Dust Wave Platform submodule. Stream owns the filmmaker sessions, rights records, provider calls and media checks. To run the form rehearsal, install Chromium with `npx playwright install chromium` and run `npm run check:setup`. This browser rehearsal uses simulated provider responses, real forms and the private preview renderer. The sandbox sale commands below contact Stripe and create test payments. [Cloudflare R2 credentials](https://developers.cloudflare.com/r2/api/tokens/) · [Cloudflare uploads](https://developers.cloudflare.com/r2/objects/upload-objects/)
+
+## Public viewer checkout in a Stripe sandbox
+
+Finish setup for each participating filmmaker, save their film, and select **Check Stripe status**. The card must show that both charges and payouts are enabled. An operator publishes individual saved films by listing their setup owner and film ID in the viewer service’s private environment. An empty list publishes zero films.
+
+```dotenv
+STREAM_PUBLIC_FILMS='[{"owner":"Example filmmaker","id":"f-00000000-0000-4000-8000-000000000001"}]'
+```
+
+Run `npm run viewers` with the same `STREAM_STATE_DIR` as setup, the Store sandbox’s `STRIPE_CONNECT_SECRET_KEY`, and a 32-byte base64url `STREAM_RENTAL_SECRET` (or the state directory’s existing `rental.env`). Set `STRIPE_CONNECT_WEBHOOK_SECRET` to the signing secret for this listener. For a local rehearsal, run the following from a Stripe CLI session authenticated to the same sandbox and keep the listener running.
+
+```sh
+stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded \
+  --forward-connect-to http://127.0.0.1:8793/checkout/webhook
+```
+
+Open `http://127.0.0.1:8793/screening`. To share it over HTTPS, set `STREAM_PUBLIC_ORIGIN` to the exact viewer origin, forward the original Host header, and forward Connect events to that origin’s `/checkout/webhook`. The viewer service exposes only explicitly published films and viewer routes. For a registered Stripe webhook destination, choose events on **Connected accounts** and use that destination’s own signing secret. [Stripe Connect webhooks](https://docs.stripe.com/connect/webhooks)
+
+Embed a published film on another site with its viewer URL. Give it enough vertical space for the offer beneath the video.
+
+```html
+<iframe src="https://stream.example.org/embed/f-00000000-0000-4000-8000-000000000001"
+  title="Film title" width="640" height="570" allow="autoplay; fullscreen" allowfullscreen></iframe>
+```
+
+Play the ten-second preview, choose **Start test rental**, then pay in Stripe’s hosted sandbox checkout using a test card. Return to the screening page and choose **Play rental**. The original embed checks payment automatically and offers **Check payment** for a manual retry. Checkout uses a direct charge on the film’s connected account. The $0.99 USD rental lasts 48 hours from purchase. You can resume from the screening tab or the checkout return tab during this prototype. The player works with third-party cookies blocked. [Stripe test cards](https://docs.stripe.com/testing) · [Direct charges](https://docs.stripe.com/connect/direct-charges)
+
+For a repeatable browser regression, generate the clock fixture with `npm run fixture` once, then run `npm run check:viewer-checkout`. It exercises separate publisher and player origins, real media playback, and a simulated payment provider.
 
 ## Try the preview
 
@@ -151,7 +179,7 @@ Scan the QR image at the path the command prints. In ordinary iPhone Safari, tap
 
 1. Use both private R2 fixtures to measure sustained playback, concurrent viewers, storage operations and delivery cost. Before admitting unrelated filmmakers, also rehearse account connection and seller settlement with separately owned accounts. Isolate the media parser before accepting public uploads.
 2. Add filmmaker sign-in, rights acceptance before upload/registration and guided setup for new and existing Cloudflare and Stripe accounts. Release the characterized, reusable setup cards through Dust Wave Platform for independent adoption by Stream, Pool and Store.
-3. Build filmmaker-scoped Checkout, signed webhooks, revocation and receipt recovery. Exercise simultaneous purchases from different sellers in independent iframes. Add per-film rental terms, a buy-to-download option and the optional platform tip.
+3. Extend the sandbox viewer checkout to production with refund and dispute revocation for outstanding receipts, plus cross-device rental recovery. Exercise simultaneous purchases from different sellers. Add per-film rental terms, a buy-to-download option and the optional platform tip.
 4. Add the filmmaker dashboard, viewing counts, basic analytics and pilot publishing controls. Qualify additional storage and payment providers after measuring the R2 pilot.
 
 Stream owns the player, film policy and routes. Its Platform dependency is pinned to a git submodule revision with worker-core 0.16.1. Revert the consumer commit that changes the pin to roll back independently. Stream’s own code is MIT licensed. Its dependencies retain their respective licenses.
