@@ -6,6 +6,15 @@ const API = 'https://api.stripe.com';
 const CONNECT = 'https://connect.stripe.com';
 const VERSION = '2026-10-28.endive';
 const ACCOUNT_ID = /^acct_[a-zA-Z0-9]{3,100}$/;
+// Direct Stripe markets on stripe.com/global. Stripe checks the platform's actual
+// cross-border eligibility and card-payment capability when it creates the account.
+export const stripeBusinessCountries = Object.freeze(
+  'AE AT AU BE BG BR CA CH CY CZ DE DK EE ES FI FR GB GI GR HK HR HU ID IE IN IT JP LI LT LU LV MT MX MY NL NO NZ PL PT RO SE SG SI SK TH US'.split(' ')
+);
+const countryRejections = new Set([
+  'country_unsupported', 'country_not_supported', 'capability_not_available_in_country',
+  'capability_not_available_in_platform_country', 'cross_border_connected_account_creation_not_allowed'
+]);
 const TWO_HOURS = 2 * 60 * 60 * 1000;
 const ACCOUNT_RETRY_WINDOW = 29 * 24 * 60 * 60 * 1000;
 
@@ -41,6 +50,37 @@ export function stripeSetupStateForMode(stored, mode) {
   return stored.byMode[mode] ??= { mode, status: 'unconnected' };
 }
 
+function hostedPaymentStatus(account) {
+  const caps = account.configuration?.merchant?.capabilities;
+  const capabilities = [['card payments', caps?.card_payments], ['payouts', caps?.stripe_balance?.payouts]];
+  const flags = { chargesEnabled: caps?.card_payments?.status === 'active',
+    payoutsEnabled: caps?.stripe_balance?.payouts?.status === 'active', needsCards: Boolean(caps && !caps.card_payments) };
+  for (const [name, cap] of capabilities) {
+    if (cap?.status === 'unsupported' || cap?.status === 'rejected') {
+      const reason = cap.status === 'unsupported' ? `Stripe does not support ${name} for this account.` :
+        `Stripe rejected ${name} for this account. Review the decision in your Stripe Dashboard.`;
+      return { ...flags, status: 'restricted', reason };
+    }
+    if (cap?.status_details?.some(detail => detail.resolution === 'contact_stripe')) {
+      return { ...flags, status: 'restricted', reason: `Contact Stripe support about ${name} for this account.` };
+    }
+  }
+
+  const isDue = deadline => ['currently_due', 'past_due'].includes(deadline?.status);
+  const due = isDue(account.requirements?.summary?.minimum_deadline);
+  const dueEntries = account.requirements?.entries?.filter(entry => isDue(entry.minimum_deadline)) || [];
+  const awaitingStripe = due && dueEntries.length > 0 && dueEntries.every(entry => entry.awaiting_action_from === 'stripe');
+  const restricted = capabilities.filter(([, cap]) => cap?.status === 'restricted');
+  const requiresAction = restricted.some(([, cap]) => !cap.status_details?.length ||
+    cap.status_details.some(detail => detail.resolution !== 'no_resolution'));
+  const reason = flags.needsCards ? 'Continue setup to enable card payments for this business in Stripe.' : undefined;
+  if (flags.needsCards || requiresAction || (due && !awaitingStripe)) return { ...flags, status: 'action_required', reason };
+  if (awaitingStripe || restricted.length || capabilities.some(([, cap]) => cap?.status === 'pending')) {
+    return { ...flags, status: 'pending', reason };
+  }
+  return { ...flags, status: flags.chargesEnabled && flags.payoutsEnabled ? 'ready' : 'action_required', reason };
+}
+
 // Each ctx belongs to the authenticated creator. The caller serializes its
 // mutations, checkpoints save() atomically and enforces uniqueness in claimAccount().
 export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch, now = Date.now }) {
@@ -63,9 +103,13 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
       body: body ? (oauth ? new URLSearchParams(body).toString() : JSON.stringify(body)) : undefined
     });
     if (!response.ok) {
-      await response.body?.cancel();
       const problem = unavailable();
       problem.providerStatus = response.status;
+      // Provider text can contain private information. Only a machine code is
+      // used to distinguish a definitive rejection from an uncertain create.
+      const errorBody = await readBoundedJson(response, 16 * 1024).catch(() => null);
+      const code = errorBody?.error?.code || errorBody?.error?.type;
+      if (typeof code === 'string' && /^[a-z_]{1,100}$/.test(code)) problem.providerCode = code;
       throw problem;
     }
     return readBoundedJson(response, 256 * 1024);
@@ -87,13 +131,13 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
     await ctx.save();
   }
 
-  async function ensureHostedAccount(ctx) {
+  async function ensureHostedAccount(ctx, country) {
     const state = ctx.state;
     if (state.accountId) return claim(ctx, state.accountId);
     const environment = await sha256Hex(JSON.stringify([base, mode, secret]));
     if (!state.createRequest) {
       const email = ctx.verifiedEmail;
-      state.createRequest = { key: randomUUID(), environment, started: now(),
+      state.createRequest = { key: randomUUID(), environment, started: now(), country,
         ...(typeof email === 'string' && email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? { email } : {}) };
       await ctx.save();
     }
@@ -101,12 +145,30 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
     if (op.environment !== environment || now() - op.started >= ACCOUNT_RETRY_WINDOW) {
       throw new StripeSetupError('Ask the platform operator to reconcile the previous account creation before continuing.', 409);
     }
-    const account = await request(API + '/v2/core/accounts', { idempotency: op.key, body: {
-      dashboard: 'full', configuration: { merchant: {} },
-      defaults: { responsibilities: { fees_collector: 'stripe', losses_collector: 'stripe' } },
-      metadata: { application: 'dust-wave-stream', creator: await sha256Hex(ctx.creatorId) },
-      ...(op.email ? { contact_email: op.email } : {})
-    } });
+    if (op.country && country && op.country !== country) {
+      throw new StripeSetupError('An account request is already in progress with a different country. Resume its original request.', 409);
+    }
+    // Older checkpoints predate country collection. Replay their original
+    // parameters and key before issuing a new create under a different key.
+    const merchant = op.country ? { capabilities: { card_payments: { requested: true } } } : {};
+    let account;
+    try {
+      account = await request(API + '/v2/core/accounts', { idempotency: op.key, body: {
+        dashboard: 'full', configuration: { merchant },
+        defaults: { responsibilities: { fees_collector: 'stripe', losses_collector: 'stripe' } },
+        metadata: { application: 'dust-wave-stream', creator: await sha256Hex(ctx.creatorId) },
+        ...(op.email ? { contact_email: op.email } : {}),
+        ...(op.country ? { identity: { country: op.country } } : {})
+      } });
+    } catch (error) {
+      const legacyRejected = !op.country && country && error.providerCode === 'identity_country_required';
+      const countryRejected = op.country && countryRejections.has(error.providerCode);
+      if (error.providerStatus !== 400 || (!legacyRejected && !countryRejected)) throw error;
+      delete state.createRequest;
+      await ctx.save();
+      if (countryRejected) throw new StripeSetupError('Stripe cannot enable card payments for this account and business country. Check your selection or contact Dust Wave.', 422);
+      return ensureHostedAccount(ctx, country);
+    }
     if (account?.object !== 'v2.core.account' || account.livemode !== live || !ACCOUNT_ID.test(account.id)) throw unavailable();
     await bind(ctx, account.id, 'hosted');
   }
@@ -125,12 +187,12 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
     return raw;
   }
 
-  async function hosted(ctx) {
-    await ensureHostedAccount(ctx);
+  async function hosted(ctx, country) {
+    await ensureHostedAccount(ctx, country);
     const token = await issueState(ctx, 'hosted');
     const link = await request(API + '/v2/core/account_links', { idempotency: randomUUID(), body: {
       account: ctx.state.accountId, use_case: { type: 'account_onboarding', account_onboarding: {
-        configurations: ['merchant'], collection_options: { fields: 'currently_due' },
+        collection_options: { fields: 'currently_due' },
         return_url: callbackUrl('return') + '?state=' + token,
         refresh_url: callbackUrl('refresh') + '?state=' + token
       } }
@@ -164,31 +226,22 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
       const object = hostedAccount ? 'v2.core.account' : 'account';
       if (account?.id !== state.accountId || account.object !== object || account.deleted === true ||
           (hostedAccount ? account.livemode !== live : account.livemode !== undefined && account.livemode !== live)) throw unavailable();
-      let action, pending;
       if (hostedAccount) {
-        const caps = account.configuration?.merchant?.capabilities;
-        state.chargesEnabled = caps?.card_payments?.status === 'active';
-        state.payoutsEnabled = caps?.stripe_balance?.payouts?.status === 'active';
-        state.needsCards = Boolean(caps && !caps.card_payments);
-        state.reason = state.needsCards ? 'Continue setup to enable card payments for this business in Stripe.' : undefined;
-        if (caps?.card_payments?.status === 'unsupported') state.reason = 'Stripe reports this account does not support card payments.';
-        const due = account.requirements?.summary?.minimum_deadline?.status;
-        action = ['currently_due', 'past_due'].includes(due);
-        pending = [caps?.card_payments?.status, caps?.stripe_balance?.payouts?.status].includes('pending');
+        Object.assign(state, hostedPaymentStatus(account));
       } else {
         if (account.type !== 'standard' && account.controller?.stripe_dashboard?.type !== 'full') throw unavailable();
         state.chargesEnabled = account.charges_enabled === true;
         state.payoutsEnabled = account.payouts_enabled === true;
         const req = account.requirements || {};
-        action = Boolean(req.currently_due?.length || req.past_due?.length ||
+        const action = Boolean(req.currently_due?.length || req.past_due?.length ||
           (req.disabled_reason && req.disabled_reason !== 'requirements.pending_verification'));
-        pending = Boolean(req.pending_verification?.length || req.disabled_reason === 'requirements.pending_verification');
+        const pending = Boolean(req.pending_verification?.length || req.disabled_reason === 'requirements.pending_verification');
+        if (action) state.status = 'action_required';
+        else if (state.chargesEnabled && state.payoutsEnabled) state.status = 'ready';
+        else state.status = pending ? 'pending' : 'action_required';
       }
       const name = hostedAccount ? account.display_name : account.business_profile?.name;
       state.businessName = typeof name === 'string' ? name.trim().slice(0, 150) : undefined;
-      if (action || state.needsCards) state.status = 'action_required';
-      else if (state.chargesEnabled && state.payoutsEnabled) state.status = 'ready';
-      else state.status = pending ? 'pending' : 'action_required';
       state.checkedAt = new Date(now()).toISOString();
       state.needsReconnect = false;
     } catch (error) {
@@ -202,8 +255,8 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
   }
 
   async function requestMissingCards(ctx) {
-    // The creator explicitly resumed payment setup. Let Stripe collect the
-    // country first; requesting a capability earlier would lock country choice.
+    // Older bound accounts may lack the card capability. On explicit resume,
+    // request it only when Stripe reports the account's country.
     const path = '/v2/core/accounts/' + ctx.state.accountId;
     const account = await request(API + path + '?include[0]=identity&include[1]=configuration.merchant');
     if (account?.id !== ctx.state.accountId || account.object !== 'v2.core.account' || account.livemode !== live) throw unavailable();
@@ -216,7 +269,7 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
     if (updated?.id !== account.id || updated.object !== 'v2.core.account' || updated.livemode !== live) throw unavailable();
   }
 
-  async function start(ctx, intent) {
+  async function start(ctx, intent, requestedCountry) {
     if (!['new', 'existing', 'resume', 'reuse'].includes(intent)) throw new StripeSetupError('Choose an available Stripe setup option.');
     if (ctx.state.accountId) {
       if (ctx.state.needsReconnect && ctx.state.channel === 'oauth' && existingOAuth) return oauthStart(ctx);
@@ -227,7 +280,12 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
       return hosted(ctx);
     }
     if (!ctx.state.createRequest && intent === 'existing' && existingOAuth) return oauthStart(ctx);
-    return hosted(ctx);
+    const chosen = typeof requestedCountry === 'string' ? requestedCountry.trim().toUpperCase() : '';
+    if (chosen && !stripeBusinessCountries.includes(chosen)) {
+      throw new StripeSetupError('Select your business country from the available countries.', 422);
+    }
+    if (!chosen && !ctx.state.createRequest?.country) return { countryRequired: true };
+    return hosted(ctx, chosen ? chosen.toLowerCase() : ctx.state.createRequest.country);
   }
 
   async function callback(ctx, kind, params) {

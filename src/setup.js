@@ -5,7 +5,7 @@ import { openFilm } from './media.js';
 import { checkR2Bucket, createR2Source } from './source.js';
 import { openSetupStore } from './setup-store.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { escapeHtml, renderSetupPage } from './setup-view.js';
+import { escapeHtml, renderSetupPage, renderStripeCountryForm } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
@@ -92,7 +92,7 @@ export async function createSetup({
       const film = store.film(session.owner, draft.id);
       return html(status, renderSetupPage({
         filmmaker: { name: session.owner }, csrf: session.csrf,
-        stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId),
+        stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
         r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
         rights: { accepted: Boolean(draft.rights), statement: rightsStatement }, draft: { ...draft, ...store.storageDraft(session.owner) },
@@ -148,7 +148,8 @@ export async function createSetup({
         const ctx = { creatorId: owner, state: stripeSetupStateForMode(savedStripe, mode), save: () => store.saveStripe(owner, savedStripe),
           claimAccount: (accountId, mode) => store.claimAccount(owner, accountId, mode) };
         const result = callback ? await provider.callback(ctx, callback[1], searchParams) :
-          path === '/setup/stripe/start' ? await provider.start(ctx, data.mode) : await provider.refresh(ctx);
+          path === '/setup/stripe/start' ? await provider.start(ctx, data.mode, data.country) : await provider.refresh(ctx);
+        if (result?.countryRequired) return html(200, page('Choose your business country', renderStripeCountryForm(session.csrf, data.mode)));
         return redirect(result?.redirect || '/setup#payments');
       }
       if (path === '/setup/r2') {
