@@ -74,6 +74,7 @@ export function openSetupStore(directory) {
     if (!columns.has('kind')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'rent'");
     if (!columns.has('amount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN amount INTEGER NOT NULL DEFAULT 99');
     if (!columns.has('uiMode')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN uiMode TEXT NOT NULL DEFAULT 'hosted'");
+    if (!columns.has('cardOnly')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN cardOnly INTEGER NOT NULL DEFAULT 0');
   });
   const store = {
     invite(owner) {
@@ -155,7 +156,7 @@ export function openSetupStore(directory) {
           error.code = 'viewer_rate_limit';
           throw error;
         }
-        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,uiMode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'embedded_page')")
+        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,uiMode,cardOnly) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1)")
           .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount);
         return store.viewerOrderForToken(tokenHash);
       });

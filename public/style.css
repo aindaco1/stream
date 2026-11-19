@@ -45,9 +45,7 @@ a:focus-visible { outline: 3px solid #f0ba73; outline-offset: 3px; }
   main:has(#purchase:not([hidden])) h1 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
 
-#payment, #ownership { margin: .5rem 1.25rem 1rem; }
-#payment header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
-#payment h2 { margin: 0; font-size: 1.15rem; }
+#ownership { margin: .5rem 1.25rem 1rem; }
 #stripe-checkout { min-width: 0; }
 #ownership { display: flex; align-items: start; flex-wrap: wrap; gap: .75rem 1rem; }
 #ownership details { flex: 1 1 16rem; }
@@ -55,13 +53,72 @@ a:focus-visible { outline: 3px solid #f0ba73; outline-offset: 3px; }
 #ownership summary:focus-visible { outline: 3px solid #f0ba73; }
 #ownership label { display: block; font-size: .875rem; }
 #access-link { min-width: 0; width: min(100%, 24rem); padding: .65rem; font: inherit; }
-body.paying main { display: flex; flex-direction: column; height: auto; }
-body.paying .details, body.paying #purchase .actions > :is(#buy, #rent), body.paying #terms, body.paying video { display: none; }
-body.paying #payment { order: -1; }
+
 @media (max-height: 400px) {
   main:has(#ownership:not([hidden])) { display: block; height: auto; }
   main:has(#ownership:not([hidden])) video { height: 65dvh; }
   body[data-access] main:has(:is(#purchase, #ownership):not([hidden])) video { height: max(60dvh, calc(100dvh - 3.25rem)); }
-  #payment, #ownership { margin: .35rem .6rem .75rem; }
+  #ownership { margin: .35rem .6rem .75rem; }
   #terms { font-size: .8rem; line-height: 1.2; }
+}
+
+/* The film stays dark. Checkout uses the paper, type and primary action from
+   Pool and Store, including in the Stripe fields via the Appearance API. */
+body.paying {
+  --pay-paper: #f5f5f2; --pay-surface: #fff; --pay-ink: #101215; --pay-text: #252930;
+  --pay-muted: #5d6573; --pay-line: #d2d7df; --pay-field: #858d98;
+  --pay-focus: #185cad; --pay-error: #a52c2d;
+  color-scheme: light; background: var(--pay-paper); color: var(--pay-text); min-height: 100dvh;
+}
+body.paying main {
+  display: flex; flex-direction: column; width: min(100%, 32rem); height: auto;
+  padding: clamp(.75rem, 3vw, 1.5rem);
+}
+body.paying :is(.details, #ownership, #purchase .actions > :is(#buy, #rent), #terms, video) { display: none; }
+body.paying #payment { order: -1; min-width: 0; }
+.payment-header { padding-bottom: .75rem; border-bottom: 1px solid var(--pay-line); margin-bottom: .9rem; }
+.payment-nav, .order-line { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.payment-nav { color: var(--pay-muted); font-size: .875rem; }
+#close-checkout {
+  color: var(--pay-text); background: transparent; text-decoration: underline; text-underline-offset: .18em;
+  min-height: 44px; flex: none; font-size: .875rem; padding: .4rem 0 .4rem .6rem;
+}
+#payment h2 {
+  color: var(--pay-ink); font-size: clamp(1.25rem, 5vw, 1.65rem); letter-spacing: -.035em;
+  line-height: 1.15; margin: .2rem 0 .45rem; overflow-wrap: anywhere;
+}
+.order-line p { color: var(--pay-muted); margin: 0; font-size: .925rem; }
+#order-price { color: var(--pay-ink); white-space: nowrap; font-size: 1rem; font-variant-numeric: tabular-nums; }
+#card-form { display: grid; gap: .85rem; min-width: 0; }
+#card-form > div { min-width: 0; }
+.payment-credit { color: var(--pay-muted); margin: 0; font-size: .8125rem; text-align: center; }
+#contact-element:empty, #payment-element:empty { display: none; }
+#card-form button, body.paying #check-payment { min-height: 44px; font-size: 1rem; }
+#confirm-payment {
+  width: 100%; padding: .75rem 1rem; background: var(--pay-ink); color: #fff;
+  border-radius: 6px; line-height: 1.3;
+}
+#confirm-payment:disabled { opacity: 1; color: #fff; background: #616773; cursor: default; }
+#payment-error {
+  color: var(--pay-error); font-weight: 600; font-size: .95rem; line-height: 1.4;
+  border-left: 3px solid currentColor; padding-left: .65rem; margin: 0;
+}
+body.paying #purchase { padding: .4rem 0 0; }
+body.paying #check-payment { color: var(--pay-muted); background: transparent; text-decoration: underline; padding: .5rem 0; }
+body.paying :focus-visible { outline: 3px solid var(--pay-focus); outline-offset: 2px; }
+body.paying #status { color: var(--pay-muted); padding: 0 0 .7rem; margin: 0; }
+@media (min-width: 42rem) {
+  body.paying main {
+    padding: 1.25rem 1.75rem; margin-block: 1rem;
+    background: var(--pay-surface); border: 1px solid var(--pay-line); border-radius: 10px;
+  }
+}
+@media (max-height: 400px) {
+  body.paying main { padding-block: .4rem; margin-block: 0; }
+}
+
+@media (max-width: 26rem) {
+  body.paying main { padding-inline: .5rem; }
+  .payment-header { margin-bottom: .65rem; padding-bottom: .55rem; }
+  #card-form { gap: .6rem; }
 }

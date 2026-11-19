@@ -17,7 +17,7 @@ const film = await openFilm(source);
 const fileHead = await source.head();
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const expectedHash = hash(await readFile(path));
-const offers = new Map(['first', 'second'].map(id => [id, { id, title: 'Test film ' + id, scope: 'test/' + id,
+const offers = new Map(['first', 'second', 'legacy'].map(id => [id, { id, title: 'Test film ' + id, scope: 'test/' + id,
   prices: { rent: 99, buy: 299 }, revision: film.revision, authority: createRentalAuthority(randomBytes(32)) }]));
 const catalog = {
   get: id => offers.get(id), verify: id => offers.get(id), open: () => openFilm(source), list: () => [...offers.values()],
@@ -26,14 +26,18 @@ const catalog = {
 const orders = new Map();
 const sessions = new Map();
 let interruptNext = false;
+let mismatchedTotal;
+let opening;
 let downloadChecks = 0;
 const checkout = {
   async start({ offer, token, kind }) {
     assert.match(token, /^[A-Za-z0-9_-]{43}$/);
     assert.ok(['rent', 'buy'].includes(kind));
     if (interruptNext) { interruptNext = false; throw Error('Simulated outage'); }
+    if (opening) await opening.promise;
     if (!orders.has(token)) {
-      const order = { offer, kind, id: 'session_' + (orders.size + 1), status: 'pending' };
+      const order = { offer, kind, id: 'session_' + (orders.size + 1), status: 'pending',
+        amount: offer.prices[kind], attempts: 0, submissions: 0, pendingChecks: 0 };
       orders.set(token, order);
       sessions.set(order.id, order);
     }
@@ -41,11 +45,14 @@ const checkout = {
     assert.equal(order.offer, offer);
     assert.equal(order.kind, kind);
     return order.status === 'paid' ? { status: 'paid' } :
-      { clientSecret: order.id, publishableKey: 'pk_test_fixture', account: 'acct_' + offer.id };
+      { clientSecret: order.id, publishableKey: 'pk_test_fixture', account: 'acct_' + offer.id,
+        uiMode: offer.id === 'legacy' ? 'embedded_page' : 'elements', orderId: order.id, amount: order.amount,
+        currency: 'usd', title: offer.title, kind };
   },
   async status({ offer, token }) {
     const order = orders.get(token);
     if (!order || order.offer !== offer) return { status: 'pending' };
+    if (order.submissions && order.status === 'pending') order.pendingChecks++;
     return { status: order.status, kind: order.kind, receipt: order.receipt };
   },
   async verifyPurchase({ offer, orderId }) {
@@ -57,8 +64,8 @@ const checkout = {
 async function confirm(id) {
   const order = sessions.get(id);
   assert.ok(order);
-  const { scope, revision, authority, prices } = order.offer;
-  const amount = prices[order.kind];
+  const { scope, revision, authority } = order.offer;
+  const { amount } = order;
   const entitlement = { film: scope, revision };
   const pi = 'pi_' + id;
   const intent = { object: 'payment_intent', id: pi, status: 'succeeded', livemode: false, amount, amount_received: amount, currency: 'usd',
@@ -81,67 +88,243 @@ player.on('request', (req, res) => {
 await new Promise(resolve => player.listen(0, '127.0.0.1', resolve));
 const app = 'http://127.0.0.1:' + player.address().port;
 const publisher = createServer((req, res) => {
-  const frames = ['first', 'second', 'first'].map(id => '<iframe allow="autoplay; payment" src="' + app + '/embed/' + id + '"></iframe>');
-  res.writeHead(200, { 'Content-Type': 'text/html' }).end(frames.join('\n'));
+  const frames = [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660]]
+    .map(([id, width, height]) => '<iframe allow="autoplay; payment" width="' + width + '" height="' + height + '" src="' + app + '/embed/' + id + '"></iframe>');
+  res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Publisher</title>' +
+    '<style>body{margin:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px}iframe{border:0}</style>' + frames.join('\n'));
 });
 await new Promise(resolve => publisher.listen(0, '127.0.0.1', resolve));
 const host = 'http://localhost:' + publisher.address().port;
 
-// The official client's public methods are exercised inside the original player.
-// The synthetic payment UI lives in a separate-origin child frame, like Stripe's.
+// The player runs unchanged against a local double of Stripe's public client
+// API. Synthetic card and contact fields live inside separate-origin frames.
 const vendor = 'https://checkout.stripe.com';
 const library = 'https://js.stripe.com/endive/stripe.js';
-const mockStripe = `
-window.Stripe = (key, {stripeAccount}) => {
-  if (key !== 'pk_test_fixture' || stripeAccount !== 'acct_' + location.pathname.split('/')[2]) throw Error('Seller mismatch');
-  return { async createEmbeddedCheckoutPage({fetchClientSecret, onComplete}) {
-    const id = await fetchClientSecret();
-    const frame = document.createElement('iframe');
-    frame.src = '${vendor}/mock-form';
-    frame.title = 'Test card form';
-    frame.addEventListener('load', () => frame.contentWindow.postMessage(id, '${vendor}'));
-    const complete = e => { if (e.origin === '${vendor}' && e.source === frame.contentWindow && e.data === 'complete') onComplete(); };
-    return { mount(selector) { window.addEventListener('message', complete); document.querySelector(selector).append(frame); },
-      destroy() { window.removeEventListener('message', complete); frame.remove(); } };
-  } };
-};`;
-const mockForm = `<button id="pay" disabled>Submit test payment</button><button id="bank" hidden>Finish bank verification</button>
-<script>
-let session;
-addEventListener('message', e => { if(e.origin === '${app}' && e.source === parent) { session = e.data; pay.disabled = false; } });
-pay.onclick = () => { pay.hidden = true; bank.hidden = false; parent.postMessage('complete', '${app}'); };
-bank.onclick = async () => { await confirmFixture(session); parent.postMessage('complete', '${app}'); };
+// This double never receives card or contact values. Each provider iframe
+// sends only completeness, just as the merchant-facing Elements events do.
+function stripeFixture(vendor) {
+  window.Stripe = (key, { stripeAccount }) => {
+    if (key !== 'pk_test_fixture' || stripeAccount !== 'acct_' + location.pathname.split('/')[2]) throw Error('Seller mismatch');
+    return {
+      initCheckoutElementsSdk({ clientSecret, elementsOptions }) {
+        if (!elementsOptions?.appearance) throw Error('Checkout appearance missing');
+        const complete = new Map();
+        const change = new Set();
+        let total, currency;
+        const session = () => ({ currency, email: null, total: { total }, canConfirm: complete.get('contact') && complete.get('card') || false });
+        function element(kind) {
+          const frame = document.createElement('iframe');
+          frame.title = kind === 'contact' ? 'Test contact details' : 'Test payment details';
+          frame.src = vendor + '/' + kind;
+          frame.style.cssText = 'border:0;display:block;width:100%;height:' + (kind === 'contact' ? 75 : 175) + 'px';
+          const handlers = new Map();
+          const notify = (name, event = {}) => handlers.get(name)?.forEach(callback => callback(event));
+          function receive(e) {
+            if (e.source !== frame.contentWindow || e.origin !== vendor || e.data.type !== 'complete') return;
+            complete.set(kind, e.data.complete);
+            notify('change', { complete: e.data.complete });
+            change.forEach(callback => callback(session()));
+          }
+          frame.addEventListener('load', () => notify('ready'));
+          return {
+            on(name, fn) { if (!handlers.has(name)) handlers.set(name, new Set()); handlers.get(name).add(fn); },
+            mount(selector) { window.addEventListener('message', receive); (typeof selector === 'string' ? document.querySelector(selector) : selector).append(frame); },
+            destroy() { window.removeEventListener('message', receive); frame.remove(); }
+          };
+        }
+        return {
+          changeAppearance(next) { if (next.variables.fontSizeBase !== '16px') throw Error('Unexpected field text size'); },
+          on(event, callback) { if (event === 'change') change.add(callback); },
+          off(event, callback) { if (event === 'change') change.delete(callback); },
+          createContactDetailsElement: () => element('contact'),
+          createPaymentElement(options) {
+            if (options.paymentMethodOrder?.[0] !== 'card') throw Error('Card should be the first available method');
+            if (options.layout?.defaultCollapsed === true) throw Error('Card fields should be open');
+            return element('card');
+          },
+          async loadActions() {
+            const quote = await fixtureOrder(clientSecret, 'read');
+            currency = quote.currency;
+            total = { amount: new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(quote.amount / 100), minorUnitsAmount: quote.amount };
+            return { type: 'success', actions: {
+              getSession: session,
+              async confirm(options) {
+                if (options?.redirect !== 'if_required') throw Error('Unexpected payment redirect');
+                if (!session().canConfirm) return { type: 'error', error: { message: 'Complete your payment details.' } };
+                return fixtureOrder(clientSecret, 'submit');
+              }
+            } };
+          }
+        };
+      },
+      async createEmbeddedCheckoutPage({ fetchClientSecret, onComplete }) {
+        const id = await fetchClientSecret();
+        const frame = document.createElement('iframe');
+        frame.src = vendor + '/legacy';
+        frame.title = 'Legacy test card form';
+        frame.addEventListener('load', () => frame.contentWindow.postMessage(id, vendor));
+        const complete = e => { if (e.origin === vendor && e.source === frame.contentWindow && e.data === 'complete') onComplete(); };
+        return { mount(selector) { window.addEventListener('message', complete); document.querySelector(selector).append(frame); },
+          destroy() { window.removeEventListener('message', complete); frame.remove(); } };
+      }
+    };
+  };
+}
+
+const mockStripe = '(' + stripeFixture.toString() + ')(' + JSON.stringify(vendor) + ');';
+function providerForm(kind) {
+  const fields = kind === 'contact' ?
+    '<label>Email<input type="email" autocomplete="email" required></label>' :
+    '<label>Card number<input autocomplete="cc-number" pattern="[0-9]{16}" required></label>' +
+    '<label>Expiry<input autocomplete="cc-exp" pattern="[0-9]{2}/[0-9]{2}" required></label>' +
+    '<label>Security code<input autocomplete="cc-csc" pattern="[0-9]{3}" required></label>';
+  return '<!doctype html><html lang="en"><meta name="viewport" content="width=device-width">' +
+    '<style>*{box-sizing:border-box}body{margin:0;font:16px sans-serif}label,input{display:block;width:100%}input{font:inherit;min-height:32px}</style>' +
+    '<form>' + fields + '</form><script>document.addEventListener("input",()=>parent.postMessage({type:"complete",complete:document.forms[0].checkValidity()},' +
+    JSON.stringify(app) + '));</script></html>';
+}
+const legacyForm = `<button disabled>Submit legacy payment</button><script>
+let id; const button = document.querySelector('button');
+addEventListener('message', e => { if(e.origin === '${app}' && e.source === parent) { id = e.data; button.disabled = false; } });
+button.onclick = async () => { await completeLegacy(id); parent.postMessage('complete', '${app}'); };
 </script>`;
 
 const requests = [];
 async function install(context) {
-  await context.exposeBinding('confirmFixture', ({ frame }, id) => {
-    assert.equal(new URL(frame.url()).origin, vendor);
+  await context.exposeBinding('fixtureOrder', async ({ frame }, id, operation) => {
+    assert.equal(new URL(frame.url()).origin, app);
+    const order = sessions.get(id);
+    assert.equal(new URL(frame.url()).pathname, '/embed/' + order.offer.id);
+    if (operation === 'read') {
+      const quote = { amount: order.amount, currency: 'usd', ...mismatchedTotal };
+      mismatchedTotal = undefined;
+      return quote;
+    }
+    assert.equal(operation, 'submit');
+    order.attempts++;
+    if (order.declineNext) {
+      order.declineNext = false;
+      return { type: 'error', error: { message: 'The test card was declined. Try another card.' } };
+    }
+    order.submissions++;
+    return { type: 'success', session: { status: 'complete' } };
+  });
+  await context.exposeBinding('completeLegacy', ({ frame }, id) => {
+    assert.equal(frame.url(), vendor + '/legacy');
+    assert.equal(sessions.get(id).offer.id, 'legacy');
     return confirm(id);
   });
   await context.route('**/*', route => {
     const request = route.request();
     const url = new URL(request.url());
     requests.push({ url: url.href, referrer: request.headers().referer || '', method: request.method() });
+    if (url.origin === app) {
+      const payload = request.url() + (request.postData() || '');
+      assert.doesNotMatch(payload, /4242424242424242|5555555555554444|stream-viewer(?:@|%40)example[.]test/);
+    }
     if (url.origin === app || url.origin === host) return route.continue();
     if (url.href === library) return route.fulfill({ contentType: 'text/javascript', body: mockStripe });
-    if (url.href === vendor + '/mock-form') return route.fulfill({ contentType: 'text/html', body: mockForm });
+    if (url.origin === vendor && ['/card', '/contact'].includes(url.pathname)) return route.fulfill({ contentType: 'text/html', body: providerForm(url.pathname.slice(1)) });
+    if (url.href === vendor + '/legacy') return route.fulfill({ contentType: 'text/html', body: legacyForm });
     return route.abort();
   });
 }
 
 async function preview(frame) {
+  await frame.waitForFunction(() => document.querySelector('#download')?.target.startsWith('stream-file-'));
   assert.equal(await frame.locator('#purchase').isHidden(), true);
   await frame.locator('video').evaluate(video => { video.muted = true; });
   await frame.getByRole('button', { name: 'Play 10-second preview' }).click();
-  await frame.waitForFunction(() => document.querySelector('video').currentTime > .1, null, { polling: 100 });
+  await frame.locator('video').scrollIntoViewIfNeeded();
+  try {
+    await frame.waitForFunction(() => document.querySelector('video').currentTime > .1, null, { polling: 100, timeout: 12000 });
+  } catch (cause) {
+    const state = await frame.locator('video').evaluate(video => ({
+      width: innerWidth, title: document.title, status: document.querySelector('#status').textContent,
+      ready: video.readyState, duration: video.duration, paused: video.paused, error: video.error?.code
+    }));
+    throw new Error('Preview did not start: ' + JSON.stringify(state), { cause });
+  }
   const length = await frame.locator('video').evaluate(video => { video.currentTime = 9.7; return video.duration; });
   assert.ok(Math.abs(length - 10) < .1);
   await frame.locator('#rent').waitFor();
   assert.equal(await frame.locator('video').evaluate(video => video.ended), true);
 }
 
-async function complete(frame, kind, { blockAutoplay = false } = {}) {
+async function waitFor(check, message) {
+  const end = Date.now() + 15000;
+  while (!check() && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(check(), message);
+}
+
+async function checkoutFits(frame, width) {
+  const element = await frame.frameElement();
+  await element.evaluate((iframe, size) => { iframe.width = size; }, width);
+  await frame.waitForFunction(size => innerWidth === size, width);
+  const bounds = await frame.locator('#payment').evaluate(node => {
+    const selectors = ['#checkout-heading', '#close-checkout', '#confirm-payment', '#contact-element iframe', '#payment-element iframe'];
+    return {
+      overflow: document.documentElement.scrollWidth - innerWidth,
+      hasNames: selectors.slice(0, 3).every(selector => node.querySelector(selector)?.innerText.trim()),
+      fits: selectors.every(selector => {
+        const box = node.querySelector(selector)?.getBoundingClientRect();
+        return box && box.width > 0 && box.left >= -1 && box.right <= innerWidth + 1;
+      })
+    };
+  });
+  assert.ok(bounds.overflow <= 1 && bounds.fits && bounds.hasNames, width + 'px checkout: ' + JSON.stringify(bounds));
+}
+
+async function fillCard(frame) {
+  const contact = frame.frameLocator('iframe[title="Test contact details"]');
+  const payment = frame.frameLocator('iframe[title="Test payment details"]');
+  const email = contact.getByLabel('Email', { exact: true });
+  const number = payment.getByLabel('Card number', { exact: true });
+  await number.waitFor({ state: 'visible' });
+  assert.equal(await email.getAttribute('autocomplete'), 'email');
+  assert.equal(await number.getAttribute('autocomplete'), 'cc-number');
+  assert.equal(await frame.locator('#card-form input[autocomplete^="cc-"]').count(), 0);
+  await email.fill('stream-viewer@example.test');
+  await number.fill('4242424242424242');
+  await payment.getByLabel('Expiry').fill('12/34');
+  await payment.getByLabel('Security code').fill('123');
+  return { email, number };
+}
+
+async function payByCard(frame, order, { retry = false, widths = [] } = {}) {
+  const amount = '$' + (order.amount / 100).toFixed(2);
+  const submit = frame.getByRole('button', { name: 'Pay ' + amount, exact: true });
+  await submit.waitFor();
+  for (const width of widths) await checkoutFits(frame, width);
+  const { email, number } = await fillCard(frame);
+  if (retry) {
+    order.declineNext = true;
+    await submit.click();
+    const error = frame.getByRole('alert').filter({ hasText: 'The test card was declined. Try another card.' });
+    await error.waitFor();
+    assert.ok(await error.evaluate(node => document.activeElement === node));
+    assert.equal(await number.inputValue(), '4242424242424242');
+    assert.equal(await email.inputValue(), 'stream-viewer@example.test');
+    assert.equal(order.submissions, 0);
+    await number.fill('5555555555554444');
+  }
+  const before = order.attempts;
+  await submit.click({ trial: true });
+  // Consecutive submit events simulate a click and keyboard submit together.
+  await frame.locator('#card-form').evaluate(form => { form.requestSubmit(); form.requestSubmit(); });
+  await waitFor(() => order.pendingChecks > 0, 'A submitted payment must be checked with Stream.');
+  assert.equal(order.attempts, before + 1, 'Concurrent submits must confirm once.');
+  assert.equal(order.submissions, 1);
+  assert.equal(await frame.locator('#ownership').isHidden(), true);
+  assert.ok(await frame.locator('video').evaluate(video => video.duration <= 10.1));
+  await confirm(order.id);
+  // Bank settlement happens independently after the merchant submits.
+  if (await frame.getByRole('button', { name: 'Check payment' }).isVisible()) {
+    await frame.getByRole('button', { name: 'Check payment' }).click();
+  }
+}
+
+async function complete(frame, kind, { blockAutoplay = false, retry = false, widths = [], beforeEntry } = {}) {
   if (blockAutoplay) await frame.locator('video').evaluate(video => {
     video.play = () => {
       delete video.play;
@@ -149,11 +332,24 @@ async function complete(frame, kind, { blockAutoplay = false } = {}) {
     };
   });
   await frame.locator('#' + kind).click();
-  const provider = frame.frameLocator('iframe[title="Test card form"]');
-  await provider.getByRole('button', { name: 'Submit test payment' }).click();
-  await frame.getByText('Payment is pending.', { exact: false }).waitFor();
-  assert.equal(await frame.locator('#ownership').isHidden(), true);
-  await provider.getByRole('button', { name: 'Finish bank verification' }).click();
+  const id = new URL(frame.url()).pathname.split('/').at(-1);
+  if (id === 'legacy') {
+    const provider = frame.frameLocator('iframe[title="Legacy test card form"]');
+    await provider.getByRole('button', { name: 'Submit legacy payment' }).click({ timeout: 15000 }).catch(async cause => {
+      const state = await frame.evaluate(() => ({
+        status: document.querySelector('#status').textContent, checkout: !document.querySelector('#payment').hidden,
+        children: [...document.querySelectorAll('iframe')].map(child => child.title),
+        providerLoaded: typeof window.Stripe === 'function'
+      }));
+      throw new Error('Legacy form unavailable: ' + JSON.stringify(state), { cause });
+    });
+  } else {
+    await frame.frameLocator('iframe[title="Test payment details"]').getByLabel('Card number').waitFor();
+    const order = [...orders.values()].findLast(order => order.offer.id === id && order.kind === kind && order.status === 'pending');
+    assert.ok(order);
+    if (beforeEntry) await beforeEntry(order);
+    await payByCard(frame, order, { retry, widths });
+  }
   if (blockAutoplay) {
     await frame.getByText('Select Play film to watch.', { exact: true }).waitFor();
     await frame.getByRole('button', { name: 'Play film' }).click();
@@ -167,32 +363,63 @@ async function complete(frame, kind, { blockAutoplay = false } = {}) {
 const browser = await chromium.launch({ channel: process.env.STREAM_BROWSER_CHANNEL || 'chromium',
   args: ['--host-resolver-rules=MAP js.stripe.com 127.0.0.1, MAP checkout.stripe.com 127.0.0.1'] });
 try {
-  const context = await browser.newContext({ serviceWorkers: 'block', acceptDownloads: true });
+  const context = await browser.newContext({ serviceWorkers: 'block', acceptDownloads: true, viewport: { width: 1280, height: 1440 } });
   await install(context);
   const page = await context.newPage();
   await page.goto(host);
   const frames = async () => Promise.all((await page.locator('iframe').elementHandles()).map(e => e.contentFrame()));
-  let [renter, buyer, neighbor] = await frames();
+  let [renter, buyer, neighbor, legacy] = await frames();
   await preview(renter);
   await preview(buyer);
   await preview(neighbor);
+  await preview(legacy);
   assert.equal(requests.some(r => r.url === library), false, 'Preview must not contact Stripe');
-  assert.equal(await renter.locator('#buy').evaluate(button => button.getBoundingClientRect().bottom <= innerHeight), true);
+  assert.equal(await neighbor.locator('#buy').evaluate(button => button.getBoundingClientRect().bottom <= innerHeight), true);
   interruptNext = true;
   await renter.locator('#rent').click();
   await renter.getByText('Checkout could not open.', { exact: false }).waitFor();
   await buyer.locator('#rent').click();
-  await buyer.frameLocator('iframe[title="Test card form"]').getByRole('button', { name: 'Submit test payment' }).waitFor();
+  await buyer.frameLocator('iframe[title="Test contact details"]').getByLabel('Email').waitFor();
   await buyer.getByRole('button', { name: 'Back to film' }).click();
-  await complete(renter, 'rent');
+  assert.match(await renter.locator('#rent').textContent(), /0[.]99/);
+  // Offer markup shows 99 cents. A newly opened order holds $1.49, and
+  // reopening it must keep that total even after the seller changes to $1.89.
+  offers.get('first').prices.rent = 149;
+  opening = Promise.withResolvers();
+  try {
+    await renter.locator('#rent').click();
+    await renter.getByText('Opening secure test checkout…', { exact: true }).waitFor();
+    assert.equal(await renter.locator('#order-price').textContent(), '');
+  } finally {
+    opening.resolve();
+    opening = undefined;
+  }
+  await renter.getByRole('button', { name: 'Pay $1.49', exact: true }).waitFor();
+  await renter.getByRole('button', { name: 'Back to film' }).click();
+  offers.get('first').prices.rent = 189;
+  const held = [...orders.values()].find(order => order.offer.id === 'first');
+  for (const altered of [{ currency: 'eur' }, { amount: held.amount + 1 }]) {
+    mismatchedTotal = altered;
+    await renter.locator('#rent').click();
+    await renter.getByRole('alert').filter({ hasText: 'price has changed' }).waitFor();
+    await fillCard(renter);
+    assert.ok(await renter.locator('#confirm-payment').isDisabled());
+    await renter.locator('#card-form').evaluate(form => form.requestSubmit());
+    await renter.getByRole('button', { name: 'Back to film' }).click();
+    assert.equal(held.attempts, 0);
+  }
+  await complete(renter, 'rent', { retry: true, widths: [320, 375, 900, 320], beforeEntry(order) { assert.equal(order.amount, 149); } });
   await renter.locator('video').evaluate(video => { video.currentTime = 120; });
   await renter.waitForFunction(() => document.querySelector('video').currentTime > 120.25, null, { polling: 100 });
   assert.equal(await renter.locator('#ownership').isHidden(), true);
-  await complete(buyer, 'buy');
+  await complete(buyer, 'buy', { widths: [375] });
+  assert.equal(await legacy.locator('video').evaluate(video => video.ended && video.duration < 10.1), true);
+  await complete(legacy, 'rent');
+  assert.equal(await legacy.locator('#ownership').isHidden(), true);
   assert.equal(await neighbor.locator('video').evaluate(video => video.ended && video.duration < 10.1), true);
   assert.equal(context.pages().length, 1);
   assert.equal(page.url(), host + '/');
-  assert.equal(orders.size, 3);
+  assert.equal(orders.size, 4);
   assert.equal(new Set([...orders.values()].filter(o => o.offer.id === 'second').map(o => o.kind)).size, 2);
 
   const [download] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }),
@@ -210,6 +437,14 @@ try {
   await buyer.getByRole('button', { name: 'Download film' }).waitFor();
   await renter.getByRole('button', { name: 'Play rental' }).waitFor();
   assert.equal(await neighbor.locator('#purchase').isHidden(), true);
+
+  const [legacyToken] = [...orders].find(([, order]) => order.offer.id === 'legacy');
+  const bookmark = await context.newPage();
+  await bookmark.goto(app + '/pay/legacy#' + legacyToken);
+  await bookmark.getByRole('button', { name: 'Play rental' }).waitFor();
+  assert.equal(bookmark.url(), app + '/embed/legacy');
+  assert.equal(await bookmark.locator('#ownership').isHidden(), true);
+  await bookmark.close();
 
   const isolated = await browser.newContext({ serviceWorkers: 'block' });
   await install(isolated);
@@ -231,7 +466,7 @@ try {
     assert.ok(!requests.some(({ url, referrer }) => [url, referrer].some(address =>
       address.includes(token) || (order.receipt && address.includes(order.receipt)))), 'A private credential appeared in a URL or referrer');
   }
-  console.log('Inline checkout passed: independent rent and buy, same-frame playback, delayed bank confirmation, 120-second seek, exact MP4 download, refresh and private-link recovery with blocked storage.');
+  console.log('Inline checkout passed at 320, 375 and 900px: provider fields, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, download and recovery.');
 } finally {
   await browser.close();
   await Promise.all([player, publisher].map(server => new Promise(resolve => server.close(resolve))));
