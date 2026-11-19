@@ -23,7 +23,7 @@ function appearance(container) {
 
 export function createCardForm(stripe, order, onSubmit, complete) {
   const form = document.querySelector('#card-form');
-  const button = form.querySelector('#confirm-payment');
+  const button = document.querySelector('#confirm-payment');
   const errorBox = form.querySelector('#payment-error');
   const price = document.querySelector('#order-price');
   const checkout = stripe.initCheckoutElementsSdk({
@@ -39,6 +39,13 @@ export function createCardForm(stripe, order, onSubmit, complete) {
   let matches = false;
   const narrow = window.matchMedia('(max-width: 26rem)');
   const resize = () => checkout.changeAppearance(appearance(form));
+  const viewport = window.visualViewport;
+  function resizeToKeyboard() {
+    // Some mobile browsers shrink only the visual viewport for the keyboard.
+    if (viewport && viewport.scale === 1 && viewport.height < window.innerHeight) {
+      document.body.style.setProperty('--checkout-viewport', Math.floor(viewport.height) + 'px');
+    } else document.body.style.removeProperty('--checkout-viewport');
+  }
 
   function feedback(message) {
     errorBox.textContent = message;
@@ -122,11 +129,15 @@ export function createCardForm(stripe, order, onSubmit, complete) {
       display(actions.getSession());
       form.addEventListener('submit', submit);
       narrow.addEventListener('change', resize);
+      viewport?.addEventListener('resize', resizeToKeyboard);
+      resizeToKeyboard();
     },
     destroy() {
       destroyed = true;
       form.removeEventListener('submit', submit);
       narrow.removeEventListener('change', resize);
+      viewport?.removeEventListener('resize', resizeToKeyboard);
+      document.body.style.removeProperty('--checkout-viewport');
       contact?.destroy();
       payment?.destroy();
       form.hidden = true;

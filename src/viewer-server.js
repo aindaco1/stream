@@ -6,6 +6,7 @@ import { createPublicFilms } from './public-films.js';
 import { createRentalAuthority } from './rental.js';
 import { makeServer } from './server.js';
 import { openSetupStore } from './setup-store.js';
+import { createViewerRecovery } from './viewer-recovery.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 
 const directory = operatorDirectory();
@@ -19,8 +20,22 @@ const secret = process.env.STREAM_RENTAL_SECRET ||
 const store = openSetupStore(join(directory, 'filmmakers'));
 const catalog = createPublicFilms({ store, authority: createRentalAuthority(secret) });
 const checkout = createViewerCheckout({ store });
-const server = await makeServer(null, { catalog, checkout, publicOrigin: process.env.STREAM_PUBLIC_ORIGIN });
-server.on('close', () => store.close());
+let withdrawalSweep;
+const retryWithdrawals = () => {
+  withdrawalSweep ??= checkout.closeWithdrawnSessions().catch(() => console.error('Checkout closure interrupted.'))
+    .finally(() => { withdrawalSweep = undefined; });
+};
+retryWithdrawals();
+const withdrawalTimer = setInterval(retryWithdrawals,15_000);
+withdrawalTimer.unref();
+const recovery = createViewerRecovery({ store });
+if (recovery) checkout.indexPreviousOrders().catch(() => console.error('Recovery indexing interrupted.'));
+const server = await makeServer(null, { catalog, checkout, recovery, publicOrigin: process.env.STREAM_PUBLIC_ORIGIN });
+server.on('close', () => {
+  clearInterval(withdrawalTimer);
+  if (withdrawalSweep) withdrawalSweep.finally(() => store.close());
+  else store.close();
+});
 const port = Number(process.env.PORT || 8793);
 server.listen(port, '127.0.0.1', () => {
   console.log('Screening room: ' + (process.env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + port) + '/screening');

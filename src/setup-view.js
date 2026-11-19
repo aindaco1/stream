@@ -1,4 +1,4 @@
-import { filmPrices, usdInput } from './prices.js';
+import { filmPrices, previewSeconds, rentalHours, usdInput } from './prices.js';
 import { stripeBusinessCountries } from './setup-stripe.js';
 import { renderR2Card, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
@@ -87,19 +87,25 @@ function formatDuration(duration) {
     .filter(Boolean).join(' ');
 }
 
-function priceFields(stored) {
-  const prices = filmPrices(stored) ?? { rent: null, buy: null };
-  return `<fieldset><legend>Viewer prices</legend>
-    <p class="hint">Renters can stream for 48 hours after payment. Buyers can save the original MP4. Leave a price blank to turn off that offer for new viewers.</p>
-    <label>48-hour rental (USD) <input type="number" name="rentPrice" min="0.50" max="999999.99" step="0.01" inputmode="decimal" value="${usdInput(prices.rent)}"></label>
+function priceFields(film) {
+  const prices = filmPrices(film.prices) ?? { rent: null, buy: null };
+  const maxPreview = film.duration > 0 ? Math.min(30, Math.ceil(film.duration) - 1) : 30;
+  return `<fieldset><legend>Prices and playback</legend>
+    <p class="hint">Rental time starts at payment. Buyers can save the original MP4. Leave a price blank to turn off that offer for new viewers.</p>
+    <label>Rental price (USD) <input type="number" name="rentPrice" min="0.50" max="999999.99" step="0.01" inputmode="decimal" value="${usdInput(prices.rent)}"></label>
+    <label>Rental duration (hours) <input type="number" name="rentalHours" min="1" max="720" step="1" required value="${rentalHours(film.rentalHours)}"></label>
     <label>Download purchase (USD) <input type="number" name="buyPrice" min="0.50" max="999999.99" step="0.01" inputmode="decimal" value="${usdInput(prices.buy)}"></label>
+    <label>Free preview (seconds) <input type="number" name="previewSeconds" min="0" max="${maxPreview}" step="1" required value="${previewSeconds(film.previewSeconds)}"></label>
+    <p class="hint">${maxPreview ? `Choose up to ${maxPreview} seconds. Set 0 to show the offers immediately. The preview must end before the film does.` :
+      'This film is too short for a free preview. Set 0 to show the offers immediately.'}</p>
   </fieldset>`;
 }
 
-function priceEditor(film, csrf) {
-  return `<details><summary>Edit prices for ${escapeHtml(film.title)}</summary>
-    <form method="post" action="/setup/film/prices">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
-      ${priceFields(film.prices)}<button type="submit">Save prices</button>
+function priceEditor(film, csrf, action = '/setup/film/prices') {
+  const label = action === '/setup/dashboard/settings' ? 'Edit prices and playback' : 'Edit prices';
+  return `<details><summary>${label} for ${escapeHtml(film.title)}</summary>
+    <form method="post" action="${action}">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
+      ${priceFields(film)}<button type="submit">Save settings</button>
     </form></details>`;
 }
 
@@ -107,7 +113,7 @@ function filmSection({ r2, rights, film, draft, csrf }) {
   const fields = hidden('csrf', csrf) + hidden('draftId', draft.id);
   if (film) {
     const duration = formatDuration(film.duration);
-    const preview = privatePreview(film.previewPath) ?
+    const preview = privatePreview(film.previewPath) && previewSeconds(film.previewSeconds) ?
       `<a class="primary-link" href="${escapeHtml(film.previewPath)}">Watch private preview</a>` : '';
     return `<h2>${escapeHtml(film.title)}</h2><p>Saved film${duration ? ' · ' + duration : ''}</p>
       ${priceEditor(film, csrf)}
@@ -136,14 +142,14 @@ function filmSection({ r2, rights, film, draft, csrf }) {
     </details>
     <details class="film-guide"><summary>Supported video settings</summary>
       <p>Use a seekable MP4 in the H.264 Baseline profile, with optional AAC-LC audio. Start with a keyframe and place keyframes at least every 12 seconds.</p>
-      <p>The current player supports films up to 1 GiB and four hours long. For the ten-second preview, choose a film longer than ten seconds.</p>
+      <p>The current player supports films up to 1 GiB and four hours long.</p>
     </details>
     <form method="post" action="/setup/film">${fields}
       <label for="film-title">Film title</label><input id="film-title" name="title" type="text" maxlength="160" required value="${escapeHtml(draft.title)}">
       <label for="object-key">Object key</label><input id="object-key" name="objectKey" type="text" maxlength="1024" spellcheck="false"
         autocapitalize="none" required aria-describedby="object-hint" value="${escapeHtml(draft.objectKey)}">
       <p class="hint" id="object-hint">For example, films/My Feature.mp4. Copy the spelling and spaces exactly.</p>
-      ${priceFields(draft.prices)}
+      ${priceFields(draft)}
       <div class="film-actions"><button type="submit">Check film and create preview</button>
         <button class="secondary" type="submit" name="intent" value="save" formnovalidate>Save draft</button></div>
     </form>`;
@@ -152,25 +158,63 @@ function filmSection({ r2, rights, film, draft, csrf }) {
 export function renderSetupPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, rights = {}, film, films = [], draft = {}, error, notice }) {
   const filmHTML = `<section class="film-card" id="film">${filmSection({ r2, rights, film, draft, csrf })}</section>`;
   const saved = films.length ? films.filter(item => privatePreview(item.previewPath) && item.id !== film?.id).map(item =>
-    `<li><a href="${escapeHtml(item.previewPath)}">${escapeHtml(item.title)}</a>${priceEditor(item, csrf)}</li>`).join('') : '';
+    `<li>${previewSeconds(item.previewSeconds) ? `<a href="${escapeHtml(item.previewPath)}">${escapeHtml(item.title)}</a>` : escapeHtml(item.title)}${priceEditor(item, csrf)}</li>`).join('') : '';
   const library = saved ? `<section class="film-card"><h2>Saved films</h2><ul>${saved}</ul></section>` : '';
   const connections = `<div id="payments">${stripeCard(stripe, csrf)}</div>
     <div id="storage">${storageCard(r2, draft, csrf)}</div>`;
+  return workspacePage('Filmmaker setup', csrf, `<h1>Filmmaker setup</h1>
+      ${filmmaker.name ? `<p class="account">Signed in as ${escapeHtml(filmmaker.name)}</p>` : ''}
+      <nav class="section-links" aria-label="Setup sections"><a href="#payments">Payments</a>
+        <a href="#storage">Storage</a><a href="#film">Film</a><a href="/setup/dashboard">Film dashboard</a></nav>
+      ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
+      ${notice ? `<div class="feedback" role="status">${escapeHtml(notice)}</div>` : ''}
+      ${r2.status === 'ready' ? filmHTML + library + connections : connections + filmHTML + library}
+    `);
+}
+
+function workspacePage(title, csrf, content, script = '') {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="same-origin">
-    <title>Filmmaker setup · Dust Wave Stream</title><link rel="stylesheet" href="/setup/style.css"></head>
+    <title>${escapeHtml(title)} · Dust Wave Stream</title><link rel="stylesheet" href="/setup/style.css">${script}</head>
     <body><a class="skip" href="#main">Skip to setup</a>
     <header class="masthead"><div class="bar"><span class="brand">Dust Wave <strong>Stream</strong></span>
       <form method="post" action="/setup/sign-out">${hidden('csrf', csrf)}
       <button class="sign-out" type="submit">Sign out</button></form></div></header>
-    <main id="main" tabindex="-1">
-      <h1>Filmmaker setup</h1>
-      ${filmmaker.name ? `<p class="account">Signed in as ${escapeHtml(filmmaker.name)}</p>` : ''}
-      <nav class="section-links" aria-label="Setup sections"><a href="#payments">Payments</a>
-        <a href="#storage">Storage</a><a href="#film">Film</a></nav>
-      ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
-      ${notice ? `<div class="feedback" role="status">${escapeHtml(notice)}</div>` : ''}
-      ${r2.status === 'ready' ? filmHTML + library + connections : connections + filmHTML + library}
-    </main></body></html>`;
+    <main id="main" tabindex="-1">${content}</main></body></html>`;
+}
+
+const statsLabels = { previews: 'Preview starts', plays: 'Paid plays', rentals: 'Rentals', purchases: 'Purchases',
+  gross: 'Test payments', refunded: 'Refunds' };
+const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+function statsList(stats) {
+  return '<dl class="film-stats">' + Object.entries(statsLabels).map(([key, label]) =>
+    `<div><dt>${label}</dt><dd>${['gross', 'refunded'].includes(key) ? usd.format(stats[key] / 100) : stats[key]}</dd></div>`
+  ).join('') + '</dl>';
+}
+
+export function renderDashboard({ csrf, owner, error, films, origin }) {
+  const totals = Object.fromEntries(Object.keys(statsLabels).map(key => [key, films.reduce((total, film) => total + film.stats[key], 0)]));
+  const cards = films.map(film => {
+    const url = origin + '/embed/' + encodeURIComponent(film.id);
+    const embed = `<iframe src="${escapeHtml(url)}" title="${escapeHtml(film.title)}" width="640" height="480" style="width:100%;border:0" allow="autoplay; payment; fullscreen" allowfullscreen></iframe>`;
+    const share = film.published ? `<p><a href="${escapeHtml(url)}">Open public player</a></p>
+      <label>Embed code<textarea readonly rows="3">${escapeHtml(embed)}</textarea></label>
+      <button class="secondary copy-embed" type="button">Copy embed code</button><span class="copy-status" role="status"></span>` : '';
+    const terms = film.published ? 'Unpublishing closes the preview and new sales. Existing viewers retain paid access.' :
+      'Publishing makes this film available to viewers and allows other sites to embed it.';
+    return `<article class="film-card dashboard-film" id="${escapeHtml(film.id)}">
+      <h2>${escapeHtml(film.title)}</h2><p>${film.published ? 'Published' : 'Private'} · ${formatDuration(film.duration)}</p>
+      ${statsList(film.stats)}${priceEditor(film, csrf, '/setup/dashboard/settings')}${share}
+      <form action="/setup/dashboard/publication" method="post">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
+        <p class="hint">${terms}</p><button type="submit" class="${film.published ? 'secondary' : 'primary'}" name="visibility" value="${film.published ? 'private' : 'public'}">
+          ${film.published ? 'Unpublish film' : 'Publish film'}</button></form></article>`;
+  }).join('');
+  return workspacePage('Film dashboard', csrf, `<h1>Film dashboard</h1><p class="account">Signed in as ${escapeHtml(owner)}</p>
+    <nav class="section-links" aria-label="Filmmaker workspace"><a href="/setup#film">Add a film</a><a href="/setup">Filmmaker setup</a></nav>
+    ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
+    ${films.length ? `<section class="film-card"><h2>All films</h2>${statsList(totals)}
+      <p class="hint">Counts include repeat viewings. Sales are final. Test payments show settled viewer orders before fees and refunds. Refunds show amounts returned through Stripe.</p></section>${cards}` :
+      '<p>You have no saved films yet. Add your first film in setup to publish it here.</p>'}`,
+    '<script src="/setup/dashboard.js" defer></script>');
 }

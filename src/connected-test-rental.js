@@ -31,7 +31,8 @@ export function connectedClient(key, account, platform, fetchImpl) {
   if (!accountIdPattern.test(account) || account === platform) throw new Error('A distinct connected account is required.');
   return createStripeClient(key, { fetchImplementation: (href, init) => {
     const url = new URL(href);
-    const endpoint = (init.method === 'POST' && ['/v1/payment_intents', '/v1/checkout/sessions'].includes(url.pathname)) ||
+    const endpoint = (init.method === 'POST' && (['/v1/payment_intents', '/v1/checkout/sessions'].includes(url.pathname) ||
+      /^\/v1\/checkout\/sessions\/cs_test_[a-zA-Z0-9]+\/expire$/.test(url.pathname))) ||
       (init.method === 'GET' && /^\/v1\/(?:payment_intents\/pi_[a-zA-Z0-9]+|checkout\/sessions\/cs_test_[a-zA-Z0-9]+)$/.test(url.pathname));
     if (url.origin !== API || !endpoint) throw new Error('Unexpected payment endpoint.');
     const headers = new Headers(init.headers);

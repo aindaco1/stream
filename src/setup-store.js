@@ -2,8 +2,9 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { recoveryStore } from './viewer-recovery.js';
 import { stripeSetupStateForMode } from './setup-stripe.js';
-import { filmPrices, isPrice } from './prices.js';
+import { filmPrices, isPrice, rentalHours } from './prices.js';
 
 const token = () => randomBytes(32).toString('base64url');
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -46,6 +47,15 @@ export function openSetupStore(directory) {
     CREATE TABLE IF NOT EXISTS claims (mode TEXT NOT NULL, account TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(mode, account));
     CREATE TABLE IF NOT EXISTS buckets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, config TEXT NOT NULL, sealed BLOB NOT NULL);
     CREATE TABLE IF NOT EXISTS films (id TEXT PRIMARY KEY, owner TEXT NOT NULL, bucket_id TEXT NOT NULL, metadata TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS film_publication (
+      filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, published INTEGER NOT NULL CHECK (published IN (0,1))
+    );
+    CREATE TABLE IF NOT EXISTS film_counts (filmId TEXT PRIMARY KEY, previews INTEGER NOT NULL, plays INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS film_view_receipts (
+      filmId TEXT NOT NULL, kind TEXT NOT NULL, digest TEXT NOT NULL, createdAt INTEGER NOT NULL,
+      PRIMARY KEY(filmId,kind,digest)
+    );
+    CREATE INDEX IF NOT EXISTS film_view_receipt_age ON film_view_receipts(createdAt);
     CREATE TABLE IF NOT EXISTS connected_test_orders (
       filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, account TEXT NOT NULL, platform TEXT NOT NULL,
       revision TEXT NOT NULL, source TEXT NOT NULL, orderId TEXT NOT NULL UNIQUE,
@@ -71,12 +81,30 @@ export function openSetupStore(directory) {
   // Orders created before embedded Checkout are $0.99 hosted rentals.
   transaction(() => {
     const columns = new Set(sql('PRAGMA table_info(viewer_test_orders)').all().map(row => row.name));
+    if (!columns.has('verifiedAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN verifiedAt INTEGER');
+    if (!columns.has('position')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('kind')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'rent'");
     if (!columns.has('amount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN amount INTEGER NOT NULL DEFAULT 99');
     if (!columns.has('uiMode')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN uiMode TEXT NOT NULL DEFAULT 'hosted'");
     if (!columns.has('cardOnly')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN cardOnly INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('rentalHours')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN rentalHours INTEGER NOT NULL DEFAULT 48');
+    if (!columns.has('chargeId')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN chargeId TEXT');
+    if (!columns.has('refundedAmount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN refundedAmount INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('disputeStatus')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN disputeStatus TEXT');
+    if (!columns.has('revocationReason')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN revocationReason TEXT');
+    if (!columns.has('ledgerVersion')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN ledgerVersion INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('withdrawalState')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN withdrawalState TEXT');
+    if (!columns.has('withdrawalRetryAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN withdrawalRetryAt INTEGER NOT NULL DEFAULT 0');
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS viewer_order_charge ON viewer_test_orders(chargeId);
+      CREATE INDEX IF NOT EXISTS viewer_withdrawal_due ON viewer_test_orders(withdrawalRetryAt) WHERE withdrawalState='requested' AND sessionId IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS viewer_order_legacy_receipt ON viewer_test_orders(filmId,paidAt);
+      CREATE TABLE IF NOT EXISTS viewer_payment_events(
+        account TEXT NOT NULL,eventId TEXT NOT NULL,orderId TEXT NOT NULL,receivedAt INTEGER NOT NULL,
+        PRIMARY KEY(account,eventId))`);
   });
+  const accessOrder = sql('SELECT filmId,owner,account,scope,revision,kind,intentId,paidAt,rentalHours,status,revocationReason,disputeStatus FROM viewer_test_orders WHERE orderId=?');
   const store = {
+    ...recoveryStore(db, key),
     invite(owner) {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9 ._@+-]{0,95}$/.test(owner)) throw new Error('Use a short, unique filmmaker name.');
       const code = token();
@@ -136,15 +164,16 @@ export function openSetupStore(directory) {
         .run(intentId, orderId, intentId);
       if (result.changes !== 1) throw new Error('The test order has a conflicting Stripe payment.');
     },
-    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount }) {
+    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount, rentalHours: hours = 48 }) {
       return transaction(() => {
         const existing = store.viewerOrderForToken(tokenHash);
         if (existing) return existing;
         const maker = store.maker(owner);
         const seller = maker && stripeSetupStateForMode(maker.stripe, 'test');
         const film = store.film(owner, id);
-        if (!store.ownsTestAccount(owner, account) || seller?.accountId !== account || film?.revision !== revision ||
-            !isPrice(amount) || filmPrices(film.prices)?.[kind] !== amount) {
+        if (store.filmPublication(id)?.published === 0 || !store.ownsTestAccount(owner, account) || seller?.accountId !== account || film?.revision !== revision ||
+            !isPrice(amount) || filmPrices(film.prices)?.[kind] !== amount ||
+            (kind === 'rent' && (rentalHours(film.rentalHours) !== hours || !Number.isInteger(hours)))) {
           const error = new Error('The film offer changed.');
           error.code = 'viewer_offer_changed';
           throw error;
@@ -156,28 +185,68 @@ export function openSetupStore(directory) {
           error.code = 'viewer_rate_limit';
           throw error;
         }
-        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,uiMode,cardOnly) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1)")
-          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount);
+        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,uiMode,cardOnly,rentalHours) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?)")
+          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, kind === 'rent' ? hours : 48);
         return store.viewerOrderForToken(tokenHash);
       });
     },
     viewerOrderForToken(digest) { return sql('SELECT * FROM viewer_test_orders WHERE tokenHash=?').get(digest); },
     viewerOrderById(id) { return sql('SELECT * FROM viewer_test_orders WHERE orderId=?').get(id); },
+    viewerAccessById(id) { return accessOrder.get(id); },
     viewerOrderBySession(id) { return sql('SELECT * FROM viewer_test_orders WHERE sessionId=?').get(id); },
+    viewerOrderByPayment(account, intentId, chargeId) {
+      return sql('SELECT * FROM viewer_test_orders WHERE account=? AND (intentId=? OR chargeId=?)').get(account, intentId ?? null, chargeId);
+    },
+    hasViewerSellerAccount(account) { return Boolean(sql("SELECT 1 FROM claims WHERE mode='test' AND account=?").get(account)); },
+    paymentEventSeen(account, id) { return Boolean(sql('SELECT 1 FROM viewer_payment_events WHERE account=? AND eventId=?').get(account,id)); },
+    notePaymentEvent(account, id, orderId) {
+      sql('INSERT OR IGNORE INTO viewer_payment_events VALUES(?,?,?,?)').run(account,id,orderId,Date.now());
+    },
+    legacyOrderForRenewal(offer, end) {
+      const rows = sql("SELECT * FROM viewer_test_orders WHERE filmId=? AND owner=? AND account=? AND scope=? AND revision=? AND kind='rent' AND rentalHours=48 AND paidAt=? LIMIT 2")
+        .all(offer.id, offer.owner, offer.account, offer.scope, offer.revision, end - 48 * 3600);
+      return rows.length === 1 && rows[0];
+    },
+    accessForLegacyRental(offer, end) {
+      const rows = sql("SELECT status,revocationReason FROM viewer_test_orders WHERE filmId=? AND owner=? AND account=? AND scope=? AND revision=? AND kind='rent' AND rentalHours=48 AND paidAt=?")
+        .all(offer.id,offer.owner,offer.account,offer.scope,offer.revision,end - 48 * 3600);
+      return rows.length > 0 && rows.every(row => row.status === 'paid' && !row.revocationReason);
+    },
     bindViewerSession(orderId, sessionId) {
       const result = sql('UPDATE viewer_test_orders SET sessionId=? WHERE orderId=? AND (sessionId IS NULL OR sessionId=?)')
         .run(sessionId, orderId, sessionId);
       if (result.changes !== 1) throw new Error('Conflicting Checkout Session.');
     },
+    requestedWithdrawals(owner = null, filmId = null) {
+      return sql(`SELECT * FROM viewer_test_orders WHERE withdrawalState='requested' AND sessionId IS NOT NULL
+        AND withdrawalRetryAt<=? AND (? IS NULL OR (owner=? AND filmId=?)) ORDER BY withdrawalRetryAt,createdAt LIMIT 32`)
+        .all(Date.now(),owner,owner,filmId);
+    },
+    pendingWithdrawals(owner,filmId) {
+      return sql("SELECT COUNT(*) AS n FROM viewer_test_orders WHERE owner=? AND filmId=? AND withdrawalState='requested' AND sessionId IS NOT NULL").get(owner,filmId).n;
+    },
+    finishWithdrawal(orderId,sessionId) {
+      sql("UPDATE viewer_test_orders SET withdrawalState='closed' WHERE orderId=? AND sessionId=? AND withdrawalState='requested'").run(orderId,sessionId);
+    },
+    retryWithdrawal(orderId) {
+      sql("UPDATE viewer_test_orders SET withdrawalRetryAt=? WHERE orderId=? AND withdrawalState='requested'").run(Date.now()+30_000,orderId);
+    },
     checkPendingViewerOrder(orderId) {
       return sql("UPDATE viewer_test_orders SET checkedAt=? WHERE orderId=? AND status='pending' AND (checkedAt IS NULL OR checkedAt<=?)")
         .run(Date.now(), orderId, Date.now() - 3000).changes === 1;
     },
-    expireViewerOrder(orderId) { sql("UPDATE viewer_test_orders SET status='expired' WHERE orderId=?").run(orderId); },
-    fulfillViewerOrder(orderId, sessionId, intentId, paidAt) {
-      // The webhook and viewer may confirm the same payment on different processes.
-      return sql("UPDATE viewer_test_orders SET status='paid', intentId=?, paidAt=COALESCE(paidAt,?) WHERE orderId=? AND sessionId=? AND status!='expired' AND (intentId IS NULL OR intentId=?) RETURNING paidAt")
-        .get(intentId, paidAt, orderId, sessionId, intentId)?.paidAt;
+    expireViewerOrder(orderId) {
+      sql("UPDATE viewer_test_orders SET status='expired',ledgerVersion=ledgerVersion+1 WHERE orderId=? AND status='pending' AND intentId IS NULL").run(orderId);
+    },
+    reconcileViewerPayment(order, { intentId, chargeId, paidAt, refundedAmount, disputeStatus, revocationReason }) {
+      // A slower provider read cannot overwrite a newer reconciliation from another process.
+      return sql(`UPDATE viewer_test_orders SET status=CASE WHEN ? IS NOT NULL OR
+          (kind='rent' AND COALESCE(paidAt,?)+rentalHours*3600<=?) THEN 'expired' ELSE 'paid' END,
+          intentId=?, chargeId=?, paidAt=COALESCE(paidAt,?), refundedAmount=?, disputeStatus=?, revocationReason=?,
+          verifiedAt=unixepoch(), ledgerVersion=ledgerVersion+1 WHERE orderId=? AND sessionId=? AND ledgerVersion=?
+          AND (intentId IS NULL OR intentId=?) AND (chargeId IS NULL OR chargeId=?) RETURNING *`)
+        .get(revocationReason, paidAt, Math.floor(Date.now()/1000), intentId, chargeId, paidAt, refundedAmount,
+          disputeStatus, revocationReason, order.orderId, order.sessionId, order.ledgerVersion, intentId, chargeId);
     },
     noteViewerWebhook(orderId, eventId) {
       sql('UPDATE viewer_test_orders SET webhookEventId=COALESCE(webhookEventId,?),webhookAt=COALESCE(webhookAt,?) WHERE orderId=?')
@@ -225,9 +294,61 @@ export function openSetupStore(directory) {
       return sql("UPDATE films SET metadata=json_set(metadata, '$.prices', json(?)) WHERE owner=? AND id=?")
         .run(JSON.stringify(prices), owner, id).changes === 1;
     },
+    setFilmSettings(owner, id, { prices, rentalHours, previewSeconds }) {
+      return sql("UPDATE films SET metadata=json_set(metadata,'$.prices',json(?),'$.rentalHours',?,'$.previewSeconds',?) WHERE owner=? AND id=?")
+        .run(JSON.stringify(prices), rentalHours, previewSeconds, owner, id).changes === 1;
+    },
+    setFilmPublication(owner, id, published) {
+      return transaction(() => {
+        const changed = sql(`INSERT INTO film_publication (filmId,owner,published) SELECT id,owner,? FROM films WHERE id=? AND owner=?
+          ON CONFLICT(filmId) DO UPDATE SET published=excluded.published WHERE owner=excluded.owner`)
+          .run(published ? 1 : 0, id, owner).changes === 1;
+        if (changed && !published) {
+          sql("UPDATE viewer_test_orders SET withdrawalState='requested' WHERE owner=? AND filmId=? AND status='pending' AND withdrawalState IS NULL").run(owner,id);
+        }
+        return changed;
+      });
+    },
+    filmPublication(id) { return sql('SELECT owner,published FROM film_publication WHERE filmId=?').get(id); },
+    publishedFilmIds() { return sql('SELECT filmId FROM film_publication WHERE published=1 ORDER BY rowid').all().map(row => row.filmId); },
+    priorOrderOwner(id) {
+      return sql(`SELECT owner FROM viewer_test_orders WHERE filmId=? AND sessionId IS NOT NULL
+        UNION ALL SELECT owner FROM connected_test_orders WHERE filmId=? AND intentId IS NOT NULL LIMIT 1`).get(id, id)?.owner;
+    },
+    recordView(owner, id, kind, eventId) {
+      if (!['preview', 'paid'].includes(kind) || typeof eventId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(eventId)) return false;
+      const now = Date.now();
+      return transaction(() => {
+        // Retain anonymous retry identifiers for a day; keep only counts thereafter.
+        sql('DELETE FROM film_view_receipts WHERE rowid IN (SELECT rowid FROM film_view_receipts WHERE createdAt<? LIMIT 64)').run(now - 86400_000);
+        const digest = hash(JSON.stringify([id, kind, eventId]));
+        const added = sql('INSERT OR IGNORE INTO film_view_receipts SELECT id,?,?,? FROM films WHERE owner=? AND id=?')
+          .run(kind, digest, now, owner, id).changes;
+        if (!added) return false;
+        sql(`INSERT INTO film_counts(filmId,previews,plays) VALUES(?,?,?) ON CONFLICT(filmId)
+          DO UPDATE SET previews=previews+excluded.previews, plays=plays+excluded.plays`)
+          .run(id, kind === 'preview' ? 1 : 0, kind === 'paid' ? 1 : 0);
+        return true;
+      });
+    },
+    dashboardFilms(owner) {
+      const rows = sql(`SELECT f.metadata, COALESCE(c.previews,0) AS previews,COALESCE(c.plays,0) AS plays,
+        COALESCE(p.rentals,0) AS rentals,COALESCE(p.purchases,0) AS purchases,
+        COALESCE(p.gross,0) AS gross,COALESCE(p.refunded,0) AS refunded FROM films f
+        LEFT JOIN film_counts c ON c.filmId=f.id
+        LEFT JOIN (SELECT filmId,SUM(kind='rent') AS rentals,SUM(kind='buy') AS purchases,
+          SUM(amount) AS gross,SUM(refundedAmount) AS refunded FROM viewer_test_orders
+          WHERE owner=? AND intentId IS NOT NULL AND paidAt IS NOT NULL GROUP BY filmId) p ON p.filmId=f.id
+        WHERE f.owner=? ORDER BY f.rowid DESC`).all(owner, owner);
+      return rows.map(({ metadata, ...stats }) => {
+        const { id, title, prices, previewSeconds, rentalHours, duration } = JSON.parse(metadata);
+        return { id, title, prices, previewSeconds, rentalHours, duration, stats };
+      });
+    },
     films(owner) {
-      const rows = sql("SELECT id, json_extract(metadata, '$.title') AS title, json_extract(metadata, '$.prices') AS prices FROM films WHERE owner=? ORDER BY rowid DESC").all(owner);
-      return rows.map(({ id, title, prices }) => ({ id, title, prices: prices === null ? undefined : JSON.parse(prices) }));
+      const rows = sql("SELECT id,json_extract(metadata,'$.title') AS title,json_extract(metadata,'$.prices') AS prices,json_extract(metadata,'$.rentalHours') AS hours,json_extract(metadata,'$.previewSeconds') AS seconds FROM films WHERE owner=? ORDER BY rowid DESC").all(owner);
+      return rows.map(({ id, title, prices, hours, seconds }) => ({ id, title, prices: prices === null ? undefined : JSON.parse(prices),
+        rentalHours: hours ?? undefined, previewSeconds: seconds ?? undefined }));
     },
     film(owner, id) {
       const row = sql('SELECT f.metadata, b.config FROM films f JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner WHERE f.id=? AND f.owner=?').get(id, owner);

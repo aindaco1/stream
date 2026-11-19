@@ -1,7 +1,7 @@
 import { openFilm, revisionFor } from './media.js';
 import { savedFilmScope } from './rental.js';
 import { BLOCK_SIZE, createR2Source } from './source.js';
-import { filmPrices } from './prices.js';
+import { filmPrices, previewSeconds, rentalHours } from './prices.js';
 import { stripeSetupStateForMode } from './setup-stripe.js';
 
 const filmId = /^f-[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -40,9 +40,14 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     return configured;
   }
 
-  function record(id) {
-    const owner = publications().get(id);
-    if (!owner || !authority || env.STRIPE_CONNECT_LIVE === '1' ||
+  function publicationOwner(id, entitled = false) {
+    const listed = publications().get(id);
+    const choice = store.filmPublication(id);
+    if (choice) return choice.published || (entitled && store.priorOrderOwner(id) === choice.owner) ? choice.owner : undefined;
+    return listed ?? (entitled ? store.priorOrderOwner(id) : undefined);
+  }
+  function savedRecord(owner, id) {
+    if (!owner || env.STRIPE_CONNECT_LIVE === '1' ||
         !/^(sk|rk)_test_[A-Za-z0-9]+$/.test(env.STRIPE_CONNECT_SECRET_KEY || '')) return;
     const film = store.film(owner, id);
     if (film?.id !== id || !film.bucket || !film.objectKey || !/^[A-Za-z0-9_-]{43}$/.test(film.revision) ||
@@ -51,7 +56,8 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
         typeof film.rights.statement !== 'string' || !film.rights.statement.trim() ||
         !Number.isFinite(Date.parse(film.rights.acceptedAt)) || Date.parse(film.rights.acceptedAt) > Date.now()) return;
     const prices = filmPrices(film.prices);
-    if (!prices) return;
+    const seconds = previewSeconds(film.previewSeconds), hours = rentalHours(film.rentalHours);
+    if (!prices || seconds === null || hours === null || !(film.duration > seconds)) return;
     const maker = store.maker(owner);
     if (!maker) return;
     const state = stripeSetupStateForMode(maker.stripe, 'test');
@@ -60,19 +66,24 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
         state.status !== 'ready' || state.chargesEnabled !== true || state.payoutsEnabled !== true ||
         !accountId.test(account) || account === platformAccount || !store.ownsTestAccount(owner, account)) return;
     const spec = Object.freeze({ id, title: film.title, owner, account, scope: savedFilmScope(owner, id),
-      revision: film.revision, authority, prices });
+      revision: film.revision, authority, prices, duration: film.duration, previewSeconds: seconds, rentalHours: hours });
     return { spec, bucket: film.bucket, objectKey: film.objectKey };
   }
 
-  function requireRecord(id) {
-    const entry = record(id);
+  function record(id, { entitled = false } = {}) {
+    if (!authority || !filmId.test(id)) return;
+    const entry = savedRecord(publicationOwner(id, entitled), id);
+    return entry && { ...entry, entitled };
+  }
+  function requireRecord(id, options) {
+    const entry = record(id, options);
     if (!entry) throw unavailable();
     return entry;
   }
 
   function current(entry) {
-    const next = requireRecord(entry.spec.id);
-    if (next.spec.owner !== entry.spec.owner || next.spec.account !== entry.spec.account ||
+    const next = entry.preparing ? savedRecord(entry.spec.owner, entry.spec.id) : requireRecord(entry.spec.id, entry);
+    if (!next || next.spec.owner !== entry.spec.owner || next.spec.account !== entry.spec.account ||
         next.spec.revision !== entry.spec.revision || next.objectKey !== entry.objectKey ||
         next.bucket.accountId !== entry.bucket.accountId || next.bucket.jurisdiction !== entry.bucket.jurisdiction ||
         next.bucket.bucket !== entry.bucket.bucket) throw unavailable();
@@ -109,24 +120,36 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
   }
 
   return Object.freeze({
-    get(id) { return record(id)?.spec; },
+    get(id, options) { return record(id, options)?.spec; },
+    isPublished(owner, id) { return publicationOwner(id) === owner; },
+    async publish(owner, id) {
+      const entry = savedRecord(owner, id);
+      if (!entry) throw unavailable();
+      await privateSource({ ...entry, preparing: true }).head();
+      if (!store.setFilmPublication(owner, id, true)) throw unavailable();
+    },
+    recordView(id, kind, eventId) {
+      const entry = record(id, { entitled: kind === 'paid' });
+      if (!entry || (kind === 'preview' && !entry.spec.previewSeconds)) return false;
+      return store.recordView(entry.spec.owner, id, kind, eventId);
+    },
     list() {
       const films = [];
-      for (const id of publications().keys()) {
+      for (const id of new Set([...publications().keys(), ...store.publishedFilmIds()])) {
         const entry = record(id);
         if (entry) films.push({ id, title: entry.spec.title });
       }
       return films;
     },
-    async verify(id) {
+    async verify(id, options) {
       try {
-        const entry = requireRecord(id);
+        const entry = requireRecord(id, options);
         await privateSource(entry).head();
         return current(entry).spec;
       } catch { throw unavailable(); }
     },
     async download(id, grant) {
-      const entry = requireRecord(id);
+      const entry = requireRecord(id, { entitled: true });
       const { orderId } = await authority.verifyDownloadGrant(grant, { film: entry.spec.scope, revision: entry.spec.revision });
       const source = privateSource(entry);
       const head = await source.head();
@@ -153,14 +176,20 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
         }
       };
     },
-    async open(id) {
+    async open(id, options) {
       let media;
       try {
-        const entry = requireRecord(id);
-        media = await openMedia(privateSource(entry));
+        const entry = requireRecord(id, options);
+        media = await openMedia(privateSource(entry), { previewSeconds: entry.spec.previewSeconds });
         current(entry);
         if (media.revision !== entry.spec.revision) throw unavailable();
-        return media;
+        return { ...media, async preview(seconds) {
+          const offered = requireRecord(id).spec.previewSeconds;
+          if (!offered || (seconds !== undefined && offered !== seconds)) throw unavailable();
+          const bytes = await media.preview(offered);
+          if (requireRecord(id).spec.previewSeconds !== offered) throw unavailable();
+          return bytes;
+        } };
       } catch {
         media?.close();
         throw unavailable();

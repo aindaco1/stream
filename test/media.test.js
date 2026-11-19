@@ -114,3 +114,16 @@ test('preview bytes remain stable across separate HTTP range requests', async ()
   await delay(1050); // MP4 creation time has one-second precision.
   assert.deepEqual(await film.preview(), first);
 });
+
+test('overlapping requests for different preview lengths each enforce their own packet cutoff', async () => {
+  const intervals = [3, 8, 3];
+  const outputs = await Promise.all(intervals.map(seconds => film.preview(seconds)));
+  assert.equal(outputs[0], outputs[2]);
+  for (const index of [0, 1]) {
+    const path = join(directory, 'preview-' + index + '.mp4');
+    await writeFile(path, outputs[index]);
+    const ends = packets(path).map(p => Number(p.pts_time) + Number(p.duration_time));
+    assert.ok(Math.abs(Math.max(...ends) - intervals[index]) < .001);
+  }
+  for (const invalid of [0, -1, 31, Infinity]) await assert.rejects(film.preview(invalid));
+});

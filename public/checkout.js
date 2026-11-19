@@ -69,6 +69,11 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   const ownership = byId('ownership');
   const status = byId('status');
   const statusHome = status.parentElement;
+  const hours = Number(document.body.dataset.rentalHours) || 48;
+  const rentalLength = value => value + (value === 1 ? ' hour' : ' hours');
+  const accessTools = byId('access-tools');
+  const restoreTools = byId('restore-tools');
+  restoreTools.hidden = document.body.dataset.emailRecovery !== 'true';
   const check = byId('check-payment');
   const download = byId('download');
   const target = document.createElement('iframe');
@@ -82,6 +87,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   try { attempts = JSON.parse(saved) || {}; } catch { /* Earlier players stored just a rental token. */ }
   if (validToken(saved)) attempts = { rent: saved, active: 'rent' };
   const knownPurchase = slot && read('localStorage', slot + ':purchase');
+  const knownRental = slot && read('localStorage', slot + ':rent');
   const activeKind = kinds.includes(attempts.active) ? attempts.active : 'rent';
   const address = new URL(location.href);
   const returnId = address.searchParams.get('order');
@@ -92,7 +98,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     for (const key of ['order', 'redirect_status', 'payment_intent', 'payment_intent_client_secret']) address.searchParams.delete(key);
     history.replaceState(history.state, '', address.pathname + address.search);
   }
-  let token = [returnedToken, ...(returnId ? [returned?.token] : [knownPurchase, attempts[activeKind]])].find(validToken);
+  let token = [returnedToken, ...(returnId ? [returned?.token] : [knownPurchase, attempts[activeKind], knownRental])].find(validToken);
   if (returnId && token && kinds.includes(returned?.kind)) {
     attempts[returned.kind] = token;
     attempts.active = returned.kind;
@@ -133,7 +139,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
       }
     }
     const terms = [];
-    if (available.includes('rent')) terms.push('Rent for 48 hours from payment.');
+    if (available.includes('rent')) terms.push('Rent for ' + rentalLength(hours) + ' from payment.');
     if (available.includes('buy')) terms.push('Buy to watch and download.');
     byId('terms').textContent = available.length ? 'Test checkout. ' + terms.join(' ') : '';
   }
@@ -163,20 +169,37 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
         attempts[result.kind] = attempt;
         attempts.active = result.kind;
         persist();
-        if (result.kind === 'buy') {
-          write('localStorage', slot && slot + ':purchase', attempt);
-          ownership.hidden = false;
-          byId('access-link').value = location.origin + '/embed/' + encodeURIComponent(film) + '#attempt=' + attempt;
-        }
+        const buying = result.kind === 'buy';
+        write('localStorage', slot && slot + (buying ? ':purchase' : ':rent'), attempt);
+        ownership.hidden = !buying;
+        accessTools.hidden = false;
+        restoreTools.hidden = true;
+        byId('save-label').textContent = buying ? 'Save purchase link' : 'Watch on another device';
+        accessTools.querySelector('label').textContent = buying ? 'Private purchase link' : 'Private rental link';
+        byId('access-link').value = location.origin + '/embed/' + encodeURIComponent(film) + '#attempt=' + attempt;
+        byId('rental-end').textContent = !buying && result.expiresAt ? 'Rental ends ' + new Date(result.expiresAt * 1000).toLocaleString() + '.' : '';
+        if (result.title) byId('film-title').textContent = result.title;
         showOffer();
         if (changed) onPaid(result, watchNow);
-      } else if (result.status === 'expired') {
+      } else if (['expired', 'revoked', 'suspended'].includes(result.status)) {
         closeForm();
-        if (read('localStorage', slot + ':purchase') === attempt) write('localStorage', slot + ':purchase', null);
-        for (const kind of kinds) if (attempts[kind] === attempt) delete attempts[kind];
+        if (unlocked?.token === attempt) {
+          unlocked = undefined;
+          byId('access-link').value = '';
+          ownership.hidden = accessTools.hidden = true;
+          document.dispatchEvent(new Event('stream-access-ended'));
+        }
+        restoreTools.hidden = document.body.dataset.emailRecovery !== 'true';
+        if (result.status !== 'suspended') {
+          for (const suffix of [':purchase', ':rent']) {
+            if (read('localStorage', slot + suffix) === attempt) write('localStorage', slot + suffix, null);
+          }
+          for (const kind of kinds) if (attempts[kind] === attempt) delete attempts[kind];
+        }
         persist();
-        token = unlocked?.token;
-        status.textContent = 'This payment or rental has expired. Choose an offer to start again.';
+        token = result.status === 'suspended' ? attempt : unlocked?.token;
+        status.textContent = result.status === 'suspended' ? 'Access is paused while the payment is disputed. You can check again later.' :
+          result.status === 'revoked' ? 'Access has ended for this payment.' : 'This payment or rental has expired.';
         showOffer();
       } else if (result.status === 'pending') {
         if (manual || delay >= delays.length) {
@@ -212,7 +235,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     window.scrollTo(0, 0);
     const heading = byId('checkout-heading');
     heading.textContent = byId('film-title').textContent;
-    byId('order-terms').textContent = kind === 'rent' ? 'Test rental · 48 hours from payment' : 'Test purchase · Watch and download';
+    byId('order-terms').textContent = kind === 'rent' ? 'Test rental · ' + rentalLength(hours) + ' from payment' : 'Test purchase · Watch and download';
     byId('order-price').textContent = '';
     byId('payment-feedback').append(status);
     heading.focus({ preventScroll: true });
@@ -224,6 +247,8 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
       if (run !== generation) return;
       if (result.status === 'paid') { await inspect(true, true); return; }
       if (!result.clientSecret || !result.publishableKey || !result.account) throw new Error('Checkout unavailable');
+      if (kind === 'rent' && Number.isInteger(result.rentalHours)) byId('order-terms').textContent =
+        'Test rental · ' + rentalLength(result.rentalHours) + ' from payment';
       if (typeof result.title === 'string' && result.title) heading.textContent = result.title;
       if (result.currency === 'usd' && Number.isSafeInteger(result.amount) && result.amount > 0) {
         byId('order-price').textContent = currency.format(result.amount / 100);
@@ -306,18 +331,41 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     const field = byId('access-link');
     try {
       await navigator.clipboard.writeText(field.value);
-      status.textContent = 'Private purchase link copied.';
+      status.textContent = 'Private access link copied.';
     } catch {
       field.focus();
       field.select();
       status.textContent = 'Copy the selected link and keep it somewhere private.';
     }
   });
+  byId('restore-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = event.target.querySelector('button');
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      await postToken(film, 'restore', byId('restore-email').value);
+      byId('restore-feedback').textContent = 'If this email has access, a private link will arrive shortly. It is valid for 15 minutes.';
+    } catch { byId('restore-feedback').textContent = 'Could not request a link. Please try again.'; }
+    finally { button.disabled = false; }
+  });
   if (token) {
     showOffer();
     inspect(true, Boolean(returnId));
   }
-  return { showOffer, purchaseReceipt };
+  return { showOffer, purchaseReceipt, checkAccess: () => inspect(true),
+    async restoreAttempt(attempt) {
+      if (!validToken(attempt)) throw new Error('Invalid link');
+      token = attempt;
+      await inspect(true, true);
+    },
+    savePosition(seconds) {
+      if (unlocked) fetch('/film/' + encodeURIComponent(film) + '/position', {
+        method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: unlocked.token + ' ' + seconds,
+        credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: true
+      }).catch(() => {});
+    }
+  };
 }
 
 // Keep old checkout bookmarks and outstanding hosted-session returns usable.

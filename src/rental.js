@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
-import { isPrice } from './prices.js';
+import { isPrice, rentalHours } from './prices.js';
 import { hmacSha256, randomToken } from '@dustwave/worker-core/crypto';
 import { signExpiringToken, verifyExpiringToken } from '@dustwave/worker-core/session-security';
 
-const RENTAL_SECONDS = 48 * 60 * 60;
 const SESSION_SECONDS = 10 * 60;
 const PURCHASE_RECEIPT_SECONDS = 3600;
 const validOrder = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id);
@@ -48,13 +47,13 @@ export function createRentalAuthority(secret, { now = Date.now } = {}) {
     const purchased = claims.type === 'purchase-playback-v1';
     const end = purchased ? claims.receiptEnd : claims.rentalEnd;
     if (!Number.isSafeInteger(end) || claims.exp > end || !claims.session || typeof claims.session !== 'string' ||
-        (purchased && !validOrder(claims.order))) throw denied();
+        ((purchased || claims.order !== undefined) && !validOrder(claims.order))) throw denied();
     return { film: film.film, revision: film.revision, expiresAt: claims.exp, rentalExpiresAt: purchased ? null : end,
-      ...(purchased ? { access: 'buy', orderId: claims.order } : {}) };
+      ...(claims.order ? { access: purchased ? 'buy' : 'rent', orderId: claims.order } : {}) };
   }
 
   // The caller retrieves the PaymentIntent and expanded charge server-to-server.
-  function confirmedCharge(intent, film, amount, kind) {
+  function confirmedCharge(intent, film, amount, kind, paymentState) {
     const scope = rentalScope(film);
     const charge = intent?.latest_charge;
     const meta = intent?.metadata;
@@ -65,27 +64,33 @@ export function createRentalAuthority(secret, { now = Date.now } = {}) {
         meta.scope !== scope || (!legacy && (meta.kind !== kind || meta.amount !== String(amount))) ||
         charge?.object !== 'charge' || charge.livemode !== false || charge.status !== 'succeeded' ||
         charge.payment_intent !== intent.id || charge.captured !== true || charge.paid !== true ||
-        charge.refunded !== false || charge.amount_refunded !== 0 || charge.disputed !== false ||
         !Number.isSafeInteger(charge.created) || charge.created <= 0 || charge.created > Math.floor(now() / 1000)) throw denied();
+    if (paymentState === undefined) {
+      if (charge.refunded !== false || charge.amount_refunded !== 0 || charge.disputed !== false) throw denied();
+    } else if (paymentState.chargeId !== charge.id || paymentState.revocationReason ||
+        !Number.isSafeInteger(paymentState.refundedAmount) || paymentState.refundedAmount < 0 || paymentState.refundedAmount >= amount) throw denied();
     if (!legacy && (charge.amount !== amount || charge.amount_captured !== amount || charge.currency !== 'usd')) throw denied();
     return { scope, created: charge.created };
   }
 
   return {
-    async issueReceipt(intent, film, { amount = 99, paidAt } = {}) {
-      const { scope, created } = confirmedCharge(intent, film, amount, 'rent');
+    async issueReceipt(intent, film, { amount = 99, paidAt, orderId, rentalHours: hours = 48, paymentState } = {}) {
+      const { scope, created } = confirmedCharge(intent, film, amount, 'rent', paymentState);
+      if (rentalHours(hours) !== hours || hours === null ||
+          (orderId !== undefined && (!validOrder(orderId) || intent.metadata.order !== orderId))) throw denied();
+      const duration = hours * 3600;
       // Hosted orders can settle after charge creation. Their stored, verified
       // settlement time remains the clock origin across retries and renewals.
       const start = paidAt === undefined ? created : paidAt;
       const current = Math.floor(now() / 1000);
-      if (!Number.isSafeInteger(start) || start < created || start > current || start + RENTAL_SECONDS <= current) throw denied();
-      return signExpiringToken({ type: 'rental-v1', scope }, signingKey, {
-        now: start * 1000, ttlSeconds: RENTAL_SECONDS, maxTtlSeconds: RENTAL_SECONDS
+      if (!Number.isSafeInteger(start) || start < created || start > current || start + duration <= current) throw denied();
+      return signExpiringToken({ type: 'rental-v1', scope, ...(orderId && { order: orderId }) }, signingKey, {
+        now: start * 1000, ttlSeconds: duration, maxTtlSeconds: duration
       });
     },
 
-    async issuePurchaseReceipt(intent, film, { amount, orderId } = {}) {
-      const { scope } = confirmedCharge(intent, film, amount, 'buy');
+    async issuePurchaseReceipt(intent, film, { amount, orderId, paymentState } = {}) {
+      const { scope } = confirmedCharge(intent, film, amount, 'buy', paymentState);
       if (!validOrder(orderId) || intent.metadata.order !== orderId) throw denied();
       return signExpiringToken({ type: 'purchase-v1', scope, order: orderId }, signingKey, {
         now: now(), ttlSeconds: PURCHASE_RECEIPT_SECONDS, maxTtlSeconds: PURCHASE_RECEIPT_SECONDS
@@ -95,17 +100,17 @@ export function createRentalAuthority(secret, { now = Date.now } = {}) {
     async exchange(receipt, film) {
       const claims = await read(receipt, ['rental-v1', 'purchase-v1'], film);
       const purchased = claims.type === 'purchase-v1';
-      if (purchased && !validOrder(claims.order)) throw denied();
+      if ((purchased || claims.order !== undefined) && !validOrder(claims.order)) throw denied();
       const time = now();
       const current = Math.floor(time / 1000);
       const expiresAt = Math.min(current + SESSION_SECONDS, claims.exp);
       if (expiresAt <= current) throw denied();
       const purpose = purchased ? { type: 'purchase-playback-v1', order: claims.order, receiptEnd: claims.exp } :
-        { type: 'playback-v1', rentalEnd: claims.exp };
+        { type: 'playback-v1', rentalEnd: claims.exp, ...(claims.order && { order: claims.order }) };
       const grant = await signExpiringToken({ ...purpose, scope: claims.scope, session: randomToken(16) },
         signingKey, { now: time, ttlSeconds: expiresAt - current, maxTtlSeconds: SESSION_SECONDS });
       return { grant, expiresAt, rentalExpiresAt: purchased ? null : claims.exp,
-        ...(purchased ? { access: 'buy', orderId: claims.order } : {}) };
+        ...(claims.order ? { access: purchased ? 'buy' : 'rent', orderId: claims.order } : {}) };
     },
 
     verifyGrant,

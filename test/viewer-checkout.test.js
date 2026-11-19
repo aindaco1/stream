@@ -9,6 +9,7 @@ import { sha256Hex } from '@dustwave/worker-core/crypto';
 import { createRentalAuthority, rentalScope } from '../src/rental.js';
 import { openSetupStore } from '../src/setup-store.js';
 import { createViewerCheckout } from '../src/viewer-checkout.js';
+import { makeServer } from '../src/server.js';
 
 const origin = 'http://127.0.0.1:8787';
 const secret = 'whsec_fixture';
@@ -42,6 +43,7 @@ async function context(t, { legacy = false } = {}) {
   store.saveBucket(owner, { ...bucket, accessKeyId: 'fixture', secretAccessKey: 'fixture' });
   store.saveFilm(owner, bucket, { id: offer.id, title: offer.title, revision: offer.revision, prices: offer.prices });
   const calls = [], sessions = new Map(), intents = new Map(), requests = new Map();
+  const refunds = [], disputes = [];
   const behavior = { available: true, platform: 'acct_platform', lose: false, missingSecret: false };
   const purchased = Math.floor(Date.now() / 1000) - 300;
   function addSession(suffix, amount, markers, uiMode, allowedMethods = null) {
@@ -69,6 +71,30 @@ async function context(t, { legacy = false } = {}) {
     if (url.pathname === '/v1/accounts/' + account) return Response.json({ id: account, object: 'account', type: 'standard',
       charges_enabled: behavior.available, payouts_enabled: behavior.available });
     assert.equal(recipient, account);
+    if (method === 'POST' && url.pathname.endsWith('/expire')) {
+      const session = sessions.get(url.pathname.split('/').at(-2));
+      assert.ok(session);
+      if (behavior.completeDuringExpire === session.id) {
+        Object.assign(session,{status:'complete',payment_status:'paid'});
+        return Response.json({error:{message:'Session already completed.'}},{status:400});
+      }
+      if (behavior.expireUnavailable) return Response.json({error:{message:'Try again.'}},{status:503});
+      assert.equal(session.status,'open');
+      session.status='expired';
+      session.client_secret=null;
+      return Response.json(session);
+    }
+    if (url.pathname === '/v1/refunds' || url.pathname === '/v1/disputes') {
+      assert.equal(method,'GET');
+      const rows = url.pathname === '/v1/refunds' ? refunds : disputes;
+      const response = Response.json({object:'list',has_more:false,data:rows.filter(row=>row.charge===url.searchParams.get('charge'))});
+      if (behavior.delayRead) {
+        const delay = behavior.delayRead;
+        delete behavior.delayRead;
+        await delay();
+      }
+      return response;
+    }
     if (method === 'POST') {
       assert.equal(url.pathname, '/v1/checkout/sessions');
       const amount = Number(form.get('line_items[0][price_data][unit_amount]'));
@@ -100,6 +126,7 @@ async function context(t, { legacy = false } = {}) {
         requests.set(key, id);
       }
       if (behavior.lose) { behavior.lose=false; throw new Error('Interrupted after creating session'); }
+      if (behavior.holdCreateResponse) await behavior.holdCreateResponse();
       return Response.json(sessions.get(id));
     }
     const id = url.pathname.split('/').at(-1);
@@ -117,7 +144,7 @@ async function context(t, { legacy = false } = {}) {
   };
   const event = () => ({object:'event',id:'evt_fixture',type:'checkout.session.completed',account,livemode:false,data:{object:first()}});
   const pay = () => { Object.assign(first(), { status:'complete', payment_status:'paid' }); };
-  return { folder, store, env, fetchImpl, offer, token, checkout, calls, first, sessions, intents, behavior, purchased, sign, event, pay,
+  return { folder, store, env, fetchImpl, offer, token, checkout, calls, first, sessions, intents, refunds, disputes, behavior, purchased, sign, event, pay,
     start: (kind = 'rent') => checkout.start({ offer,token,origin,kind }), status: () => checkout.status({offer,token}) };
 }
 
@@ -137,7 +164,7 @@ test('a reload or concurrent click reuses Checkout Elements, polling and verifie
   const [a,b]=await Promise.all([c.start(),c.start()]);
   assert.deepEqual(a,b);
   assert.deepEqual(a,{clientSecret:c.first().client_secret,publishableKey:'pk_test_fixture',account:c.offer.account,
-    uiMode:'elements',orderId:c.first().client_reference_id,title:c.offer.title,kind:'rent',amount:99,currency:'usd'});
+    uiMode:'elements',orderId:c.first().client_reference_id,title:c.offer.title,kind:'rent',amount:99,currency:'usd',rentalHours:48});
   assert.equal(c.calls.filter(x=>x.method==='POST').length,1);
   assert.deepEqual(c.calls.find(x=>x.method==='POST').allowedMethods,['card']);
   const order=c.store.viewerOrderBySession(c.first().id);
@@ -180,8 +207,10 @@ test('invalid or unrelated webhook cannot mark an order paid, and paid status ca
   await assert.rejects(c.checkout.start({offer:{...c.offer,scope:'different'},token:c.token,origin}),{statusCode:409});
   assert.equal((await c.status()).status,'paid');
   assert.equal(c.store.viewerOrderBySession(c.first().id).webhookEventId,null);
-  c.intents.get(c.first().payment_intent).latest_charge.amount_refunded=1;
-  assert.deepEqual(await c.status(),{status:'expired'});
+  const charge=c.intents.get(c.first().payment_intent).latest_charge;
+  charge.amount_refunded=99;
+  c.refunds.push({id:'re_full',object:'refund',charge:charge.id,payment_intent:charge.payment_intent,amount:99,currency:'usd',status:'succeeded'});
+  assert.deepEqual(await c.status(),{status:'revoked'});
   await c.checkout.webhook(...c.sign(event));
   assert.equal(c.store.viewerOrderBySession(c.first().id).status,'expired');
   await assert.rejects(c.start(),{statusCode:410});
@@ -278,8 +307,9 @@ test('a purchase survives 48 hours and a service restart, while each new downloa
   assert.equal(await restored.verifyPurchase({...request,orderId:randomUUID()}), false);
   intent.latest_charge.refunded = true;
   intent.latest_charge.amount_refunded = row.amount;
+  c.refunds.push({id:'re_full',object:'refund',charge:intent.latest_charge.id,amount:row.amount,currency:'usd',status:'succeeded'});
   assert.equal(await restored.verifyPurchase(request), false);
-  assert.deepEqual(await c.status(), {status:'expired'});
+  assert.deepEqual(await c.status(), {status:'revoked'});
   assert.equal(reopened.viewerOrderById(row.orderId).status, 'expired');
 });
 
@@ -453,4 +483,252 @@ test('existing Elements orders retain their dynamic methods on retry and new ord
   assert.deepEqual(session.allowed_payment_method_types,['card']);
   session.allowed_payment_method_types = ['card','klarna'];
   await assert.rejects(open(),{statusCode:409});
+});
+
+test('signed connected adjustments control outstanding rental media and buyer downloads without payment requests per segment', async t => {
+  for (const kind of ['rent','buy']) {
+    const c = await context(t);
+    const film = {film:c.offer.scope,revision:c.offer.revision};
+    const source = {revision:film.revision,segments:[{duration:1}],async segment(){return Buffer.from('picture');},close(){}};
+    const server = await makeServer(null,{checkout:c.checkout,catalog:{
+      get:id=>id === c.offer.id && c.offer, open:async()=>source,
+      async download(){return {size:4,title:'Film',async *stream(){yield Buffer.from('film');}};}
+    }});
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    t.after(()=>new Promise(resolve=>server.close(resolve)));
+    const origin='http://127.0.0.1:'+server.address().port, prefix=origin+'/film/'+c.offer.id+'/';
+    const opened=await c.start(kind);
+    c.pay();
+    const intent=c.intents.get(c.first().payment_intent), charge=intent.latest_charge;
+    const initial=await c.status();
+    const access=await c.offer.authority.exchange(initial.receipt,film);
+    const grant=access.grant;
+    const requests=async expected=>{
+      const at=c.calls.length;
+      const headers={Authorization:'Bearer '+grant};
+      for (const path of ['play/index.m3u8','play/key','play/0.ts']) {
+        assert.equal((await fetch(prefix+path,{headers})).status,expected);
+      }
+      assert.equal((await fetch(prefix+'session',{method:'POST',headers:{Origin:origin,'Content-Type':'text/plain'},body:initial.receipt})).status,expected);
+      assert.equal(c.calls.length,at);
+      assert.equal((await fetch(prefix+'download',{headers})).status,kind==='buy'?expected:403);
+    };
+    const send=(type,id,obj,overrides={})=>c.checkout.webhook(...c.sign({...c.event(),type,id,data:{object:obj},...overrides}));
+    const refund={object:'refund',id:'re_partial',charge:charge.id,payment_intent:intent.id,amount:1,currency:'usd',status:'pending'};
+    c.refunds.push(refund);
+    charge.amount_refunded=1;
+    await send('refund.created','evt_pending',refund);
+    await requests(200);
+    refund.status='succeeded';
+    await send('refund.updated','evt_partial',refund);
+    assert.equal(c.store.viewerOrderById(opened.orderId).refundedAmount,1);
+    assert.equal((await c.status()).status,'paid');
+    await requests(200);
+    const dispute={object:'dispute',id:'du_1',charge:charge.id,payment_intent:intent.id,livemode:false,status:'needs_response'};
+    charge.disputed=true;
+    c.disputes.push(dispute);
+    await send('charge.dispute.created','evt_foreign',dispute,{account:'acct_elsewhere'});
+    assert.equal(c.checkout.accessAllowed({offer:c.offer,orderId:opened.orderId,kind}),true);
+    await send('charge.dispute.created','evt_dispute',dispute);
+    assert.deepEqual(await c.status(),{status:'suspended'});
+    await requests(403);
+    const before=c.calls.length;
+    await send('charge.dispute.created','evt_dispute',dispute);
+    assert.equal(c.calls.length,before);
+    dispute.status='won';
+    await send('charge.dispute.closed','evt_won',dispute);
+    await send('charge.dispute.updated','evt_late',{...dispute,status:'needs_response'});
+    assert.equal(c.store.viewerOrderById(opened.orderId).disputeStatus,'won');
+    await requests(200);
+    assert.equal((await c.status()).status,'paid');
+    dispute.status='lost';
+    await send('charge.dispute.closed','evt_lost',dispute);
+    await requests(403);
+    assert.deepEqual(await c.status(),{status:'revoked'});
+    c.refunds.push({...refund,id:'re_remainder',amount:opened.amount-1});
+    charge.refunded=true;
+    charge.amount_refunded=opened.amount;
+    await send('charge.refunded','evt_full',charge);
+    assert.equal(c.store.viewerOrderById(opened.orderId).revocationReason,'refund');
+    dispute.status='won';
+    await send('charge.dispute.closed','evt_resolution',dispute);
+    await requests(403);
+    assert.equal(c.store.viewerOrderById(opened.orderId).refundedAmount,opened.amount);
+  }
+});
+
+test('a refund before the completion webhook binds its seller and intent and cannot revive the order on replay',async t=>{
+  const c=await context(t), opened=await c.start();
+  c.pay();
+  const intent=c.intents.get(c.first().payment_intent), charge=intent.latest_charge;
+  charge.refunded=true;
+  charge.amount_refunded=opened.amount;
+  const refund={object:'refund',id:'re_initial',charge:charge.id,payment_intent:intent.id,amount:opened.amount,currency:'usd',status:'succeeded'};
+  c.refunds.push(refund);
+  await c.checkout.webhook(...c.sign({...c.event(),type:'refund.created',id:'evt_early',data:{object:refund}}));
+  await c.checkout.webhook(...c.sign(c.event()));
+  const row=c.store.viewerOrderById(opened.orderId);
+  assert.deepEqual([row.intentId,row.chargeId,row.refundedAmount,row.revocationReason],[intent.id,charge.id,opened.amount,'refund']);
+  assert.deepEqual(await c.status(),{status:'revoked'});
+  await assert.rejects(c.checkout.webhook(...c.sign({...c.event(),type:'refund.created',id:'evt_mismatch',data:{object:{...refund,charge:'ch_other'}}})),{statusCode:409});
+  assert.ok(!c.store.paymentEventSeen(c.offer.account,'evt_mismatch'));
+});
+
+test('rental duration is fixed with the order price and old receipts fail closed if matching rentals are ambiguous',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.now()});
+  const c=await context(t);
+  const original=c.store.film(c.offer.owner,c.offer.id);
+  c.offer.rentalHours=2;
+  c.store.setFilmSettings(c.offer.owner,c.offer.id,{prices:original.prices,rentalHours:2,previewSeconds:10});
+  const opened=await c.start();
+  assert.equal(opened.rentalHours,2);
+  c.offer.rentalHours=100;
+  c.store.setFilmSettings(c.offer.owner,c.offer.id,{prices:original.prices,rentalHours:100,previewSeconds:10});
+  assert.equal((await c.start()).rentalHours,2);
+  c.pay();
+  const paid=await c.status();
+  assert.equal(paid.rentalHours,2);
+  assert.equal(paid.expiresAt,c.purchased+2*3600);
+  const grant=await c.offer.authority.exchange(paid.receipt,{film:c.offer.scope,revision:c.offer.revision});
+  assert.equal(grant.orderId,opened.orderId);
+  t.mock.timers.tick(2*3600_000);
+  assert.equal(c.checkout.accessAllowed({offer:c.offer,orderId:opened.orderId,kind:'rent'}),false);
+  assert.deepEqual(await c.status(),{status:'expired'});
+  const legacy=await context(t,{legacy:true});
+  legacy.pay();
+  await legacy.status();
+  const request={offer:legacy.offer,kind:'rent',rentalExpiresAt:legacy.purchased+48*3600};
+  assert.equal(legacy.checkout.accessAllowed(request),true);
+  const another=viewerToken();
+  const concurrent=await legacy.checkout.start({offer:legacy.offer,token:another,origin});
+  const session=[...legacy.sessions.values()].find(row=>row.client_reference_id===concurrent.orderId);
+  Object.assign(session,{status:'complete',payment_status:'paid'});
+  const pi=legacy.intents.get(session.payment_intent), charge=pi.latest_charge;
+  charge.amount_refunded=99;
+  legacy.refunds.push({object:'refund',id:'re_clock',charge:charge.id,amount:99,status:'succeeded',currency:'usd'});
+  await legacy.checkout.status({offer:legacy.offer,token:another});
+  assert.equal(legacy.checkout.accessAllowed(request),false);
+});
+
+test('an older in-flight partial refund observation cannot undo a full refund processed by another checkout worker',async t=>{
+  const c=await context(t);
+  await c.start('buy');
+  c.pay();
+  await c.status();
+  const intent=c.intents.get(c.first().payment_intent), charge=intent.latest_charge;
+  const refund={id:'re_small',object:'refund',charge:charge.id,payment_intent:intent.id,currency:'usd',amount:1,status:'succeeded'};
+  c.refunds.push(refund);
+  charge.amount_refunded=1;
+  const reading=Promise.withResolvers(), resume=Promise.withResolvers();
+  c.behavior.delayRead=()=>{ reading.resolve(); return resume.promise; };
+  const stale=c.status();
+  await reading.promise;
+  const another=createViewerCheckout({store:c.store,env:c.env,fetchImpl:c.fetchImpl});
+  const full={...refund,id:'re_rest',amount:charge.amount-1};
+  c.refunds.push(full);
+  charge.amount_refunded=charge.amount;
+  charge.refunded=true;
+  try {
+    await another.webhook(...c.sign({...c.event(),type:'refund.created',id:'evt_last',data:{object:full}}));
+  } finally { resume.resolve(); }
+  assert.deepEqual(await stale,{status:'revoked'});
+  assert.equal(c.store.viewerOrderBySession(c.first().id).refundedAmount,charge.amount);
+});
+
+test('unpublishing expires only this seller’s open Sessions and honors the payment that completes during expiration',async t=>{
+  const c=await context(t);
+  const first=await c.start();
+  const secondToken=viewerToken();
+  const second=await c.checkout.start({offer:c.offer,token:secondToken,origin,kind:'buy'});
+  const other={...c.offer,id:'f-'+randomUUID()};
+  const bucket=c.store.film(c.offer.owner,c.offer.id).bucket;
+  c.store.saveFilm(other.owner,bucket,{id:other.id,title:other.title,revision:other.revision,prices:other.prices});
+  const unrelated=c.store.reserveViewerOrder({...other,tokenHash:await sha256Hex(viewerToken()),platform:'acct_platform',
+    origin,kind:'rent',amount:99});
+  c.store.bindViewerSession(unrelated.orderId,'cs_test_unrelated');
+  const sessionB=[...c.sessions.values()].find(s=>s.client_reference_id===second.orderId);
+  c.behavior.completeDuringExpire=sessionB.id;
+  assert.equal(c.store.setFilmPublication('Wrong filmmaker',c.offer.id,false),false);
+  assert.equal(c.store.setFilmPublication(c.offer.owner,c.offer.id,false),true);
+  assert.equal(await c.checkout.closeWithdrawnSessions(c.offer.owner,c.offer.id),0);
+  assert.equal(c.first().status,'expired');
+  assert.equal(c.store.viewerOrderById(first.orderId).status,'expired');
+  const expires=c.calls.filter(call=>call.path.endsWith('/expire'));
+  assert.equal(expires.length,2);
+  assert.ok(expires.every(call=>call.recipient===c.offer.account));
+  assert.equal(c.store.viewerOrderById(unrelated.orderId).withdrawalState,null);
+  assert.equal((await c.checkout.status({offer:c.offer,token:secondToken})).status,'paid');
+  assert.equal(c.checkout.accessAllowed({offer:c.offer,orderId:second.orderId,kind:'buy'}),true);
+  await assert.rejects(c.checkout.start({offer:c.offer,token:viewerToken(),origin}),{statusCode:409});
+  assert.equal(await c.checkout.closeWithdrawnSessions(c.offer.owner,c.offer.id),0);
+  assert.equal(c.calls.filter(call=>call.path.endsWith('/expire')).length,2);
+});
+
+test('unpublish while Stripe is creating a session never releases its client secret, even when immediately republished',async t=>{
+  const c=await context(t);
+  const created=Promise.withResolvers(), resume=Promise.withResolvers();
+  c.behavior.holdCreateResponse=()=>{created.resolve();return resume.promise;};
+  const started=c.start();
+  await created.promise;
+  c.store.setFilmPublication(c.offer.owner,c.offer.id,false);
+  assert.equal(await c.checkout.closeWithdrawnSessions(c.offer.owner,c.offer.id),0);
+  c.store.setFilmPublication(c.offer.owner,c.offer.id,true);
+  resume.resolve();
+  await assert.rejects(started,{statusCode:410});
+  assert.equal(c.first().status,'expired');
+  assert.deepEqual(await c.status(),{status:'expired'});
+});
+
+test('an unavailable Stripe expiration is queued across restart and publication never restores a withdrawn form',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.now()});
+  const c=await context(t);
+  const started=await c.start();
+  c.store.setFilmPublication(c.offer.owner,c.offer.id,false);
+  c.behavior.expireUnavailable=true;
+  assert.equal(await c.checkout.closeWithdrawnSessions(c.offer.owner,c.offer.id),1);
+  assert.equal(c.store.filmPublication(c.offer.id).published,0);
+  assert.equal(c.store.viewerOrderById(started.orderId).withdrawalState,'requested');
+  const reopened=openSetupStore(c.folder);
+  t.after(()=>reopened.close());
+  const next=createViewerCheckout({store:reopened,env:c.env,fetchImpl:c.fetchImpl});
+  c.behavior.expireUnavailable=false;
+  t.mock.timers.tick(31_000);
+  await next.closeWithdrawnSessions();
+  assert.equal(reopened.viewerOrderById(started.orderId).status,'expired');
+  assert.equal(reopened.viewerOrderById(started.orderId).withdrawalState,'closed');
+  assert.equal(c.first().status,'expired');
+  c.store.setFilmPublication(c.offer.owner,c.offer.id,true);
+  await assert.rejects(c.start(),{statusCode:410});
+  assert.ok((await c.checkout.start({offer:c.offer,token:viewerToken(),origin})).clientSecret);
+});
+
+test('the withdrawal worker never expires a Session whose provider metadata disagrees with the local order',async t=>{
+  const c=await context(t);
+  await c.start();
+  c.store.setFilmPublication(c.offer.owner,c.offer.id,false);
+  c.first().metadata.order='another-order';
+  assert.equal(await c.checkout.closeWithdrawnSessions(c.offer.owner,c.offer.id),1);
+  assert.equal(c.calls.some(call=>call.path.endsWith('/expire')),false);
+  assert.equal(c.first().status,'open');
+});
+
+test('grant renewal recovers a missed external refund while routine media checks stay local', async t => {
+  const c = await context(t);
+  const order = await c.start();
+  c.pay();
+  await c.status();
+  const request = { offer: c.offer, orderId: order.orderId, kind: 'rent' };
+  const calls = c.calls.length;
+  assert.equal(await c.checkout.verifyPlayback(request), true);
+  assert.equal(c.calls.length, calls);
+  const charge = c.intents.get(c.first().payment_intent).latest_charge;
+  charge.amount_refunded = charge.amount;
+  charge.refunded = true;
+  c.refunds.push({ id: 're_missed', object: 'refund', charge: charge.id, amount: charge.amount,
+    status: 'succeeded', currency: 'usd', payment_intent: charge.payment_intent });
+  const db = new DatabaseSync(join(c.folder, 'setup.sqlite'));
+  db.prepare('UPDATE viewer_test_orders SET verifiedAt=unixepoch()-301 WHERE orderId=?').run(order.orderId);
+  db.close();
+  assert.equal(await c.checkout.verifyPlayback(request), false);
+  assert.equal(c.checkout.accessAllowed(request), false);
 });

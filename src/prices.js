@@ -3,6 +3,14 @@ export function isPrice(cents) {
   return Number.isSafeInteger(cents) && cents >= 50 && cents <= 99999999;
 }
 
+export function rentalHours(value = 48) {
+  return Number.isInteger(value) && value >= 1 && value <= 720 ? value : null;
+}
+
+export function previewSeconds(value = 10) {
+  return Number.isInteger(value) && value >= 0 && value <= 30 ? value : null;
+}
+
 export function filmPrices(value) {
   if (value === undefined) return Object.freeze({ rent: 99, buy: null });
   if (!value || ![value.rent, value.buy].every(price => price === null || isPrice(price))) return null;

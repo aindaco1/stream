@@ -155,6 +155,25 @@ test('unpublication during remote validation prevents checkout and playback', as
   assert.equal(catalog.get(film.id), undefined);
 });
 
+test('a cached renderer cannot return a former preview after the filmmaker changes the paywall', async t => {
+  const f = await fixture(t), film = f.film(f.seller('Seller', 'acct_Seller'), 'A film');
+  let duringRender;
+  const catalog = createPublicFilms({ ...f, async openMedia(source) {
+    const info = await source.head();
+    return { revision: revisionFor(info), async preview(seconds) { duringRender?.(); return seconds; } };
+  } });
+  await catalog.publish(film.owner, film.id);
+  const media = await catalog.open(film.id);
+  assert.equal(await media.preview(), 10);
+  const set = previewSeconds => f.store.setFilmSettings(film.owner, film.id, { prices: { rent: 99, buy: null }, rentalHours: 24, previewSeconds });
+  set(4);
+  await assert.rejects(media.preview(10));
+  assert.equal(await media.preview(), 4);
+  duringRender = () => set(0);
+  await assert.rejects(media.preview(4));
+  await assert.rejects(media.preview());
+});
+
 test('only a buyer grant can stream an original range, including after new purchases are turned off', async t => {
   const f = await fixture(t), seller = f.seller('Maker', 'acct_ABC');
   const film = f.film(seller, 'My film');
