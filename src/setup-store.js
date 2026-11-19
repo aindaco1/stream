@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { stripeSetupStateForMode } from './setup-stripe.js';
 
 const token = () => randomBytes(32).toString('base64url');
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -43,7 +44,12 @@ export function openSetupStore(directory) {
     CREATE TABLE IF NOT EXISTS storage_drafts (owner TEXT PRIMARY KEY, config TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS claims (mode TEXT NOT NULL, account TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(mode, account));
     CREATE TABLE IF NOT EXISTS buckets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, config TEXT NOT NULL, sealed BLOB NOT NULL);
-    CREATE TABLE IF NOT EXISTS films (id TEXT PRIMARY KEY, owner TEXT NOT NULL, bucket_id TEXT NOT NULL, metadata TEXT NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS films (id TEXT PRIMARY KEY, owner TEXT NOT NULL, bucket_id TEXT NOT NULL, metadata TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS connected_test_orders (
+      filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, account TEXT NOT NULL, platform TEXT NOT NULL,
+      revision TEXT NOT NULL, source TEXT NOT NULL, orderId TEXT NOT NULL UNIQUE,
+      createdAt INTEGER NOT NULL, intentId TEXT UNIQUE
+    );`);
   const sql = query => db.prepare(query);
   function transaction(fn) {
     db.exec('BEGIN IMMEDIATE');
@@ -90,6 +96,28 @@ export function openSetupStore(directory) {
     claimAccount(owner, account, mode) {
       sql('INSERT OR IGNORE INTO claims VALUES(?,?,?)').run(mode, account, owner);
       return sql('SELECT owner FROM claims WHERE mode=? AND account=?').get(mode, account).owner === owner;
+    },
+    ownsTestAccount(owner, account) {
+      return Boolean(sql("SELECT 1 FROM claims WHERE mode='test' AND account=? AND owner=?").get(account, owner));
+    },
+    reserveTestOrder({ owner, filmId, account, platform, revision, source }) {
+      return transaction(() => {
+        const maker = store.maker(owner);
+        const state = maker && stripeSetupStateForMode(maker.stripe, 'test');
+        if (!store.ownsTestAccount(owner, account) || state?.accountId !== account ||
+            store.film(owner, filmId)?.revision !== revision) throw new Error('The saved film or Stripe connection changed.');
+        sql('INSERT INTO connected_test_orders (owner,filmId,account,platform,revision,source,orderId,createdAt) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(filmId) DO NOTHING')
+          .run(owner, filmId, account, platform, revision, source, randomUUID(), Date.now());
+        const order = sql('SELECT * FROM connected_test_orders WHERE filmId=?').get(filmId);
+        if (order.owner !== owner || order.account !== account || order.platform !== platform ||
+            order.revision !== revision || order.source !== source) throw new Error('This film’s test order is bound to another recipient or revision.');
+        return order;
+      });
+    },
+    recordTestIntent(orderId, intentId) {
+      const result = sql('UPDATE connected_test_orders SET intentId=? WHERE orderId=? AND (intentId IS NULL OR intentId=?)')
+        .run(intentId, orderId, intentId);
+      if (result.changes !== 1) throw new Error('The test order has a conflicting Stripe payment.');
     },
     saveStorageDraft(owner, config) {
       sql('INSERT INTO storage_drafts VALUES(?,?) ON CONFLICT(owner) DO UPDATE SET config=excluded.config').run(owner, JSON.stringify(config));

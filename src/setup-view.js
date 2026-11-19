@@ -1,8 +1,24 @@
+import { stripeBusinessCountries } from './setup-stripe.js';
 import { renderR2Card, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
 const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => entities[char]);
 const hidden = (name, value) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`;
+
+export function renderStripeCountryForm(csrf, mode) {
+  const names = new Intl.DisplayNames(['en'], { type: 'region' });
+  const countries = stripeBusinessCountries.map(code => ({ code, label: names.of(code) }));
+  countries.sort((a, b) => a.label.localeCompare(b.label, 'en'));
+  const options = countries.map(({ code, label }) => `<option value="${code}">${escapeHtml(label)}</option>`).join('');
+  return `<p>Choose the country where your business is registered. If you operate as an individual, choose the country where you do business. Stripe uses it to determine your verification and payment requirements.</p>
+    <form method="post" action="/setup/stripe/start" class="provider-form">
+      ${hidden('csrf', csrf)}${hidden('mode', mode)}
+      <label>Business country or region <select name="country" required>
+        <option value="" selected disabled>Choose a country or region</option>${options}</select></label>
+      <button type="submit">Continue to Stripe</button>
+    </form>
+    <p><a href="/setup#payments">Back to payments</a></p>`;
+}
 
 function stripeCard(stripe, csrf) {
   const ready = stripe.status === 'ready';
@@ -13,7 +29,7 @@ function stripeCard(stripe, csrf) {
     pending: 'Under review',
     unavailable: 'Needs a status check',
     action_required: 'More information needed',
-    restricted: 'More information needed'
+    restricted: 'Restricted by Stripe'
   };
   let description = stripe.mode === 'test' ? 'Use your Stripe test account to set up rental payments.' : 'Connect Stripe to accept rental payments.';
   if (!stripe.configured) description = 'You can connect storage and preview a film while Dust Wave configures Stripe.';
@@ -25,8 +41,10 @@ function stripeCard(stripe, csrf) {
   return renderStripeCard({
     title: 'Get paid with Stripe',
     status: stripe.configured ? (statuses[stripe.status] || 'Not connected') : 'Payments setup unavailable',
-    description, csrfToken: csrf, ready, existingOAuth: stripe.existingAvailable === true,
-    resume: stripe.hasAccount === true,
+    // The shared renderer uses this flag to hide onboarding controls. Status
+    // text and payment authorization retain their independent provider values.
+    description, csrfToken: csrf, ready: ready || stripe.status === 'pending', existingOAuth: stripe.existingAvailable === true,
+    resume: stripe.hasAccount === true || stripe.creating === true,
     action: stripe.configured ? '/setup/stripe/start' : undefined,
     checkAction: stripe.configured && stripe.hasAccount ? '/setup/stripe/check' : undefined
   });

@@ -1,4 +1,6 @@
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
+import { renderSetupPage } from '../src/setup-view.js';
 import assert from 'node:assert/strict';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from '../src/setup-stripe.js';
 
@@ -37,6 +39,10 @@ function fixture(options = {}) {
     switch (url.pathname) {
       case '/v2/core/accounts':
         if (provider.failCreateOnce) { provider.failCreateOnce = false; throw new Error('simulated disconnect'); }
+        if (provider.createError) return Response.json({ error: { code: provider.createError } }, { status: 400 });
+        if (!body.identity?.country && !provider.legacySucceeded) {
+          return Response.json({ error: { code: 'identity_country_required' } }, { status: 400 });
+        }
         return Response.json({ object: 'v2.core.account', id, livemode: false });
       case '/v2/core/account_links':
         return Response.json({
@@ -45,12 +51,12 @@ function fixture(options = {}) {
         });
       case '/v2/core/accounts/' + id: {
         if (provider.denied) return new Response(null, { status: 403 });
-        const { card, payouts, due } = provider.snapshot;
+        const { card, payouts, due, entries, cardDetails, payoutDetails } = provider.snapshot;
         return Response.json({
           id, object: 'v2.core.account', livemode: false, display_name: 'Projection Studio', identity: { country: provider.snapshot.country },
-          requirements: { summary: { minimum_deadline: { status: due } } },
+          requirements: { entries, summary: { minimum_deadline: { status: due } } },
           configuration: { merchant: { capabilities: {
-            card_payments: card ? { status: card } : null, stripe_balance: { payouts: { status: payouts } }
+            card_payments: card ? { status: card, status_details: cardDetails } : null, stripe_balance: { payouts: { status: payouts, status_details: payoutDetails } }
           } } }
         });
       }
@@ -74,7 +80,7 @@ test('hosted setup creates once across interruptions and collects currently due 
   const { adapter, context, provider, calls } = fixture();
   const ctx = context();
   provider.failCreateOnce = true;
-  await assert.rejects(adapter.start(ctx, 'new'), StripeSetupError);
+  await assert.rejects(adapter.start(ctx, 'new', 'US'), StripeSetupError);
   ctx.verifiedEmail = 'changed@example.test';
   const redirect = await adapter.start(ctx, 'resume');
   assert.equal(new URL(redirect.redirect).hostname, 'accounts.stripe.com');
@@ -85,10 +91,10 @@ test('hosted setup creates once across interruptions and collects currently due 
   assert.deepEqual(creates[0].body, creates[1].body);
   assert.equal(creates[0].body.contact_email, 'filmmaker@example.test');
   assert.equal(creates[0].body.dashboard, 'full');
-  assert.deepEqual(creates[0].body.configuration, { merchant: {} });
-  assert.equal(creates[0].body.identity, undefined);
+  assert.deepEqual(creates[0].body.configuration, { merchant: { capabilities: { card_payments: { requested: true } } } });
+  assert.deepEqual(creates[0].body.identity, { country: 'us' });
   const link = calls.at(-1).body.use_case.account_onboarding;
-  assert.deepEqual(link.configurations, ['merchant']);
+  assert.equal(link.configurations, undefined);
   assert.deepEqual(link.collection_options, { fields: 'currently_due' });
   const params = new URL(link.return_url).searchParams;
   assert.equal(new URL(link.refresh_url).origin, origin);
@@ -110,7 +116,7 @@ test('hosted setup creates once across interruptions and collects currently due 
 test('refresh links rotate once for their original filmmaker, account and environment', async () => {
   const f = fixture();
   const ctx = f.context();
-  await f.adapter.start(ctx, 'reuse');
+  await f.adapter.start(ctx, 'reuse', 'GB');
   const link = () => new URL(f.calls.at(-1).body.use_case.account_onboarding.refresh_url).searchParams;
   const first = link();
   await assert.rejects(f.adapter.callback({ ...ctx, creatorId: 'different' }, 'refresh', first), /setup link/);
@@ -179,7 +185,9 @@ test('an uncertain OAuth exchange, denied authorization or mismatched mode canno
 test('available paths and credentials match the operator’s configured environment', async () => {
   const noOAuth = fixture({ env: { STRIPE_CONNECT_SECRET_KEY: env.STRIPE_CONNECT_SECRET_KEY } });
   assert.ok(noOAuth.adapter.configured && !noOAuth.adapter.existingOAuth);
-  await noOAuth.adapter.start(noOAuth.context(), 'existing');
+  const fallback = noOAuth.context();
+  assert.deepEqual(await noOAuth.adapter.start(fallback, 'existing'), { countryRequired: true });
+  await noOAuth.adapter.start(fallback, 'existing', 'CA');
   assert.equal(noOAuth.calls[0].path, '/v2/core/accounts');
   const insecure = fixture({ env: { STRIPE_CONNECT_SECRET_KEY: 'sk_live_fixture', STRIPE_CONNECT_LIVE: '1' } });
   assert.equal(insecure.adapter.configured, false);
@@ -187,19 +195,19 @@ test('available paths and credentials match the operator’s configured environm
   assert.equal(insecure.calls.length, 0);
   const expired = fixture(), ctx = expired.context();
   expired.provider.failCreateOnce = true;
-  await assert.rejects(expired.adapter.start(ctx, 'new'), StripeSetupError);
+  await assert.rejects(expired.adapter.start(ctx, 'new', 'CA'), StripeSetupError);
   expired.advance(30 * 24 * 3600_000);
   await assert.rejects(expired.adapter.start(ctx, 'resume'), /reconcile/);
   assert.equal(expired.calls.length, 1);
   const targets = fixture();
   targets.provider.redirectHost = 'example.test';
-  await assert.rejects(targets.adapter.start(targets.context(), 'new'), StripeSetupError);
+  await assert.rejects(targets.adapter.start(targets.context(), 'new', 'FR'), StripeSetupError);
 });
 
-test('hosted card capability waits for the country Stripe collected and an explicit Resume', async () => {
+test('older hosted accounts missing card capability use a provider-confirmed country on explicit Resume', async () => {
   const f = fixture(), ctx = f.context();
   const changes = () => f.calls.filter(c => c.path === '/v2/core/accounts/' + id && c.body);
-  await f.adapter.start(ctx, 'new');
+  await f.adapter.start(ctx, 'new', 'GB');
   Object.assign(f.provider.snapshot, { card: null, payouts: 'active', country: null });
   await f.adapter.refresh(ctx);
   assert.equal(ctx.state.status, 'action_required');
@@ -230,4 +238,115 @@ test('the card, status and callbacks use an independent state per Stripe mode', 
   assert.equal(stripeSetupStateForMode(stored, 'live').flow, undefined);
   assert.equal(stripeSetupStateForMode({ status: 'ready', accountId: id }, 'live').accountId, undefined);
   assert.throws(() => stripeSetupStateForMode(stored, 'other'));
+});
+
+
+test('a hosted create requires an explicit supported business country and persists its immutable request', async () => {
+  const f = fixture(), ctx = f.context();
+  for (const mode of ['new', 'reuse']) assert.deepEqual(await f.adapter.start(ctx, mode), { countryRequired: true });
+  await assert.rejects(f.adapter.start(ctx, 'new', 'XX'), /Select your business country/);
+  assert.equal(f.calls.length, 0);
+  f.provider.failCreateOnce = true;
+  await assert.rejects(f.adapter.start(ctx, 'new', 'Us'), StripeSetupError);
+  const original = structuredClone(ctx.state.createRequest);
+  assert.equal(original.country, 'us');
+  await assert.rejects(f.adapter.start(ctx, 'new', 'GB'), /different country/);
+  assert.deepEqual(ctx.state.createRequest, original);
+  assert.equal(f.calls.length, 1);
+  await f.adapter.start(ctx, 'resume');
+  assert.equal(f.calls[1].idempotency, original.key);
+  assert.deepEqual(f.calls[1].body.identity, { country: 'us' });
+});
+
+test('old create checkpoints replay their exact request and only replace a definitive no-country rejection', async () => {
+  const environment = createHash('sha256').update(JSON.stringify([origin, 'test', env.STRIPE_CONNECT_SECRET_KEY])).digest('hex');
+  for (const outcome of ['rejected', 'uncertain', 'already_created']) {
+    const f = fixture(), ctx = f.context();
+    ctx.state.createRequest = { key: 'legacy-operation', started: Date.now(), environment, email: 'original@example.test' };
+    f.provider.failCreateOnce = outcome === 'uncertain';
+    f.provider.legacySucceeded = outcome === 'already_created';
+    const work = f.adapter.start(ctx, 'new', 'CA');
+    if (outcome === 'uncertain') {
+      await assert.rejects(work, StripeSetupError);
+      assert.equal(ctx.state.createRequest.key, 'legacy-operation');
+    } else {
+      assert.ok((await work).redirect);
+    }
+    const creates = f.calls.filter(c => c.path === '/v2/core/accounts');
+    assert.equal(creates[0].idempotency, 'legacy-operation');
+    assert.equal(creates[0].body.contact_email, 'original@example.test');
+    assert.deepEqual(creates[0].body.configuration, { merchant: {} });
+    assert.equal(creates[0].body.identity, undefined);
+    assert.equal(creates.length, outcome === 'rejected' ? 2 : 1);
+    if (outcome === 'rejected') {
+      assert.notEqual(creates[1].idempotency, creates[0].idempotency);
+      assert.deepEqual(creates[1].body.identity, { country: 'ca' });
+    }
+  }
+});
+
+test('Stripe country-specific card restrictions leave a retryable workspace', async () => {
+  const f = fixture(), ctx = f.context();
+  f.provider.createError = 'capability_not_available_in_country';
+  await assert.rejects(f.adapter.start(ctx, 'new', 'ID'), error => error.statusCode === 422);
+  assert.equal(ctx.state.accountId, undefined);
+  assert.equal(ctx.state.createRequest, undefined);
+  f.provider.createError = null;
+  assert.deepEqual(await f.adapter.start(ctx, 'new'), { countryRequired: true });
+  await f.adapter.start(ctx, 'new', 'GB');
+  assert.notEqual(f.calls[0].idempotency, f.calls[1].idempotency);
+});
+
+
+test('mixed required capabilities surface the next action before a pending review', async () => {
+  const f = fixture(), ctx = f.context();
+  await f.adapter.start(ctx, 'new', 'US');
+  for (const [snapshot, expected, reason] of [
+    [{ card: 'unsupported', payouts: 'pending' }, 'restricted', /does not support card payments/],
+    [{ card: 'pending', payouts: 'rejected' }, 'restricted', /rejected payouts/],
+    [{ card: 'pending', payouts: 'restricted', payoutDetails: [{ resolution: 'contact_stripe' }] }, 'restricted', /Contact Stripe support about payouts/],
+    [{ card: 'restricted', cardDetails: [{ resolution: 'provide_info' }], payouts: 'pending' }, 'action_required'],
+    [{ card: 'restricted', cardDetails: [{ resolution: 'no_resolution' }], payouts: 'pending' }, 'pending'],
+    [{ card: 'active', payouts: 'active', due: 'currently_due',
+      entries: [{ awaiting_action_from: 'stripe', minimum_deadline: { status: 'currently_due' } }] }, 'pending'],
+    [{ card: 'active', payouts: 'active', due: 'past_due',
+      entries: [{ awaiting_action_from: 'user', minimum_deadline: { status: 'past_due' } }] }, 'action_required'],
+    [{ card: 'active', payouts: 'active' }, 'ready']
+  ]) {
+    f.provider.snapshot = snapshot;
+    assert.deepEqual(await f.adapter.refresh(ctx), { status: expected });
+    if (reason) assert.match(ctx.state.reason, reason);
+    else assert.equal(ctx.state.reason, undefined);
+  }
+});
+
+
+test('post-submit Stripe review overrides a stale past-due capability instruction only for Stripe-owned requirements', async () => {
+  const f = fixture(), ctx = f.context();
+  await f.adapter.start(ctx, 'new', 'US');
+  const entry = (deadline, actor, errors = []) => ({ minimum_deadline: { status: deadline }, awaiting_action_from: actor, errors });
+  const submitted = { card: 'restricted', payouts: 'pending', due: 'past_due',
+    cardDetails: [{ code: 'requirements_past_due', resolution: 'provide_info' }],
+    payoutDetails: [{ code: 'requirements_pending_verification', resolution: 'no_resolution' }],
+    entries: [entry('past_due', 'stripe'), entry('currently_due', 'stripe'), entry('eventually_due', 'user')] };
+  f.provider.snapshot = submitted;
+  assert.deepEqual(await f.adapter.refresh(ctx), { status: 'pending' });
+  assert.equal(ctx.state.chargesEnabled, false);
+  assert.equal(ctx.state.payoutsEnabled, false);
+  const stripe = { ...ctx.state, configured: true, hasAccount: true };
+  const html = renderSetupPage({ csrf: 'token', stripe });
+  assert.match(html, /Under review/);
+  assert.match(html, /Check Stripe status/);
+  assert.doesNotMatch(html, /Continue on Stripe to review|Continue Stripe setup|action="\/setup\/stripe\/start"/);
+  for (const [update, status] of [
+    [{ entries: [entry('past_due', 'stripe'), entry('currently_due', 'user')] }, 'action_required'],
+    [{ entries: [entry('past_due', 'stripe', [{ code: 'document_invalid' }])] }, 'action_required'],
+    [{ entries: undefined }, 'action_required'],
+    [{ entries: [entry('currently_due', 'stripe')] }, 'action_required'],
+    [{ cardDetails: [{ code: 'restricted_other', resolution: 'provide_info' }] }, 'action_required'],
+    [{ card: 'rejected' }, 'restricted']
+  ]) {
+    f.provider.snapshot = { ...submitted, ...update };
+    assert.equal((await f.adapter.refresh(ctx)).status, status);
+  }
 });

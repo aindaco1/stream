@@ -6,13 +6,15 @@ import { parseEnv } from 'node:util';
 import { randomToken } from '@dustwave/worker-core/crypto';
 import { createStripeClient, StripeApiError } from '@dustwave/worker-core/stripe';
 import { createRentalAuthority, rentalScope } from '../src/rental.js';
+import { connectedTestRental } from '../src/connected-test-rental.js';
+import { openSetupStore } from '../src/setup-store.js';
 
 const directory = operatorDirectory();
 
 // Publish complete private files. Two initializers adopt the same key and order.
-function writePrivate(name, value, initial = false) {
-  const destination = join(directory, name);
-  const temporary = join(directory, '.' + randomUUID());
+function writePrivate(name, value, initial = false, folder = directory) {
+  const destination = join(folder, name);
+  const temporary = join(folder, '.' + randomUUID());
   writeFileSync(temporary, value, { mode: 0o600, flag: 'wx' });
   try {
     if (!initial) return renameSync(temporary, destination);
@@ -29,13 +31,30 @@ function writePrivate(name, value, initial = false) {
 async function main() {
   const args = process.argv.slice(2);
   const initialize = args.length === 1 && args[0] === '--init';
-  if (!initialize && args.length !== 2) throw new Error('Use rental:test -- --init or rental:test -- FILM REVISION.');
+  const connected = args[0] === '--connected';
+  if (connected ? args.length !== 3 : !initialize && (args.length !== 2 || args[0].startsWith('--'))) {
+    throw new Error('Use rental:test -- --init, rental:test -- FILM REVISION or rental:test -- --connected OWNER SAVED_FILM_ID.');
+  }
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   writePrivate('rental.env', 'STREAM_RENTAL_SECRET=' + randomToken(32) + '\n', true);
   const key = parseEnv(readFileSync(join(directory, 'rental.env'), 'utf8')).STREAM_RENTAL_SECRET;
   const authority = createRentalAuthority(key);
   if (initialize) {
     console.log('Private rental signing key ready.');
+    return;
+  }
+
+  if (connected) {
+    const [, owner, filmId] = args;
+    const store = openSetupStore(join(directory, 'filmmakers'));
+    try {
+      const { receipt, evidence } = await connectedTestRental({ owner, filmId, store, env: process.env, signingKey: key });
+      const folder = join(directory, 'connected-test-rentals', filmId);
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+      writePrivate('receipt.txt', receipt + '\n', false, folder);
+      writePrivate('evidence.json', JSON.stringify(evidence, null, 2) + '\n', false, folder);
+      console.log(JSON.stringify(evidence));
+    } finally { store.close(); }
     return;
   }
 

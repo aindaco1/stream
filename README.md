@@ -12,7 +12,7 @@ npm run invite -- "Filmmaker name"
 
 The filmmaker opens the link and selects **Open filmmaker setup**. It expires after 30 minutes and can be used once. Their signed-in session lasts 14 days. For a returning filmmaker, issue another invite with the same unique name to reopen their workspace. The operator can use a private handoff to share the invitation. The default local link works on the Mac running Stream.
 
-1. **Get paid with Stripe.** New filmmakers continue to Stripe for identity and payout details. Existing users can connect an eligible Standard business when Dust Wave has enabled that option. Otherwise Stripe can reuse eligible business details under their existing login for a new connected account. Return to Stream to see what is ready or needs attention. Both payment and payout capabilities must be active. You can proceed with storage while Stripe reviews your information.
+1. **Get paid with Stripe.** To create a connected account, select your business country in Stream, then continue to Stripe for identity and payout details. You can sign in to Stripe to reuse eligible business details. If Dust Wave offers **Connect my Stripe account**, select an eligible existing Standard business directly on Stripe. Return to Stream to see what is ready or needs attention. Both payment and payout capabilities must be active. You can proceed with storage while Stripe reviews your information.
 2. **Store your film on Cloudflare.** Sign in or create a Cloudflare account. Activate R2 if prompted, select or create a dedicated private bucket, and follow the card to create a bucket-scoped **Object Read only** credential. The card checks access with a signed bucket HEAD that also works on an empty bucket. The filmmaker confirms the token scope and the bucket’s public-access settings in Cloudflare. A successful read alone cannot establish either setting. You can replace a credential and retry a failed connection.
 3. **Add a film.** Confirm the rights statement for this film to unlock the upload guide. Upload the file under **Objects** in your own Cloudflare dashboard or choose a file already there. Copy its exact object key, including folders. Enter a title, then choose **Check film and create preview**. Stream checks the original using conditional range reads, validates the supported MP4 format, and renders the opening ten seconds. **Watch private preview** opens the result. Each new film has its own rights confirmation and private preview. **Save draft** remembers an unfinished title and object key.
 
@@ -31,7 +31,7 @@ Stream runs as one Node server bound to loopback. For a hosted pilot, terminate 
 
 Configure the platform for Accounts v2 merchant onboarding with a full Stripe Dashboard, direct charges and Stripe-managed fees and losses. Set Connect branding, enable networked onboarding to reuse eligible details, and configure collection of external payout details. The card stays available for explanation when the operator has not configured Connect. Storage and private previews work independently. [Stripe-hosted onboarding](https://docs.stripe.com/connect/hosted-onboarding?accounts-namespace=v2) · [Networked onboarding](https://docs.stripe.com/connect/networked-onboarding) · [Existing Standard accounts](https://docs.stripe.com/connect/oauth-standard-accounts)
 
-The setup cards come from Admin Shell **0.16.0** in the pinned Dust Wave Platform submodule. Stream owns the filmmaker sessions, rights records, provider calls and media checks. To run the form rehearsal, install Chromium with `npx playwright install chromium` and run `npm run check:setup`. It uses simulated providers, actual browser forms and the private preview renderer. [Cloudflare R2 credentials](https://developers.cloudflare.com/r2/api/tokens/) · [Cloudflare uploads](https://developers.cloudflare.com/r2/objects/upload-objects/)
+The setup cards come from Admin Shell **0.16.0** in the pinned Dust Wave Platform submodule. Stream owns the filmmaker sessions, rights records, provider calls and media checks. To run the form rehearsal, install Chromium with `npx playwright install chromium` and run `npm run check:setup`. This browser rehearsal uses simulated provider responses, real forms and the private preview renderer. The sandbox sale commands below contact Stripe and create test payments. [Cloudflare R2 credentials](https://developers.cloudflare.com/r2/api/tokens/) · [Cloudflare uploads](https://developers.cloudflare.com/r2/objects/upload-objects/)
 
 ## Try the preview
 
@@ -90,9 +90,21 @@ npm start
 
 The feature operator gets a separate signing key, test order and receipt. Keep the order journal for retries. After a receipt expires, archive that filmmaker’s completed `test-order.json` privately before starting a fresh sandbox purchase. The signing key and R2 object can be reused. The short and feature routes are `/embed/clock` and `/embed/feature`. Each has its own offer and permission scope. The public embedding page contains only the public iframe URLs. Supply the rental receipt to the buyer's individual player.
 
+## Verify a filmmaker’s sandbox sale
+
+Save a film through filmmaker setup and connect that filmmaker’s Stripe sandbox account. Supply the platform sandbox key as `STRIPE_CONNECT_SECRET_KEY` using your local secret manager. Use the same operator directory as setup. Copy the saved film ID from its private preview URL.
+
+```sh
+npm run rental:test -- --connected "Filmmaker name" f-SAVED-FILM-UUID
+```
+
+The command checks the original’s recorded revision, rights and seller ownership, then refreshes Stripe’s card and payout status. It charges USD 0.99 directly to the connected sandbox account using Stripe’s test Visa. It retrieves the saved PaymentIntent in that account, reconciles the charge and its processing fees against the connected balance transaction, and verifies a 48-hour receipt for the saved film. The accounting evidence includes total fees and a breakdown of Stripe fees, pass-through fees, and taxes when present. This rehearsal requires a USD settlement balance and itemized fee details. The balance status shows whether funds are pending or available in the connected Stripe sandbox balance. During the 48-hour rental, rerun the same command to refresh that evidence. [Stripe direct charges](https://docs.stripe.com/connect/direct-charges) · [Balance transaction details](https://docs.stripe.com/expand/use-cases)
+
+One sandbox order is reserved for each saved film. Retries and concurrent runs share that order. The operator directory contains the private receipt and redacted accounting evidence in `connected-test-rentals/FILM_ID/receipt.txt` and `evidence.json`. The receipt is validated inside the operator command. The filmmaker’s setup preview remains the available web route for this film.
+
 ## Exercise a paid rental
 
-Use the operator CLI with a Stripe sandbox secret supplied through your local secret manager as `STRIPE_TEST_SECRET_KEY`. The player needs only its signing and read-only storage credentials. The CLI makes a one-time USD 0.99 sandbox payment with Stripe’s test payment method. For the same operator directory, a retry retrieves or resumes the same order. [Stripe testing guide](https://docs.stripe.com/testing)
+Use the operator CLI with a Stripe sandbox secret supplied through your local secret manager as `STRIPE_TEST_SECRET_KEY`. The player needs only its signing and read-only storage credentials. This demo charges USD 0.99 in the sandbox account that owns the supplied key. To test a filmmaker’s connected balance, use the saved-film command above. For the same operator directory, a retry retrieves or resumes the same order. [Stripe testing guide](https://docs.stripe.com/testing)
 
 ```sh
 npm run inspect
