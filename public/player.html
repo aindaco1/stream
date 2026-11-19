@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{title}} · Dust Wave Stream</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <main aria-labelledby="film-title">
+    <video controls playsinline preload="none" aria-label="{{title}}"></video>
+    <div class="details">
+      <div><h1 id="film-title">{{title}}</h1><p>Dust Wave Stream · Playback prototype</p></div>
+      <button type="button" id="play">Play 10-second preview</button>
+    </div>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>
