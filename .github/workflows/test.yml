@@ -17,8 +17,11 @@ jobs:
       - name: Install FFmpeg if needed
         run: |
           if ! command -v ffmpeg >/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install --no-install-recommends -y ffmpeg
+            apt=(sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+            if ! "${apt[@]}" install --no-install-recommends -y ffmpeg; then
+              "${apt[@]}" update -qq
+              "${apt[@]}" install --no-install-recommends -y ffmpeg
+            fi
           fi
       - run: npm ci --ignore-scripts
       - run: npm test
