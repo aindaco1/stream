@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { operatorDirectory } from './operator.js';
 import { openFilm } from './media.js';
+import { filmPrices, priceFromInput } from './prices.js';
 import { checkR2Bucket, createR2Source } from './source.js';
 import { openSetupStore } from './setup-store.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
@@ -43,6 +44,12 @@ async function readForm(req) {
   const fields = new URLSearchParams(Buffer.concat(chunks).toString());
   if ([...fields.keys()].length !== new Set(fields.keys()).size) throw new SetupError('Submit one value for each field.');
   return Object.fromEntries(fields);
+}
+
+function priceForm(data) {
+  const prices = filmPrices({ rent: priceFromInput(data.rentPrice), buy: priceFromInput(data.buyPrice) });
+  if (!prices) throw new SetupError('Enter USD prices from $0.50 to $999,999.99 with up to two decimal places, or leave an option blank.', 422);
+  return prices;
 }
 
 function bucketForm(data) {
@@ -96,8 +103,8 @@ export async function createSetup({
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
         r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
         rights: { accepted: Boolean(draft.rights), statement: rightsStatement }, draft: { ...draft, ...store.storageDraft(session.owner) },
-        films: store.films(session.owner).map(row => ({ title: row.title, previewPath: '/setup/preview/' + row.id })),
-        film: film && { title: film.title, duration: film.duration, previewPath: '/setup/preview/' + draft.id }, ...feedback
+        films: store.films(session.owner).map(row => ({ id: row.id, title: row.title, prices: row.prices, previewPath: '/setup/preview/' + row.id })),
+        film: film && { id: film.id, title: film.title, prices: film.prices, duration: film.duration, previewPath: '/setup/preview/' + draft.id }, ...feedback
       }));
     };
     if (get && path === '/setup/style.css') return send(200, 'text/css', style, commonHeaders);
@@ -160,6 +167,10 @@ export async function createSetup({
         store.saveBucket(owner, config);
         return redirect('/setup#storage');
       }
+      if (path === '/setup/film/prices') {
+        if (!store.setFilmPrices(owner, data.filmId || '', priceForm(data))) throw new SetupError('Saved film unavailable.', 404);
+        return redirect('/setup#film');
+      }
       if (!['/setup/rights', '/setup/film', '/setup/next'].includes(path)) return reject(404, 'Page unavailable.');
       if (data.draftId !== draft.id) throw new SetupError('This tab has an older draft. Reload setup to continue.', 409);
       if (!r2) throw new SetupError('Connect your R2 bucket first.');
@@ -182,12 +193,15 @@ export async function createSetup({
             /[\u0000-\u001f\u007f]/u.test(title + objectKey) || (objectKey && !saving && objectKey.split('/').some(part => !part || part === '.' || part === '..'))) {
           throw new SetupError('Enter a film title and the exact object key from your bucket, including any folder.');
         }
-        store.saveDraft(owner, { ...draft, title, objectKey });
+        // Previously saved drafts and older forms retain their rental default.
+        const prices = data.buyPrice === undefined && data.rentPrice === undefined ? filmPrices(draft.prices) : priceForm(data);
+        if (!prices) throw new SetupError('Check the film prices.', 422);
+        store.saveDraft(owner, { ...draft, title, objectKey, prices });
         if (saving) return display(200, { notice: 'Draft saved. You can return to this film any time.' });
         let film;
         try { film = await inspect(owner, r2, objectKey); }
         catch { throw new SetupError('Stream could not make a preview. Check the exact object key, read access and supported MP4 settings below. You can retry this film.', 422); }
-        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, rights: draft.rights, duration: film.duration, revision: film.revision });
+        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, prices, rights: draft.rights, duration: film.duration, revision: film.revision });
       }
       return redirect('/setup#film');
     } catch (e) {

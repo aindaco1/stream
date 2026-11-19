@@ -1,6 +1,7 @@
 import { openFilm, revisionFor } from './media.js';
 import { savedFilmScope } from './rental.js';
-import { createR2Source } from './source.js';
+import { BLOCK_SIZE, createR2Source } from './source.js';
+import { filmPrices } from './prices.js';
 import { stripeSetupStateForMode } from './setup-stripe.js';
 
 const filmId = /^f-[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -49,6 +50,8 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
         typeof film.rights?.version !== 'string' || !film.rights.version.trim() ||
         typeof film.rights.statement !== 'string' || !film.rights.statement.trim() ||
         !Number.isFinite(Date.parse(film.rights.acceptedAt)) || Date.parse(film.rights.acceptedAt) > Date.now()) return;
+    const prices = filmPrices(film.prices);
+    if (!prices) return;
     const maker = store.maker(owner);
     if (!maker) return;
     const state = stripeSetupStateForMode(maker.stripe, 'test');
@@ -57,7 +60,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
         state.status !== 'ready' || state.chargesEnabled !== true || state.payoutsEnabled !== true ||
         !accountId.test(account) || account === platformAccount || !store.ownsTestAccount(owner, account)) return;
     const spec = Object.freeze({ id, title: film.title, owner, account, scope: savedFilmScope(owner, id),
-      revision: film.revision, authority });
+      revision: film.revision, authority, prices });
     return { spec, bucket: film.bucket, objectKey: film.objectKey };
   }
 
@@ -91,7 +94,17 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
         reader = source;
         return head;
       },
-      read(head, start, end) { return reader.read(head, start, end); }
+      read(head, start, end) { return reader.read(head, start, end); },
+      async *stream(head, start, end, signal) {
+        if (reader.stream) {
+          yield* reader.stream(head, start, end, signal);
+          return;
+        }
+        for (let offset = start; offset < end; offset += BLOCK_SIZE) {
+          signal?.throwIfAborted();
+          yield await reader.read(head, offset, Math.min(end, offset + BLOCK_SIZE));
+        }
+      }
     };
   }
 
@@ -111,6 +124,34 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
         await privateSource(entry).head();
         return current(entry).spec;
       } catch { throw unavailable(); }
+    },
+    async download(id, grant) {
+      const entry = requireRecord(id);
+      const { orderId } = await authority.verifyDownloadGrant(grant, { film: entry.spec.scope, revision: entry.spec.revision });
+      const source = privateSource(entry);
+      const head = await source.head();
+      // The caller rechecks this purchase order before beginning HTTP delivery.
+      return {
+        size: head.size, title: entry.spec.title, revision: entry.spec.revision, orderId,
+        async *stream(start = 0, end = head.size, signal) {
+          if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > head.size) {
+            throw new Error('Invalid download range.');
+          }
+          current(entry);
+          let bytes = 0;
+          let recheck = 0;
+          for await (const chunk of source.stream(head, start, end, signal)) {
+            if (bytes >= recheck) {
+              current(entry);
+              recheck = bytes + 4 * 1024 * 1024;
+            }
+            bytes += chunk.byteLength;
+            if (bytes > end - start) throw unavailable();
+            yield chunk;
+          }
+          if (bytes !== end - start) throw unavailable();
+        }
+      };
     },
     async open(id) {
       let media;

@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { createCipheriv } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
 import { openFilm } from './media.js';
 import { createSetup } from './setup.js';
@@ -65,6 +66,25 @@ async function body(req, limit) {
   return Buffer.concat(chunks);
 }
 
+// Only published player pages load Stripe. Each filmmaker's payment UI mounts
+// inside that film's frame. Card details are collected by Stripe.
+const stripePlayerHeaders = {
+  'Referrer-Policy': 'strict-origin',
+  'Content-Security-Policy': [
+    "default-src 'none'", "script-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com",
+    "style-src 'self'", "connect-src 'self' https://api.stripe.com https://checkout.stripe.com",
+    "frame-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com https://hooks.stripe.com",
+    "img-src 'self' data: https://*.stripe.com", "media-src 'self' blob:", "worker-src 'none'",
+    "frame-ancestors *", "base-uri 'none'", "form-action 'self'"
+  ].join('; ')
+};
+
+function attachmentName(title) {
+  const name = String(title).replace(/[\p{C}/\\]/gu, '').trim().slice(0, 150).toWellFormed() || 'film';
+  const encoded = encodeURIComponent(name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16));
+  return "attachment; filename=\"film.mp4\"; filename*=UTF-8''" + encoded + '.mp4';
+}
+
 const checkoutHeaders = {
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
   'X-Frame-Options': 'DENY',
@@ -95,8 +115,8 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
     [path, { type, data: await readFile(new URL(file, import.meta.url)) }])));
   const server = createServer(async (req, res) => {
     const send = (status, type, data, extra) => reply(req, res, status, type, data, extra);
-    const fail = status => send(status, 'text/plain', { 400: 'Invalid request.', 403: 'Rental access unavailable.',
-      404: 'Unavailable.', 405: 'Method unavailable.', 409: 'Rental unavailable.', 410: 'Rental expired.',
+    const fail = status => send(status, 'text/plain', { 400: 'Invalid request.', 403: 'Film access unavailable.',
+      404: 'Unavailable.', 405: 'Method unavailable.', 409: 'Offer unavailable.', 410: 'Order expired.',
       413: 'Request too large.', 429: 'Try again later.', 503: 'Film temporarily unavailable.' }[status] || 'Unavailable.');
     try {
       const host = req.headers.host || '';
@@ -124,7 +144,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       if (catalog && read && (path === '/screening' || path === '/')) {
         const embeds = catalog.list().map(({ id, title }) =>
           '<iframe src="/embed/' + encodeURIComponent(id) + '" title="' + escapeHtml(title) +
-          '" allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe>').join('\n');
+          '" allow="autoplay; fullscreen; encrypted-media; payment" allowfullscreen></iframe>').join('\n');
         return send(200, 'text/html; charset=utf-8', screening.replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
           { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
       }
@@ -150,25 +170,60 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       if (read && (embed || path === '/')) {
         const spec = lookup(embed?.[1] || 'clock');
         if (!spec) return fail(404);
-        return send(200, 'text/html; charset=utf-8', template.replaceAll('{{checkout}}', String(Boolean(checkout && spec.id)))
-          .replaceAll('{{title}}', () => escapeHtml(spec.title)));
+        const payable = Boolean(checkout && spec.id);
+        const html = template.replaceAll('{{checkout}}', String(payable))
+          .replaceAll('{{rent}}', String(spec.prices?.rent ?? ''))
+          .replaceAll('{{buy}}', String(spec.prices?.buy ?? ''))
+          .replaceAll('{{title}}', () => escapeHtml(spec.title));
+        return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
-      const route = /^\/film\/([a-z0-9-]+)\/(checkout|order|session|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
+      const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|order|session|download|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
       if (!route) return fail(404);
       const [, id, action, asset] = route;
       const spec = lookup(id);
       if (!spec) return fail(404);
       const grant = /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(req.headers.authorization || '')?.[1];
       if (asset && !grant) return fail(403);
-      if (['checkout', 'order', 'session'].includes(action)) {
+      if (action === 'download') {
+        if (!checkout || !spec.id) return fail(404);
+        let downloadGrant = grant;
+        const scope = { film: spec.scope, revision: spec.revision };
+        if (req.method === 'POST') {
+          if (req.headers.origin !== origin || req.headers['content-type']?.split(';')[0] !== 'application/x-www-form-urlencoded') return fail(403);
+          const form = new URLSearchParams((await body(req, 8192)).toString('utf8'));
+          try { downloadGrant = (await spec.authority.exchange(form.get('receipt'), scope)).grant; }
+          catch { return fail(403); }
+        } else if (!read) return fail(405);
+        if (!downloadGrant) return fail(403);
+        let purchase;
+        try { purchase = await spec.authority.verifyDownloadGrant(downloadGrant, scope); }
+        catch { return fail(403); }
+        if (!await checkout.verifyPurchase({ offer: spec, orderId: purchase.orderId })) return fail(403);
+        const file = await catalog.download(id, downloadGrant);
+        const range = req.headers.range && rangeFor(req.headers.range, file.size);
+        if (req.headers.range && !range) return send(416, 'text/plain', '', { 'Content-Range': 'bytes */' + file.size });
+        const [from, to] = range || [0, file.size - 1];
+        res.writeHead(range ? 206 : 200, { ...headers, 'Content-Type': 'video/mp4',
+          'Content-Disposition': attachmentName(file.title), 'Accept-Ranges': 'bytes',
+          ...(range && { 'Content-Range': 'bytes ' + from + '-' + to + '/' + file.size }),
+          'Content-Length': to - from + 1 });
+        if (req.method === 'HEAD') return res.end();
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        res.once('close', cancel);
+        try { await pipeline(file.stream(from, to + 1, controller.signal), res, { signal: controller.signal }); }
+        finally { res.off('close', cancel); }
+        return;
+      }
+      if (['checkout', 'buy', 'order', 'session'].includes(action)) {
         if (action !== 'session' && (!checkout || !spec.id)) return fail(404);
         if (req.method !== 'POST') return fail(405);
         if (req.headers.origin !== origin || req.headers['content-type'] !== 'text/plain') return fail(403);
         const token = (await body(req, action === 'session' ? 4096 : 64)).toString('utf8');
         if (action !== 'session') {
           if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return fail(400);
-          const result = action === 'checkout' ? await checkout.start({ offer: await catalog.verify(id), token, origin }) :
-            await checkout.status({ offer: spec, token });
+          const result = action === 'order' ? await checkout.status({ offer: spec, token }) :
+            await checkout.start({ offer: await catalog.verify(id), kind: action === 'buy' ? 'buy' : 'rent', token, origin });
           return send(200, 'application/json', JSON.stringify(result), checkoutHeaders);
         }
         const { film, authority } = await connection(spec);

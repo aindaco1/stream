@@ -44,3 +44,24 @@ a:focus-visible { outline: 3px solid #f0ba73; outline-offset: 3px; }
   main:has(#purchase:not([hidden])) .details > div { flex: 1; min-width: 0; }
   main:has(#purchase:not([hidden])) h1 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
+
+#payment, #ownership { margin: .5rem 1.25rem 1rem; }
+#payment header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
+#payment h2 { margin: 0; font-size: 1.15rem; }
+#stripe-checkout { min-width: 0; }
+#ownership { display: flex; align-items: start; flex-wrap: wrap; gap: .75rem 1rem; }
+#ownership details { flex: 1 1 16rem; }
+#ownership summary { cursor: pointer; padding: .5rem 0; color: #f2d6ad; }
+#ownership summary:focus-visible { outline: 3px solid #f0ba73; }
+#ownership label { display: block; font-size: .875rem; }
+#access-link { min-width: 0; width: min(100%, 24rem); padding: .65rem; font: inherit; }
+body.paying main { display: flex; flex-direction: column; height: auto; }
+body.paying .details, body.paying #purchase .actions > :is(#buy, #rent), body.paying #terms, body.paying video { display: none; }
+body.paying #payment { order: -1; }
+@media (max-height: 400px) {
+  main:has(#ownership:not([hidden])) { display: block; height: auto; }
+  main:has(#ownership:not([hidden])) video { height: 65dvh; }
+  body[data-access] main:has(:is(#purchase, #ownership):not([hidden])) video { height: max(60dvh, calc(100dvh - 3.25rem)); }
+  #payment, #ownership { margin: .35rem .6rem .75rem; }
+  #terms { font-size: .8rem; line-height: 1.2; }
+}

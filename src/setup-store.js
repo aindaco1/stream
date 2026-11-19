@@ -3,6 +3,7 @@ import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { stripeSetupStateForMode } from './setup-stripe.js';
+import { filmPrices, isPrice } from './prices.js';
 
 const token = () => randomBytes(32).toString('base64url');
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -67,6 +68,13 @@ export function openSetupStore(directory) {
       return result;
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
+  // Orders created before embedded Checkout are $0.99 hosted rentals.
+  transaction(() => {
+    const columns = new Set(sql('PRAGMA table_info(viewer_test_orders)').all().map(row => row.name));
+    if (!columns.has('kind')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'rent'");
+    if (!columns.has('amount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN amount INTEGER NOT NULL DEFAULT 99');
+    if (!columns.has('uiMode')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN uiMode TEXT NOT NULL DEFAULT 'hosted'");
+  });
   const store = {
     invite(owner) {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9 ._@+-]{0,95}$/.test(owner)) throw new Error('Use a short, unique filmmaker name.');
@@ -127,14 +135,19 @@ export function openSetupStore(directory) {
         .run(intentId, orderId, intentId);
       if (result.changes !== 1) throw new Error('The test order has a conflicting Stripe payment.');
     },
-    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin }) {
+    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount }) {
       return transaction(() => {
         const existing = store.viewerOrderForToken(tokenHash);
         if (existing) return existing;
         const maker = store.maker(owner);
         const seller = maker && stripeSetupStateForMode(maker.stripe, 'test');
-        if (!store.ownsTestAccount(owner, account) || seller?.accountId !== account ||
-            store.film(owner, id)?.revision !== revision) throw new Error('The film offer changed.');
+        const film = store.film(owner, id);
+        if (!store.ownsTestAccount(owner, account) || seller?.accountId !== account || film?.revision !== revision ||
+            !isPrice(amount) || filmPrices(film.prices)?.[kind] !== amount) {
+          const error = new Error('The film offer changed.');
+          error.code = 'viewer_offer_changed';
+          throw error;
+        }
         const now = Date.now();
         const { n } = sql('SELECT count(*) AS n FROM viewer_test_orders WHERE filmId=? AND createdAt>?').get(id, now - 3600_000);
         if (n >= 30) {
@@ -142,8 +155,8 @@ export function openSetupStore(directory) {
           error.code = 'viewer_rate_limit';
           throw error;
         }
-        sql('INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now);
+        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,uiMode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'embedded_page')")
+          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount);
         return store.viewerOrderForToken(tokenHash);
       });
     },
@@ -161,8 +174,9 @@ export function openSetupStore(directory) {
     },
     expireViewerOrder(orderId) { sql("UPDATE viewer_test_orders SET status='expired' WHERE orderId=?").run(orderId); },
     fulfillViewerOrder(orderId, sessionId, intentId, paidAt) {
-      return sql("UPDATE viewer_test_orders SET status='paid', intentId=?, paidAt=? WHERE orderId=? AND sessionId=? AND status!='expired' AND (intentId IS NULL OR (intentId=? AND paidAt=?))")
-        .run(intentId, paidAt, orderId, sessionId, intentId, paidAt).changes === 1;
+      // The webhook and viewer may confirm the same payment on different processes.
+      return sql("UPDATE viewer_test_orders SET status='paid', intentId=?, paidAt=COALESCE(paidAt,?) WHERE orderId=? AND sessionId=? AND status!='expired' AND (intentId IS NULL OR intentId=?) RETURNING paidAt")
+        .get(intentId, paidAt, orderId, sessionId, intentId)?.paidAt;
     },
     noteViewerWebhook(orderId, eventId) {
       sql('UPDATE viewer_test_orders SET webhookEventId=COALESCE(webhookEventId,?),webhookAt=COALESCE(webhookAt,?) WHERE orderId=?')
@@ -206,8 +220,13 @@ export function openSetupStore(directory) {
     saveFilm(owner, bucket, film) {
       sql('INSERT INTO films VALUES(?,?,?,?)').run(film.id, owner, connectionId(owner, bucket), JSON.stringify(film));
     },
+    setFilmPrices(owner, id, prices) {
+      return sql("UPDATE films SET metadata=json_set(metadata, '$.prices', json(?)) WHERE owner=? AND id=?")
+        .run(JSON.stringify(prices), owner, id).changes === 1;
+    },
     films(owner) {
-      return sql("SELECT id, json_extract(metadata, '$.title') AS title FROM films WHERE owner=? ORDER BY rowid DESC").all(owner);
+      const rows = sql("SELECT id, json_extract(metadata, '$.title') AS title, json_extract(metadata, '$.prices') AS prices FROM films WHERE owner=? ORDER BY rowid DESC").all(owner);
+      return rows.map(({ id, title, prices }) => ({ id, title, prices: prices === null ? undefined : JSON.parse(prices) }));
     },
     film(owner, id) {
       const row = sql('SELECT f.metadata, b.config FROM films f JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner WHERE f.id=? AND f.owner=?').get(id, owner);

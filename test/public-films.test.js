@@ -154,3 +154,64 @@ test('unpublication during remote validation prevents checkout and playback', as
   await assert.rejects(catalog.verify(film.id), /Film unavailable/);
   assert.equal(catalog.get(film.id), undefined);
 });
+
+test('only a buyer grant can stream an original range, including after new purchases are turned off', async t => {
+  const f = await fixture(t), seller = f.seller('Maker', 'acct_ABC');
+  const film = f.film(seller, 'My film');
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([film]);
+  let heads = 0, replaced = false;
+  const calls = [];
+  const catalog = createPublicFilms({ ...f, authority: {
+    async verifyDownloadGrant(grant, binding) {
+      assert.deepEqual(binding, { film: catalog.get(film.id).scope, revision: revisionFor(head) });
+      if (grant !== 'buyer') throw new Error('Access unavailable.');
+      return { orderId: 'order_1' };
+    }
+  }, sourceFor() {
+    return {
+      async head() { heads++; return replaced ? { ...head, revision: '"new"' } : head; },
+      async *stream(identity, start, end) {
+        calls.push([identity, start, end]);
+        yield Uint8Array.from({ length: end - start }, (_, i) => (i + start) % 256);
+      }
+    };
+  } });
+  assert.deepEqual(catalog.get(film.id).prices, { rent: 99, buy: null });
+  assert.ok(f.store.setFilmPrices(film.owner, film.id, { rent: 129, buy: 299 }));
+  assert.deepEqual((await catalog.verify(film.id)).prices, { rent: 129, buy: 299 });
+  assert.deepEqual(catalog.list(), [{ id: film.id, title: 'My film' }]);
+  await assert.rejects(catalog.download(film.id, 'renter'), /Access unavailable/);
+  assert.equal(heads, 1);
+  assert.ok(f.store.setFilmPrices(film.owner, film.id, { rent: null, buy: null }));
+  const file = await catalog.download(film.id, 'buyer');
+  assert.deepEqual(Object.keys(file).sort(), ['orderId', 'revision', 'size', 'stream', 'title']);
+  assert.equal(file.orderId, 'order_1');
+  assert.equal(file.size, head.size);
+  assert.deepEqual(await Array.fromAsync(file.stream(6, 10)), [Uint8Array.of(6, 7, 8, 9)]);
+  assert.deepEqual(calls, [[head, 6, 10]]);
+  await assert.rejects(Array.fromAsync(file.stream(0, head.size + 1)), /Invalid download range/);
+  replaced = true;
+  await assert.rejects(catalog.download(film.id, 'buyer'), /Film unavailable/);
+  f.env.STREAM_PUBLIC_FILMS = '[]';
+  await assert.rejects(Array.fromAsync(file.stream()), /Film unavailable/);
+  assert.equal(calls.length, 1);
+});
+
+test('a long original download rechecks publication before delivering its next four-megabyte window', async t => {
+  const f = await fixture(t), seller = f.seller('Maker', 'acct_ABC');
+  const block = new Uint8Array(4 * 1024 * 1024);
+  const large = { ...head, size: block.length * 2 };
+  const film = f.film(seller, 'Feature', { revision: revisionFor(large) });
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([film]);
+  let closed = false;
+  const catalog = createPublicFilms({ ...f, authority: { async verifyDownloadGrant() { return { orderId: 'order_1' }; } },
+    sourceFor: () => ({ head: async () => large, async *stream() {
+      try { yield block; yield block; } finally { closed = true; }
+    } }) });
+  const file = await catalog.download(film.id, 'buyer');
+  const iterator = file.stream();
+  assert.equal((await iterator.next()).value.length, block.length);
+  f.env.STREAM_PUBLIC_FILMS = '[]';
+  await assert.rejects(iterator.next(), /Film unavailable/);
+  assert.equal(closed, true);
+});
