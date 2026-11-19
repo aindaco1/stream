@@ -20,3 +20,27 @@ button:disabled { opacity: .65; cursor: wait; }
   button { font-size: .875rem; padding: .5rem .65rem; min-height: 2.75rem; }
   #status { padding: .2rem .6rem .4rem; }
 }
+
+[hidden] { display: none !important; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .85rem; }
+#purchase { padding: .5rem 1.25rem 1rem; }
+#purchase p { margin-bottom: .45rem; }
+.secondary { background: #33332f; color: #faf9f7; }
+a { color: #f2d6ad; text-underline-offset: .2em; }
+a:focus-visible { outline: 3px solid #f0ba73; outline-offset: 3px; }
+.checkout-page main { display: block; max-width: 32rem; height: auto; padding: clamp(2rem, 12vh, 6rem) 1.25rem; }
+.checkout-page h1 { font-size: 1.8rem; margin: .5rem 0 1rem; overflow-wrap: anywhere; }
+.checkout-page p { margin: .5rem 0; font-size: 1rem; }
+.checkout-page #status { padding: 0; }
+.checkout-page .actions, .checkout-page #return-film { margin-top: .75rem; }
+@media (max-height: 400px) {
+  main:has(#purchase:not([hidden])) { display: block; height: auto; }
+  main:has(#purchase:not([hidden])) video { height: 35dvh; }
+  #purchase { padding: .25rem .6rem .45rem; }
+}
+
+@media (max-height: 240px) {
+  main:has(#purchase:not([hidden])) video.preview-ended { display: none; }
+  main:has(#purchase:not([hidden])) .details > div { flex: 1; min-width: 0; }
+  main:has(#purchase:not([hidden])) h1 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+}

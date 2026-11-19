@@ -1,0 +1,156 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { openSetupStore } from '../src/setup-store.js';
+import { createRentalAuthority, rentalScope } from '../src/rental.js';
+import { createFileSource } from '../src/source.js';
+import { revisionFor } from '../src/media.js';
+import { createPublicFilms } from '../src/public-films.js';
+
+const newId = () => 'f-' + randomUUID();
+const head = { revision: '"original-revision"', size: 1000 };
+
+async function fixture(t) {
+  const root = await mkdtemp(join(tmpdir(), 'stream-public-films-'));
+  const store = openSetupStore(root);
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const authority = createRentalAuthority(randomBytes(32));
+  const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' };
+  const sourceCalls = [];
+  const sourceFor = settings => {
+    sourceCalls.push(settings);
+    return { head: async () => head };
+  };
+  function seller(owner, account, settings = {}) {
+    store.invite(owner);
+    store.claimAccount(owner, account, 'test');
+    const state = { mode: 'test', creatorId: owner, accountId: account, channel: 'hosted',
+      status: 'ready', chargesEnabled: true, payoutsEnabled: true, ...settings };
+    store.saveStripe(owner, { byMode: { test: state } });
+    const bucket = { accountId: 'a'.repeat(32), jurisdiction: 'default', bucket: 'private-' + account.toLowerCase().slice(5) };
+    const keys = { accessKeyId: 'test-' + owner, secretAccessKey: 'secret-' + owner };
+    store.saveBucket(owner, { ...bucket, ...keys });
+    return { owner, account, state, bucket, keys };
+  }
+  function film(seller, title, extra = {}) {
+    const id = newId();
+    const record = { title, revision: revisionFor(head), objectKey: 'originals/private.mp4', duration: 136,
+      rights: { version: 'film-distribution-v1', statement: 'Rights accepted', acceptedAt: new Date().toISOString() }, ...extra, id };
+    store.saveFilm(seller.owner, seller.bucket, record);
+    return { owner: seller.owner, id };
+  }
+  return { root, store, env, authority, sourceFor, sourceCalls, seller, film };
+}
+
+test('only opted-in IDs publish, with a public projection and distinct receipt scopes per filmmaker', async t => {
+  const f = await fixture(t);
+  const a = f.seller('Private owner A', 'acct_SellerA');
+  const b = f.seller('Private owner B', 'acct_SellerB');
+  const first = f.film(a, 'First film');
+  const second = f.film(b, 'Second film');
+  const draft = f.film(a, 'Unlisted title');
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([first, second]);
+  const catalog = createPublicFilms(f);
+  assert.deepEqual(catalog.list(), [{ id: first.id, title: 'First film' }, { id: second.id, title: 'Second film' }]);
+  const spec = catalog.get(first.id);
+  const historicalFilm = 'saved/' + createHash('sha256').update(JSON.stringify([first.owner, first.id])).digest('hex');
+  assert.equal(spec.scope, historicalFilm);
+  assert.equal(spec.owner, first.owner);
+  assert.equal(spec.account, a.account);
+  assert.equal(spec.authority, f.authority);
+  assert.equal(rentalScope({ film: spec.scope, revision: spec.revision }),
+    rentalScope({ film: historicalFilm, revision: revisionFor(head) }));
+  assert.notEqual(spec.scope, catalog.get(second.id).scope);
+  assert.equal(catalog.get(draft.id), undefined);
+  await assert.rejects(catalog.open(draft.id), /^Error: Film unavailable\.$/);
+  await assert.rejects(catalog.verify(draft.id), /^Error: Film unavailable\.$/);
+  assert.equal(f.sourceCalls.length, 0);
+  assert.deepEqual(await catalog.verify(second.id), catalog.get(second.id));
+  assert.deepEqual(f.sourceCalls, [{ ...b.bucket, ...b.keys, objectKey: 'originals/private.mp4' }]);
+});
+
+test('publication configuration is explicit, bounded, and fails closed on removal or malformed edits', async t => {
+  const f = await fixture(t), a = f.seller('A', 'acct_123'), film = f.film(a, 'A film');
+  const catalog = createPublicFilms(f);
+  assert.deepEqual(catalog.list(), []);
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([film]);
+  assert.equal(catalog.get(film.id).id, film.id);
+  for (const invalid of ['bad json', '{}', '[null]', JSON.stringify([{ ...film, leak: 'value' }]),
+    JSON.stringify([{ owner: 'A', id: 'clock' }]), JSON.stringify([film, film]),
+    JSON.stringify(Array.from({ length: 33 }, () => ({ owner: 'A', id: newId() })))]) {
+    f.env.STREAM_PUBLIC_FILMS = invalid;
+    assert.throws(() => catalog.list(), /Invalid STREAM_PUBLIC_FILMS/);
+    await assert.rejects(catalog.verify(film.id), /Film unavailable/);
+  }
+  f.env.STREAM_PUBLIC_FILMS = '[]';
+  assert.equal(catalog.get(film.id), undefined);
+  assert.deepEqual(catalog.list(), []);
+});
+
+test('rights, owner, sandbox mode, stored readiness and unique connected-account claim are all required', async t => {
+  const f = await fixture(t), a = f.seller('A', 'acct_123'), film = f.film(a, 'Private');
+  const wrongOwner = { owner: 'Another owner', id: film.id };
+  const unsigned = f.film(a, 'Without consent', { rights: { acceptedAt: new Date().toISOString() } });
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([wrongOwner, unsigned]);
+  const catalog = createPublicFilms(f);
+  assert.deepEqual(catalog.list(), []);
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([film]);
+  for (const patch of [{ status: 'pending' }, { chargesEnabled: false }, { payoutsEnabled: false },
+    { mode: 'live' }, { accountId: 'acct_unclaimed' }, { creatorId: 'Someone else' }, { channel: 'invalid' }]) {
+    f.store.saveStripe(a.owner, { byMode: { test: { ...a.state, ...patch }, live: { ...a.state, mode: 'live' } } });
+    assert.equal(catalog.get(film.id), undefined);
+  }
+  f.store.saveStripe(a.owner, { byMode: { test: a.state } });
+  assert.equal(createPublicFilms({ ...f, platformAccount: a.account }).get(film.id), undefined);
+  f.env.STRIPE_CONNECT_LIVE = '1';
+  assert.equal(catalog.get(film.id), undefined);
+  delete f.env.STRIPE_CONNECT_LIVE;
+  delete f.env.STRIPE_CONNECT_SECRET_KEY;
+  assert.equal(catalog.get(film.id), undefined);
+  assert.equal(f.sourceCalls.length, 0);
+});
+
+test('the indexed private film honors key rotation, replacement and unpublication on a cached renderer', async t => {
+  const f = await fixture(t), seller = f.seller('Original owner', 'acct_Source');
+  const path = join(f.root, 'fixture.mp4');
+  execFileSync(process.execPath, ['scripts/fixture.js', path]);
+  const original = createFileSource(path);
+  const film = f.film(seller, 'Projection', { revision: revisionFor(await original.head()) });
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([film]);
+  let replaced = false;
+  const observedKeys = [];
+  const catalog = createPublicFilms({ ...f, sourceFor(settings) {
+    assert.deepEqual([settings.accountId, settings.bucket, settings.objectKey],
+      [seller.bucket.accountId, seller.bucket.bucket, 'originals/private.mp4']);
+    observedKeys.push(settings.accessKeyId);
+    return { read: original.read, head: () => replaced ? head : original.head() };
+  } });
+  const media = await catalog.open(film.id);
+  t.after(() => media.close());
+  assert.equal(media.duration, 136);
+  assert.ok((await media.preview()).length > 0);
+  f.store.saveBucket(seller.owner, { ...seller.bucket, accessKeyId: 'rotated', secretAccessKey: 'replacement' });
+  await media.segment(1);
+  assert.equal(observedKeys.at(-1), 'rotated');
+  replaced = true;
+  await assert.rejects(catalog.verify(film.id), /Film unavailable/);
+  await assert.rejects(catalog.open(film.id), /Film unavailable/);
+  await assert.rejects(media.preview(), /Film unavailable/);
+  replaced = false;
+  f.env.STREAM_PUBLIC_FILMS = '[]';
+  await assert.rejects(media.segment(0), /Film unavailable/);
+});
+
+test('unpublication during remote validation prevents checkout and playback', async t => {
+  const f = await fixture(t), film = f.film(f.seller('Seller', 'acct_Seller'), 'A film');
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([film]);
+  const catalog = createPublicFilms({ ...f, sourceFor() {
+    return { async head() { f.env.STREAM_PUBLIC_FILMS = '[]'; return head; } };
+  } });
+  await assert.rejects(catalog.verify(film.id), /Film unavailable/);
+  assert.equal(catalog.get(film.id), undefined);
+});

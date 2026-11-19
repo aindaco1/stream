@@ -5,6 +5,11 @@ import { signExpiringToken, verifyExpiringToken } from '@dustwave/worker-core/se
 const RENTAL_SECONDS = 48 * 60 * 60;
 const SESSION_SECONDS = 10 * 60;
 
+// Match receipts already issued by the connected-account rehearsal.
+export function savedFilmScope(owner, id) {
+  return 'saved/' + createHash('sha256').update(JSON.stringify([owner, id])).digest('hex');
+}
+
 export function rentalScope({ film, revision }) {
   if (typeof film !== 'string' || !film || film.length > 128 ||
       typeof revision !== 'string' || !revision || revision.length > 512) {

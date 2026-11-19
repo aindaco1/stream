@@ -26,3 +26,9 @@ jobs:
         env:
           STREAM_BROWSER_CHANNEL: chrome
         run: npm run check:setup
+      - name: Rehearse two-film viewer checkout in the runner's Chrome
+        env:
+          STREAM_BROWSER_CHANNEL: chrome
+        run: |
+          npm run fixture
+          npm run check:viewer-checkout

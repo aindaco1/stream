@@ -5,10 +5,13 @@ import { pathToFileURL } from 'node:url';
 import { createRentalAuthority } from './rental.js';
 import { openFilm } from './media.js';
 import { createSetup } from './setup.js';
+import { escapeHtml } from './setup-view.js';
 import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
+  ['/checkout.js', ['../public/checkout.js', 'text/javascript']],
+  ['/screening.css', ['../public/screening.css', 'text/css']],
   ['/style.css', ['../public/style.css', 'text/css']],
   ['/hls.js', ['../node_modules/hls.js/dist/hls.light.min.js', 'text/javascript']]
 ]);
@@ -51,28 +54,50 @@ function encrypt(bytes, key, index) {
   return Buffer.concat([cipher.update(bytes), cipher.final()]);
 }
 
-export async function makeServer(openMaker, { setup, publicOrigin } = {}) {
+async function body(req, limit) {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of req) {
+    length += chunk.length;
+    if (length > limit) throw Object.assign(new Error('Request too large.'), { statusCode: 413 });
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+const checkoutHeaders = {
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+  'X-Frame-Options': 'DENY',
+  'X-Robots-Tag': 'noindex'
+};
+
+export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout } = {}) {
   if (publicOrigin) {
     const url = new URL(publicOrigin);
     if (url.protocol !== 'https:' || url.origin !== publicOrigin) throw new Error('Set STREAM_PUBLIC_ORIGIN to an HTTPS origin.');
   }
   const connections = new Map();
-  function connection(maker) {
+  function connection(spec) {
+    const key = spec.id || spec.maker;
     // Concurrent embeds share their own maker's index. A failed provider can
     // retry independently and does not block another maker's screening.
-    if (!connections.has(maker)) {
-      const pending = openMaker(maker).catch(error => { connections.delete(maker); throw error; });
-      connections.set(maker, pending);
+    if (!connections.has(key)) {
+      const opening = spec.id ? catalog.open(spec.id).then(film => ({ film, authority: spec.authority })) : openMaker(spec.maker);
+      const pending = opening.catch(error => { connections.delete(key); throw error; });
+      connections.set(key, pending);
     }
-    return connections.get(maker);
+    return connections.get(key);
   }
-  const template = await readFile(new URL('../public/player.html', import.meta.url), 'utf8');
+  const [template, payPage, returnPage, screening] = await Promise.all(
+    ['player', 'checkout', 'return', 'screening'].map(name => readFile(new URL('../public/' + name + '.html', import.meta.url), 'utf8')));
+  const lookup = id => catalog?.get(id) || (openMaker && filmSpec(id));
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, { type, data: await readFile(new URL(file, import.meta.url)) }])));
   const server = createServer(async (req, res) => {
     const send = (status, type, data, extra) => reply(req, res, status, type, data, extra);
     const fail = status => send(status, 'text/plain', { 400: 'Invalid request.', 403: 'Rental access unavailable.',
-      404: 'Unavailable.', 405: 'Method unavailable.', 413: 'Request too large.', 503: 'Film temporarily unavailable.' }[status]);
+      404: 'Unavailable.', 405: 'Method unavailable.', 409: 'Rental unavailable.', 410: 'Rental expired.',
+      413: 'Request too large.', 429: 'Try again later.', 503: 'Film temporarily unavailable.' }[status] || 'Unavailable.');
     try {
       const host = req.headers.host || '';
       if (publicOrigin ? host !== new URL(publicOrigin).host : !/^(localhost|127\.0\.0\.1)(:\d{1,5})?$/.test(host)) return fail(400);
@@ -96,37 +121,64 @@ export async function makeServer(openMaker, { setup, publicOrigin } = {}) {
         const { type, data } = staticFiles.get(path);
         return send(200, type, data);
       }
+      if (catalog && read && (path === '/screening' || path === '/')) {
+        const embeds = catalog.list().map(({ id, title }) =>
+          '<iframe src="/embed/' + encodeURIComponent(id) + '" title="' + escapeHtml(title) +
+          '" allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe>').join('\n');
+        return send(200, 'text/html; charset=utf-8', screening.replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
+          { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
+      }
+      if (checkout && path === '/checkout/webhook') {
+        if (req.method !== 'POST') return fail(405);
+        const result = await checkout.webhook(await body(req, 256 * 1024), req.headers['stripe-signature']);
+        return send(200, 'application/json', JSON.stringify(result));
+      }
+      if (checkout && read && (path === '/checkout/return' || path === '/checkout/cancel')) {
+        const cancelled = path === '/checkout/cancel';
+        return send(200, 'text/html; charset=utf-8', returnPage
+          .replaceAll('{{heading}}', cancelled ? 'Checkout cancelled' : 'Return to your film')
+          .replaceAll('{{message}}', cancelled ? 'You can close this tab and return to the preview.' :
+            'You can close this tab. Your player checks the payment with Stripe and unlocks your film when it clears.'), checkoutHeaders);
+      }
+      const pay = /^\/pay\/([a-z0-9-]+)$/.exec(path);
+      if (checkout && read && pay) {
+        const offer = catalog.get(pay[1]);
+        if (!offer) return fail(404);
+        return send(200, 'text/html; charset=utf-8', payPage.replaceAll('{{title}}', () => escapeHtml(offer.title)), checkoutHeaders);
+      }
       const embed = /^\/embed\/([a-z0-9-]+)$/.exec(path);
       if (read && (embed || path === '/')) {
-        const spec = filmSpec(embed?.[1] || 'clock');
+        const spec = lookup(embed?.[1] || 'clock');
         if (!spec) return fail(404);
-        return send(200, 'text/html; charset=utf-8', template.replaceAll('{{title}}', spec.title));
+        return send(200, 'text/html; charset=utf-8', template.replaceAll('{{checkout}}', String(Boolean(checkout && spec.id)))
+          .replaceAll('{{title}}', () => escapeHtml(spec.title)));
       }
-      const route = /^\/film\/([a-z0-9-]+)\/(session|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
+      const route = /^\/film\/([a-z0-9-]+)\/(checkout|order|session|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
       if (!route) return fail(404);
       const [, id, action, asset] = route;
-      const spec = filmSpec(id);
+      const spec = lookup(id);
       if (!spec) return fail(404);
-      if (action !== 'session' && !read) return fail(405);
       const grant = /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(req.headers.authorization || '')?.[1];
       if (asset && !grant) return fail(403);
-      if (action === 'session') {
+      if (['checkout', 'order', 'session'].includes(action)) {
+        if (action !== 'session' && (!checkout || !spec.id)) return fail(404);
         if (req.method !== 'POST') return fail(405);
         if (req.headers.origin !== origin || req.headers['content-type'] !== 'text/plain') return fail(403);
-        const chunks = [];
-        let size = 0;
-        for await (const chunk of req) {
-          size += chunk.length;
-          if (size > 4096) return fail(413);
-          chunks.push(chunk);
+        const token = (await body(req, action === 'session' ? 4096 : 64)).toString('utf8');
+        if (action !== 'session') {
+          if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return fail(400);
+          const result = action === 'checkout' ? await checkout.start({ offer: await catalog.verify(id), token, origin }) :
+            await checkout.status({ offer: spec, token });
+          return send(200, 'application/json', JSON.stringify(result), checkoutHeaders);
         }
-        const { film, authority } = await connection(spec.maker);
+        const { film, authority } = await connection(spec);
         try {
-          const grant = await authority.exchange(Buffer.concat(chunks).toString('utf8'), { film: spec.scope, revision: film.revision });
+          const grant = await authority.exchange(token, { film: spec.scope, revision: film.revision });
           return send(200, 'application/json', JSON.stringify(grant));
         } catch { return fail(403); }
       }
-      const { film, authority } = await connection(spec.maker);
+      if (!read) return fail(405);
+      const { film, authority } = await connection(spec);
       if (action === 'preview.mp4') return sendMp4(await film.preview());
       const scope = { film: spec.scope, revision: film.revision };
       let key;
@@ -139,8 +191,8 @@ export async function makeServer(openMaker, { setup, publicOrigin } = {}) {
       const index = Number(asset.slice(0, -3));
       if (index >= film.segments.length) return fail(404);
       return send(200, 'video/mp2t', encrypt(await film.segment(index), key, index));
-    } catch {
-      if (!res.headersSent && !res.destroyed) fail(503);
+    } catch (error) {
+      if (!res.headersSent && !res.destroyed) fail([400, 403, 404, 409, 410, 413, 429].includes(error.statusCode) ? error.statusCode : 503);
     }
   });
   server.headersTimeout = 10000;

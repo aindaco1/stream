@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { sha256Hex } from '@dustwave/worker-core/crypto';
 import { readBoundedJson } from '@dustwave/worker-core/response-body';
 import { createStripeClient, DEFAULT_STRIPE_API_VERSION } from '@dustwave/worker-core/stripe';
-import { createRentalAuthority, rentalScope } from './rental.js';
+import { createRentalAuthority, rentalScope, savedFilmScope } from './rental.js';
 import { createStripeSetup, stripeSetupStateForMode } from './setup-stripe.js';
 import { createR2Source } from './source.js';
 import { revisionFor } from './media.js';
@@ -12,7 +12,7 @@ const intentIdPattern = /^pi_[a-zA-Z0-9]+$/;
 const accountIdPattern = /^acct_[a-zA-Z0-9]+$/;
 const directFeeTypes = new Set(['stripe_fee', 'payment_method_passthrough_fee', 'tax', 'withheld_tax']);
 
-async function platformAccount(key, fetchImpl) {
+export async function platformAccount(key, fetchImpl) {
   const response = await fetchImpl(API + '/v1/account', { method: 'GET',
     headers: { Authorization: 'Bearer ' + key, 'Stripe-Version': DEFAULT_STRIPE_API_VERSION },
     redirect: 'error', signal: AbortSignal.timeout(15000) });
@@ -27,17 +27,33 @@ async function platformAccount(key, fetchImpl) {
   return account.id;
 }
 
-function connectedClient(key, account, platform, fetchImpl) {
+export function connectedClient(key, account, platform, fetchImpl) {
   if (!accountIdPattern.test(account) || account === platform) throw new Error('A distinct connected account is required.');
   return createStripeClient(key, { fetchImplementation: (href, init) => {
     const url = new URL(href);
-    const endpoint = (init.method === 'POST' && url.pathname === '/v1/payment_intents') ||
-      (init.method === 'GET' && /^\/v1\/payment_intents\/pi_[a-zA-Z0-9]+$/.test(url.pathname));
+    const endpoint = (init.method === 'POST' && ['/v1/payment_intents', '/v1/checkout/sessions'].includes(url.pathname)) ||
+      (init.method === 'GET' && /^\/v1\/(?:payment_intents\/pi_[a-zA-Z0-9]+|checkout\/sessions\/cs_test_[a-zA-Z0-9]+)$/.test(url.pathname));
     if (url.origin !== API || !endpoint) throw new Error('Unexpected payment endpoint.');
     const headers = new Headers(init.headers);
     headers.set('Stripe-Account', account);
     return fetchImpl(url.href, { ...init, headers, redirect: 'error', signal: AbortSignal.timeout(15000) });
   } });
+}
+
+export async function verifyReadySeller({ store, env, fetchImpl, owner, account }) {
+  const maker = store.maker(owner);
+  const state = maker && stripeSetupStateForMode(maker.stripe, 'test');
+  if (state?.creatorId !== owner || state.accountId !== account || !store.ownsTestAccount(owner, account)) {
+    throw new Error('This filmmaker needs a verified sandbox connection.');
+  }
+  // Refresh a private snapshot. Never overwrite setup changes from another process.
+  const connect = createStripeSetup({ env, origin: 'http://127.0.0.1', fetchImpl });
+  const refreshed = await connect.refresh({
+    creatorId: owner, state, save: () => {}, claimAccount: id => store.ownsTestAccount(owner, id)
+  });
+  if (refreshed.status !== 'ready' || !state.chargesEnabled || !state.payoutsEnabled) {
+    throw new Error('The connected sandbox account must be ready for both charges and payouts.');
+  }
 }
 
 async function createTestIntent(stripe, scope, order, sleep) {
@@ -114,16 +130,9 @@ export async function connectedTestRental({ owner, filmId, store, env, signingKe
   await verifySource();
   const platform = await platformAccount(key, fetchImpl);
   const stripe = connectedClient(key, account, platform, fetchImpl);
-  // Refresh a private snapshot. Never overwrite setup changes from another process.
-  const connect = createStripeSetup({ env, origin: 'http://127.0.0.1', fetchImpl });
-  const refreshed = await connect.refresh({
-    creatorId: owner, state, save: () => {}, claimAccount: id => store.ownsTestAccount(owner, id)
-  });
-  if (refreshed.status !== 'ready' || !state.chargesEnabled || !state.payoutsEnabled) {
-    throw new Error('The connected sandbox account must be ready for both charges and payouts.');
-  }
+  await verifyReadySeller({ store, env, fetchImpl, owner, account });
 
-  const film = { film: 'saved/' + await sha256Hex(JSON.stringify([owner, filmId])), revision: saved.revision };
+  const film = { film: savedFilmScope(owner, filmId), revision: saved.revision };
   const scope = rentalScope(film);
   const sourceRef = await sha256Hex(JSON.stringify([saved.bucket.accountId, saved.bucket.jurisdiction, saved.bucket.bucket, saved.objectKey]));
   const binding = { owner, filmId, account, platform, revision: film.revision, source: sourceRef };

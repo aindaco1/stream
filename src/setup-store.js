@@ -49,7 +49,15 @@ export function openSetupStore(directory) {
       filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, account TEXT NOT NULL, platform TEXT NOT NULL,
       revision TEXT NOT NULL, source TEXT NOT NULL, orderId TEXT NOT NULL UNIQUE,
       createdAt INTEGER NOT NULL, intentId TEXT UNIQUE
-    );`);
+    );
+    CREATE TABLE IF NOT EXISTS viewer_test_orders (
+      tokenHash TEXT PRIMARY KEY, orderId TEXT NOT NULL UNIQUE, filmId TEXT NOT NULL,
+      owner TEXT NOT NULL, account TEXT NOT NULL, scope TEXT NOT NULL, revision TEXT NOT NULL,
+      platform TEXT NOT NULL, title TEXT NOT NULL, origin TEXT NOT NULL, createdAt INTEGER NOT NULL,
+      sessionId TEXT UNIQUE, intentId TEXT UNIQUE, paidAt INTEGER, status TEXT NOT NULL DEFAULT 'pending',
+      checkedAt INTEGER, webhookEventId TEXT, webhookAt INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS viewer_order_rate ON viewer_test_orders(filmId,createdAt);`);
   const sql = query => db.prepare(query);
   function transaction(fn) {
     db.exec('BEGIN IMMEDIATE');
@@ -118,6 +126,47 @@ export function openSetupStore(directory) {
       const result = sql('UPDATE connected_test_orders SET intentId=? WHERE orderId=? AND (intentId IS NULL OR intentId=?)')
         .run(intentId, orderId, intentId);
       if (result.changes !== 1) throw new Error('The test order has a conflicting Stripe payment.');
+    },
+    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin }) {
+      return transaction(() => {
+        const existing = store.viewerOrderForToken(tokenHash);
+        if (existing) return existing;
+        const maker = store.maker(owner);
+        const seller = maker && stripeSetupStateForMode(maker.stripe, 'test');
+        if (!store.ownsTestAccount(owner, account) || seller?.accountId !== account ||
+            store.film(owner, id)?.revision !== revision) throw new Error('The film offer changed.');
+        const now = Date.now();
+        const { n } = sql('SELECT count(*) AS n FROM viewer_test_orders WHERE filmId=? AND createdAt>?').get(id, now - 3600_000);
+        if (n >= 30) {
+          const error = new Error('This film reached its sandbox checkout limit. Try again later.');
+          error.code = 'viewer_rate_limit';
+          throw error;
+        }
+        sql('INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now);
+        return store.viewerOrderForToken(tokenHash);
+      });
+    },
+    viewerOrderForToken(digest) { return sql('SELECT * FROM viewer_test_orders WHERE tokenHash=?').get(digest); },
+    viewerOrderById(id) { return sql('SELECT * FROM viewer_test_orders WHERE orderId=?').get(id); },
+    viewerOrderBySession(id) { return sql('SELECT * FROM viewer_test_orders WHERE sessionId=?').get(id); },
+    bindViewerSession(orderId, sessionId) {
+      const result = sql('UPDATE viewer_test_orders SET sessionId=? WHERE orderId=? AND (sessionId IS NULL OR sessionId=?)')
+        .run(sessionId, orderId, sessionId);
+      if (result.changes !== 1) throw new Error('Conflicting Checkout Session.');
+    },
+    checkPendingViewerOrder(orderId) {
+      return sql("UPDATE viewer_test_orders SET checkedAt=? WHERE orderId=? AND status='pending' AND (checkedAt IS NULL OR checkedAt<=?)")
+        .run(Date.now(), orderId, Date.now() - 3000).changes === 1;
+    },
+    expireViewerOrder(orderId) { sql("UPDATE viewer_test_orders SET status='expired' WHERE orderId=?").run(orderId); },
+    fulfillViewerOrder(orderId, sessionId, intentId, paidAt) {
+      return sql("UPDATE viewer_test_orders SET status='paid', intentId=?, paidAt=? WHERE orderId=? AND sessionId=? AND status!='expired' AND (intentId IS NULL OR (intentId=? AND paidAt=?))")
+        .run(intentId, paidAt, orderId, sessionId, intentId, paidAt).changes === 1;
+    },
+    noteViewerWebhook(orderId, eventId) {
+      sql('UPDATE viewer_test_orders SET webhookEventId=COALESCE(webhookEventId,?),webhookAt=COALESCE(webhookAt,?) WHERE orderId=?')
+        .run(eventId, Date.now(), orderId);
     },
     saveStorageDraft(owner, config) {
       sql('INSERT INTO storage_drafts VALUES(?,?) ON CONFLICT(owner) DO UPDATE SET config=excluded.config').run(owner, JSON.stringify(config));
