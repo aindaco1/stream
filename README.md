@@ -1,6 +1,6 @@
 # Dust Wave Stream
 
-An open-source film player for filmmakers who keep their originals in their own storage. This prototype reads a single private Cloudflare R2 object, serves a ten-second preview, and unlocks a 48-hour rental after a Stripe sandbox purchase. The player runs on localhost. It makes no persistent streaming copies.
+An open-source film player for filmmakers who keep their originals in their own storage. Each test filmmaker connects a private Cloudflare R2 object, offers a ten-second preview, and unlocks a 48-hour rental after a Stripe sandbox purchase. The player runs on localhost. It makes no persistent streaming copies.
 
 ## Try the preview
 
@@ -43,6 +43,22 @@ R2_SECRET_ACCESS_KEY=your-bucket-scoped-secret
 
 The supported source is a seekable MP4 with baseline H.264, optional AAC-LC audio, a keyframe at zero and keyframe intervals up to twelve seconds. The 1 GiB, four-hour, index, packet and rendering limits bound this prototype. A preview must end before the film ends. A complete encoded packet that crosses the cutoff is omitted.
 
+## Reuse the feature-length film
+
+Run `npm run fixture -- --feature` to create `.local/feature-clock.mp4`. The video is a 90-minute synthetic projection chart with an elapsed-time display. It uses 12 fps baseline H.264, mono AAC and four-second keyframes. The 440 Hz preview tone changes to 660 Hz at ten seconds, then rises 60 Hz every fifteen minutes. The cues at 05:00, 45:00 and 89:00 are 660, 840 and 960 Hz. The fixture stays available in its bucket between test runs. The generator can recreate it for a new account.
+
+To run the two-filmmaker rehearsal, keep the short film in the first bucket. Create a second private bucket in the same account, upload the feature there and issue a separate **Object Read only** key scoped to that bucket. Under the operator directory, create a `feature/` directory with its own `source.env` and `r2.env` using the file formats above. Keep both directories private.
+
+```sh
+# Use the base operator directory for inspection and for running the server.
+npm run inspect -- feature
+# Substitute your feature operator directory and the revision printed above.
+STREAM_STATE_DIR="/path/to/operator/feature" npm run rental:test -- maker-b/feature REVISION_FROM_INSPECT
+npm start
+```
+
+The feature operator gets a separate signing key, test order and receipt. The short and feature routes are `/embed/clock` and `/embed/feature`. Each has its own offer and permission scope. The public embedding page contains only the public iframe URLs. Supply the rental receipt to the buyer's individual player.
+
 ## Exercise a paid rental
 
 Use the operator CLI with a Stripe sandbox secret supplied through your local secret manager as `STRIPE_TEST_SECRET_KEY`. The player needs only its signing and read-only storage credentials. The CLI makes a one-time USD 0.99 sandbox payment with Stripe’s test payment method. For the same operator directory, a retry retrieves or resumes the same order. [Stripe testing guide](https://docs.stripe.com/testing)
@@ -74,7 +90,7 @@ The full check uses the ordinary extension popup on the player and on a separate
 
 ## Path to a hosted pilot
 
-1. Repeat the media test with a feature-length film in a second filmmaker-owned R2 account. Measure seek time, startup, storage operations and cost under concurrent load. Exercise Safari, including a physical iPhone. Isolate the media parser before accepting public uploads.
+1. Use both private R2 fixtures to measure sustained playback, concurrent viewers, storage operations and delivery cost. Before admitting unrelated filmmakers, also rehearse account connection and seller settlement with separately owned accounts. Isolate the media parser before accepting public uploads.
 2. Add filmmaker sign-in, rights acceptance before upload/registration and guided setup for new and existing Cloudflare and Stripe accounts. Release the characterized, reusable setup cards through Dust Wave Platform for independent adoption by Stream, Pool and Store.
 3. Build filmmaker-scoped Checkout, signed webhooks, revocation and receipt recovery. Exercise simultaneous purchases from different sellers in independent iframes. Add per-film rental terms, a buy-to-download option and the optional platform tip.
 4. Add the filmmaker dashboard, viewing counts, basic analytics and pilot publishing controls. Qualify additional storage and payment providers after measuring the R2 pilot.

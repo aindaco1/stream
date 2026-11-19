@@ -5,12 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createRentalAuthority } from './rental.js';
 import { openFilm } from './media.js';
 import { playbackSettings } from './operator.js';
-import { sourceFromEnv } from './config.js';
-
-const films = new Map([
-  ['clock', 'Projection test'],
-  ['second', 'Second screening']
-]);
+import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
   ['/style.css', ['../public/style.css', 'text/css']],
@@ -55,7 +50,17 @@ function encrypt(bytes, key, index) {
   return Buffer.concat([cipher.update(bytes), cipher.final()]);
 }
 
-export async function makeServer(film, authority) {
+export async function makeServer(openMaker) {
+  const connections = new Map();
+  function connection(maker) {
+    // Concurrent embeds share their own maker's index. A failed provider can
+    // retry independently and does not block another maker's screening.
+    if (!connections.has(maker)) {
+      const pending = openMaker(maker).catch(error => { connections.delete(maker); throw error; });
+      connections.set(maker, pending);
+    }
+    return connections.get(maker);
+  }
   const template = await readFile(new URL('../public/player.html', import.meta.url), 'utf8');
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, { type, data: await readFile(new URL(file, import.meta.url)) }])));
@@ -72,14 +77,20 @@ export async function makeServer(film, authority) {
         const { type, data } = staticFiles.get(path);
         return send(200, type, data);
       }
-      const embed = /^\/embed\/(clock|second)$/.exec(path);
+      const embed = /^\/embed\/([a-z0-9-]+)$/.exec(path);
       if (read && (embed || path === '/')) {
-        return send(200, 'text/html; charset=utf-8', template.replaceAll('{{title}}', films.get(embed?.[1] || 'clock')));
+        const spec = filmSpec(embed?.[1] || 'clock');
+        if (!spec) return fail(404);
+        return send(200, 'text/html; charset=utf-8', template.replaceAll('{{title}}', spec.title));
       }
-      const route = /^\/film\/(clock|second)\/(session|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
+      const route = /^\/film\/([a-z0-9-]+)\/(session|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
       if (!route) return fail(404);
       const [, id, action, asset] = route;
-      const scope = { film: id, revision: film.revision };
+      const spec = filmSpec(id);
+      if (!spec) return fail(404);
+      if (action !== 'session' && !read) return fail(405);
+      const grant = /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(req.headers.authorization || '')?.[1];
+      if (asset && !grant) return fail(403);
       if (action === 'session') {
         if (req.method !== 'POST') return fail(405);
         if (req.headers.origin !== 'http://' + host || req.headers['content-type'] !== 'text/plain') return fail(403);
@@ -90,12 +101,13 @@ export async function makeServer(film, authority) {
           if (size > 4096) return fail(413);
           chunks.push(chunk);
         }
+        const { film, authority } = await connection(spec.maker);
         try {
-          const grant = await authority.exchange(Buffer.concat(chunks).toString('utf8'), scope);
+          const grant = await authority.exchange(Buffer.concat(chunks).toString('utf8'), { film: spec.scope, revision: film.revision });
           return send(200, 'application/json', JSON.stringify(grant));
         } catch { return fail(403); }
       }
-      if (!read) return fail(405);
+      const { film, authority } = await connection(spec.maker);
       if (action === 'preview.mp4') {
         const data = await film.preview();
         if (!req.headers.range) return send(200, 'video/mp4', data, { 'Accept-Ranges': 'bytes' });
@@ -106,8 +118,7 @@ export async function makeServer(film, authority) {
           'Accept-Ranges': 'bytes', 'Content-Range': 'bytes ' + from + '-' + to + '/' + data.length
         });
       }
-      const grant = /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(req.headers.authorization || '')?.[1];
-      if (!grant) return fail(403);
+      const scope = { film: spec.scope, revision: film.revision };
       let key;
       try {
         if (asset === 'index.m3u8') await authority.verifyGrant(grant, scope);
@@ -125,14 +136,19 @@ export async function makeServer(film, authority) {
   server.headersTimeout = 10000;
   server.requestTimeout = 20000;
   server.maxConnections = 64;
+  server.on('close', () => {
+    for (const pending of connections.values()) pending.then(({ film }) => film.close(), () => {});
+    connections.clear();
+  });
   return server;
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const env = await playbackSettings({ signing: true });
-  const film = await openFilm(sourceFromEnv(env));
-  const server = await makeServer(film, createRentalAuthority(env.STREAM_RENTAL_SECRET));
-  server.on('close', () => film.close());
-  server.listen(Number(env.PORT || 8787), '127.0.0.1', () =>
-    console.log('Stream is ready at http://127.0.0.1:' + server.address().port + '/embed/clock'));
+  const server = await makeServer(async maker => {
+    const env = await playbackSettings({ signing: true, maker });
+    const authority = createRentalAuthority(env.STREAM_RENTAL_SECRET);
+    return { film: await openFilm(sourceFromEnv(env, maker)), authority };
+  });
+  server.listen(Number(process.env.PORT || 8787), '127.0.0.1', () =>
+    console.log('Stream is listening at http://127.0.0.1:' + server.address().port + '/embed/clock'));
 }
