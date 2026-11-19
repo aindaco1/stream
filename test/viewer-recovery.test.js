@@ -12,7 +12,9 @@ function fixture(t) {
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());
   db.exec(`CREATE TABLE viewer_test_orders (orderId TEXT PRIMARY KEY,owner,filmId,account,revision,kind,
-    status,paidAt INTEGER,rentalHours INTEGER,tokenHash,position INTEGER,sessionId)`);
+    status,paidAt INTEGER,rentalHours INTEGER,tokenHash,position INTEGER,sessionId);
+    CREATE TABLE claims (mode TEXT, account TEXT, owner TEXT, PRIMARY KEY(mode,account))`);
+  db.prepare("INSERT INTO claims VALUES('test',?,?)").run(offer.account, offer.owner);
   db.prepare("INSERT INTO viewer_test_orders VALUES('one',?,?,?,?,'rent','paid',unixepoch(),48,'original',63,'session')")
     .run(offer.owner, offer.id, offer.account, offer.revision);
   const store = recoveryStore(db, randomBytes(32));

@@ -92,8 +92,8 @@ function hostedPaymentStatus(account) {
   return { ...flags, status: flags.chargesEnabled && flags.payoutsEnabled ? 'ready' : 'action_required', reason };
 }
 
-// Each ctx belongs to the authenticated creator. The caller serializes its
-// mutations, checkpoints save() atomically and enforces uniqueness in claimAccount().
+// Each ctx belongs to the authenticated creator. The persistent context guards
+// its checkpoints, ownership claims and redirects against concurrent resets.
 export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch, now = Date.now }) {
   const secret = env.STRIPE_CONNECT_SECRET_KEY || '';
   const mode = env.STRIPE_CONNECT_LIVE === '1' ? 'live' : 'test';
@@ -334,7 +334,11 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
       state.creatorId = ctx.creatorId;
       state.mode = mode;
       state.status ??= 'unconnected';
-      try { return await action(ctx, ...args); }
+      try {
+        const result = await action(ctx, ...args);
+        ctx.assertCurrent?.();
+        return result;
+      }
       catch (error) { throw error instanceof StripeSetupError ? error : unavailable(); }
     };
   }

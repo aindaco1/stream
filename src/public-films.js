@@ -46,7 +46,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     if (choice) return choice.published || (entitled && store.priorOrderOwner(id) === choice.owner) ? choice.owner : undefined;
     return listed ?? (entitled ? store.priorOrderOwner(id) : undefined);
   }
-  function savedRecord(owner, id) {
+  function savedRecord(owner, id, entitled = false) {
     if (!owner || env.STRIPE_CONNECT_LIVE === '1' ||
         !/^(sk|rk)_test_[A-Za-z0-9]+$/.test(env.STRIPE_CONNECT_SECRET_KEY || '')) return;
     const film = store.film(owner, id);
@@ -62,17 +62,20 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     if (!maker) return;
     const state = stripeSetupStateForMode(maker.stripe, 'test');
     const account = state.accountId;
-    if (state.mode !== 'test' || state.creatorId !== owner || !['hosted', 'oauth'].includes(state.channel) ||
-        state.status !== 'ready' || state.chargesEnabled !== true || state.payoutsEnabled !== true ||
-        !accountId.test(account) || account === platformAccount || !store.ownsTestAccount(owner, account)) return;
-    const spec = Object.freeze({ id, title: film.title, owner, account, scope: savedFilmScope(owner, id),
+    const ready = state.mode === 'test' && state.creatorId === owner && ['hosted', 'oauth'].includes(state.channel) &&
+      state.status === 'ready' && state.chargesEnabled === true && state.payoutsEnabled === true &&
+      accountId.test(account) && account !== platformAccount && store.ownsTestAccount(owner, account);
+    if (!ready && !(entitled && store.priorOrderOwner(id) === owner)) return;
+    // A null recipient is an existing-order lookup only. Use the claimed
+    // seller recorded on that order, even while this filmmaker reconnects.
+    const spec = Object.freeze({ id, title: film.title, owner, account: entitled ? null : account, scope: savedFilmScope(owner, id),
       revision: film.revision, authority, prices, duration: film.duration, previewSeconds: seconds, rentalHours: hours });
     return { spec, bucket: film.bucket, objectKey: film.objectKey };
   }
 
   function record(id, { entitled = false } = {}) {
     if (!authority || !filmId.test(id)) return;
-    const entry = savedRecord(publicationOwner(id, entitled), id);
+    const entry = savedRecord(publicationOwner(id, entitled), id, entitled);
     return entry && { ...entry, entitled };
   }
   function requireRecord(id, options) {

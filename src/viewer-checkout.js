@@ -46,8 +46,8 @@ async function viewerHash(token) {
   return sha256Hex(token);
 }
 
-function matchingOffer(order, offer) {
-  return order.filmId === offer.id && order.owner === offer.owner && order.account === offer.account &&
+function sameFilm(order, offer) {
+  return order.filmId === offer.id && order.owner === offer.owner &&
     order.scope === offer.scope && order.revision === offer.revision;
 }
 
@@ -117,6 +117,11 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const id = await checkingPlatform();
     if (id !== order.platform) throw mismatch();
     return connectedClient(key, order.account, id, fetchImpl);
+  }
+
+  function existingOrderMatches(order, offer) {
+    return sameFilm(order, offer) && (order.account === offer.account ||
+      (offer.account === null && store.ownsTestAccount(order.owner, order.account)));
   }
 
   function shared(map, id, action) {
@@ -238,6 +243,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
 
   async function start({ offer, token, origin, kind = 'rent' }) {
     if (!configured) throw new ViewerCheckoutError('Sandbox checkout is unavailable.', 503);
+    if (!offer.account) throw mismatch();
     if (kind !== 'rent' && kind !== 'buy') throw new ViewerCheckoutError('Choose a rental or a purchase.');
     const digest = await viewerHash(token);
     const base = landingOrigin(origin, env.STREAM_PUBLIC_ORIGIN);
@@ -247,7 +253,13 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const id = await checkingPlatform();
     if (offer.account === id) throw mismatch();
     const order = previous ?? store.reserveViewerOrder({ ...offer, tokenHash: digest, platform: id, origin: base, kind, amount });
-    if (!matchingOffer(order, offer) || order.kind !== kind || order.platform !== id || order.origin !== base) throw mismatch();
+    if (!sameFilm(order, offer) || order.kind !== kind || order.platform !== id || order.origin !== base) throw mismatch();
+    if (order.account !== offer.account) {
+      // openSession can only reconcile a paid/withdrawn order here. Never
+      // disclose an old open form or create a charge on a former recipient.
+      if (!(order.withdrawalState || order.status === 'paid') || !store.ownsTestAccount(order.owner, order.account) ||
+          !store.ownsTestAccount(offer.owner, offer.account)) throw mismatch();
+    }
     return shared(creating, order.orderId, () => openSession(order));
   }
 
@@ -308,7 +320,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
 
   async function status({ offer, token }) {
     const order = store.viewerOrderForAccess(await viewerHash(token));
-    if (!order || !matchingOffer(order, offer)) return { status: 'pending' };
+    if (!order || !existingOrderMatches(order, offer)) return { status: 'pending' };
     // Older versions marked partial refunds expired without recording a reason.
     // Recheck a settled, still-current order under the current refund policy.
     const end = expiresAt(order);
@@ -329,7 +341,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     if (!orderId) return kind === 'rent' && Number.isSafeInteger(rentalExpiresAt) && rentalExpiresAt > Date.now()/1000 &&
       store.accessForLegacyRental(offer,rentalExpiresAt);
     const order = store.viewerAccessById(orderId);
-    return Boolean(order && matchingOffer(order,offer) && order.kind === kind && order.intentId && localStatus(order) === 'paid');
+    return Boolean(order && existingOrderMatches(order,offer) && order.kind === kind && order.intentId && localStatus(order) === 'paid');
   }
 
   async function verifyPlayback(request) {
@@ -352,7 +364,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
   async function verifyPurchase({ offer, orderId }) {
     if (typeof orderId !== 'string' || orderId.length > 64) return false;
     const order = store.viewerOrderById(orderId);
-    if (order?.kind !== 'buy' || !order.intentId || !matchingOffer(order, offer)) return false;
+    if (order?.kind !== 'buy' || !order.intentId || !existingOrderMatches(order, offer)) return false;
     return (await reconcile(order)).status === 'paid';
   }
 

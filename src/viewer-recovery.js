@@ -20,7 +20,9 @@ export function recoveryStore(db, key) {
     orderId TEXT PRIMARY KEY, emailHash TEXT NOT NULL, accessHash TEXT NOT NULL UNIQUE,
     codeHash TEXT UNIQUE, sentAt INTEGER, used INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS recovery_email ON viewer_recovery(emailHash);
-    CREATE INDEX IF NOT EXISTS recovery_recent ON viewer_recovery(sentAt) WHERE sentAt IS NOT NULL`);
+    CREATE INDEX IF NOT EXISTS recovery_recent ON viewer_recovery(sentAt) WHERE sentAt IS NOT NULL;
+    CREATE VIEW IF NOT EXISTS viewer_claimed_orders AS SELECT o.* FROM viewer_test_orders o
+      JOIN claims c ON c.owner=o.owner AND c.account=o.account AND c.mode='test'`);
   const fingerprint = (purpose, value) => createHmac('sha256', key).update(purpose + '\0' + value).digest('base64url');
   const accessToken = orderId => fingerprint('viewer-restore', orderId);
   const active = "o.status='paid' AND (o.kind='buy' OR o.paidAt+o.rentalHours*3600>unixepoch())";
@@ -50,8 +52,8 @@ export function recoveryStore(db, key) {
       const code = randomBytes(32).toString('base64url');
       const now = Date.now();
       const row = db.prepare(`UPDATE viewer_recovery SET codeHash=?,sentAt=?,used=0
-        WHERE orderId=(SELECT o.orderId FROM viewer_test_orders o JOIN viewer_recovery r USING(orderId)
-          WHERE o.owner=? AND o.filmId=? AND o.account=? AND o.revision=? AND r.emailHash=? AND ${active}
+        WHERE orderId=(SELECT o.orderId FROM viewer_claimed_orders o JOIN viewer_recovery r USING(orderId)
+          WHERE o.owner=? AND o.filmId=? AND o.account=coalesce(?,o.account) AND o.revision=? AND r.emailHash=? AND ${active}
           ORDER BY (o.kind='buy') DESC,o.paidAt+o.rentalHours*3600 DESC LIMIT 1)
         AND (sentAt IS NULL OR sentAt<?)
         AND (SELECT count(*) FROM viewer_recovery WHERE sentAt>=?)<60
@@ -62,7 +64,7 @@ export function recoveryStore(db, key) {
     redeemRecovery(offer, code) {
       if (!/^[\w-]{43}$/.test(code)) return;
       const row = db.prepare(`UPDATE viewer_recovery SET used=1 WHERE codeHash=? AND used=0 AND sentAt>?
-        AND orderId IN (SELECT o.orderId FROM viewer_test_orders o WHERE o.owner=? AND o.filmId=? AND o.account=? AND o.revision=? AND ${active})
+        AND orderId IN (SELECT o.orderId FROM viewer_claimed_orders o WHERE o.owner=? AND o.filmId=? AND o.account=coalesce(?,o.account) AND o.revision=? AND ${active})
         RETURNING orderId`).get(digest(code), Date.now() - 15 * minute, offer.owner, offer.id, offer.account, offer.revision);
       return row && accessToken(row.orderId);
     }

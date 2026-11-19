@@ -91,6 +91,36 @@ test('publication configuration is explicit, bounded, and fails closed on remova
   assert.deepEqual(catalog.list(), []);
 });
 
+test('buyer lookups and bookmarked embeds survive a seller reset while new sales require the ready replacement',async t=>{
+  const f = await fixture(t), a = f.seller('Filmmaker', 'acct_original');
+  const film = f.film(a, 'The film');
+  const unsold = f.film(a, 'No orders');
+  f.env.STREAM_PUBLIC_FILMS = JSON.stringify([film,unsold]);
+  const catalog = createPublicFilms(f);
+  const original = catalog.get(film.id);
+  const order = f.store.reserveViewerOrder({...original, tokenHash:'abc', kind:'rent', amount:99,
+    platform:'acct_platform',origin:'http://127.0.0.1:8787'});
+  f.store.bindViewerSession(order.orderId,'cs_test_original');
+  assert.equal(f.store.resetStripe(a.owner,'test',f.store.stripeContext(a.owner,'test').confirmation),true);
+  assert.deepEqual(catalog.list(),[]);
+  assert.equal(catalog.get(film.id),undefined);
+  assert.equal(catalog.get(unsold.id,{entitled:true}),undefined);
+  const entitled = await catalog.verify(film.id,{entitled:true});
+  assert.equal(entitled.scope,original.scope);
+  assert.equal(entitled.revision,original.revision);
+  assert.equal(entitled.account,null);
+  assert.equal(f.store.dashboardFilms(a.owner).length,2);
+  const next = f.store.stripeContext(a.owner,'test');
+  next.claimAccount('acct_replacement','test');
+  Object.assign(next.state,a.state,{accountId:'acct_replacement'});
+  next.save();
+  assert.equal(catalog.get(film.id).account,'acct_replacement');
+  assert.deepEqual(catalog.get(film.id,{entitled:true}),entitled);
+  assert.ok(f.store.setFilmPublication(a.owner,film.id,false));
+  assert.equal(catalog.get(film.id),undefined);
+  assert.deepEqual(catalog.get(film.id,{entitled:true}),entitled);
+});
+
 test('rights, owner, sandbox mode, stored readiness and unique connected-account claim are all required', async t => {
   const f = await fixture(t), a = f.seller('A', 'acct_123'), film = f.film(a, 'Private');
   const wrongOwner = { owner: 'Another owner', id: film.id };

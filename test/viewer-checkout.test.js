@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { sha256Hex } from '@dustwave/worker-core/crypto';
-import { createRentalAuthority, rentalScope } from '../src/rental.js';
+import { createRentalAuthority, rentalScope, savedFilmScope } from '../src/rental.js';
+import { revisionFor } from '../src/media.js';
+import { createPublicFilms } from '../src/public-films.js';
 import { openSetupStore } from '../src/setup-store.js';
 import { createViewerCheckout } from '../src/viewer-checkout.js';
 import { makeServer } from '../src/server.js';
@@ -14,12 +16,14 @@ import { makeServer } from '../src/server.js';
 const origin = 'http://127.0.0.1:8787';
 const secret = 'whsec_fixture';
 const viewerToken = () => randomBytes(32).toString('base64url');
+const sourceHead = {revision:'"test-cut-one"', size:4};
 
 async function context(t, { legacy = false } = {}) {
   const folder = await mkdtemp(join(tmpdir(), 'stream-viewer-test-'));
   const owner = 'Buyer rehearsal filmmaker', account = 'acct_seller';
-  const offer = { id: 'f-' + randomUUID(), owner, account, title: 'A short film', scope: 'saved/clip',
-    prices: {rent:99,buy:499}, revision: 'revision-one', authority: createRentalAuthority(randomBytes(32)) };
+  const id = 'f-' + randomUUID();
+  const offer = { id, owner, account, title: 'A short film', scope: savedFilmScope(owner,id),
+    prices: {rent:99,buy:499}, revision: revisionFor(sourceHead), authority: createRentalAuthority(randomBytes(32)) };
   const token = viewerToken();
   const orderId = randomUUID();
   if (legacy) {
@@ -38,13 +42,15 @@ async function context(t, { legacy = false } = {}) {
   t.after(async () => { store.close(); await rm(folder, { recursive: true, force: true }); });
   store.invite(owner);
   store.claimAccount(owner, account, 'test');
-  store.saveStripe(owner, { byMode: { test: { mode: 'test', creatorId: owner, channel: 'oauth', accountId: account } } });
+  store.saveStripe(owner, { byMode: { test: { mode: 'test', creatorId: owner, channel: 'oauth', accountId: account,
+    status:'ready',chargesEnabled:true,payoutsEnabled:true } } });
   const bucket = { accountId: 'fixture', bucket: 'synthetic', jurisdiction: 'default' };
   store.saveBucket(owner, { ...bucket, accessKeyId: 'fixture', secretAccessKey: 'fixture' });
-  store.saveFilm(owner, bucket, { id: offer.id, title: offer.title, revision: offer.revision, prices: offer.prices });
+  store.saveFilm(owner, bucket, { id: offer.id, title: offer.title, revision: offer.revision, prices: offer.prices,
+    duration:136, objectKey:'film.mp4', rights:{version:'v1', statement:'I have the rights', acceptedAt:new Date().toISOString()} });
   const calls = [], sessions = new Map(), intents = new Map(), requests = new Map();
   const refunds = [], disputes = [];
-  const behavior = { available: true, platform: 'acct_platform', lose: false, missingSecret: false };
+  const behavior = { available: true, platform: 'acct_platform', sellers:new Set([account]), origin, lose: false, missingSecret: false };
   const purchased = Math.floor(Date.now() / 1000) - 300;
   function addSession(suffix, amount, markers, uiMode, allowedMethods = null) {
     const id = 'cs_test_' + suffix, pi = 'pi_' + suffix;
@@ -68,9 +74,10 @@ async function context(t, { legacy = false } = {}) {
     assert.equal(init.redirect, 'error');
     calls.push({ method, path: url.pathname, recipient });
     if (url.pathname === '/v1/account') return Response.json({ id: behavior.platform, object: 'account' });
-    if (url.pathname === '/v1/accounts/' + account) return Response.json({ id: account, object: 'account', type: 'standard',
+    const seller = url.pathname.startsWith('/v1/accounts/') && url.pathname.split('/').at(-1);
+    if (behavior.sellers.has(seller)) return Response.json({ id: seller, object: 'account', type: 'standard',
       charges_enabled: behavior.available, payouts_enabled: behavior.available });
-    assert.equal(recipient, account);
+    assert.ok(behavior.sellers.has(recipient));
     if (method === 'POST' && url.pathname.endsWith('/expire')) {
       const session = sessions.get(url.pathname.split('/').at(-2));
       assert.ok(session);
@@ -106,7 +113,7 @@ async function context(t, { legacy = false } = {}) {
       } else {
         assert.equal(uiMode,'elements');
         assert.equal(form.has('redirect_on_completion'),false);
-        assert.equal(form.get('return_url'),origin + '/embed/' + offer.id + '?order=' + form.get('client_reference_id'));
+        assert.equal(form.get('return_url'),behavior.origin + '/embed/' + offer.id + '?order=' + form.get('client_reference_id'));
       }
       assert.equal(form.has('payment_method_types[0]'),false);
       const methods = [...form].filter(([name]) => name.startsWith('allowed_payment_method_types')).map(([,value])=>value);
@@ -156,6 +163,133 @@ async function priorOrder(c,kind,uiMode = 'elements') {
   db.close();
   return order;
 }
+
+test('switching the connected seller preserves original purchases, recovery and receipts and routes only new sales to the replacement', async t => {
+  const c = await context(t);
+  const {owner, account} = c.offer;
+  const existing = {...c.offer, account:null};
+  const bought = await c.start('buy');
+  c.pay();
+  c.first().customer_details = {email:'viewer@example.test'};
+  assert.equal((await c.status()).status,'paid');
+  const openToken = viewerToken();
+  const unfinished = await c.checkout.start({offer:c.offer,token:openToken,origin});
+  const results = c.store.dashboardFilms(owner)[0].stats;
+  assert.equal(results.purchases,1);
+  const live = c.store.stripeContext(owner,'live');
+  assert.equal(c.store.resetStripe(owner,'live',live.confirmation), true);
+  assert.equal(c.store.viewerOrderById(unfinished.orderId).withdrawalState,null);
+  const testMode = c.store.stripeContext(owner,'test');
+  assert.equal(c.store.resetStripe(owner,'test',testMode.confirmation),true);
+  await assert.rejects(c.checkout.start({offer:c.offer,token:viewerToken(),origin}),{statusCode:409});
+  await assert.rejects(c.checkout.start({offer:existing,token:viewerToken(),origin}),{statusCode:409});
+  assert.equal(c.store.pendingWithdrawals(owner),1);
+  assert.equal(await c.checkout.closeWithdrawnSessions(owner),0);
+  assert.equal(c.store.viewerOrderById(unfinished.orderId).status,'expired');
+  assert.equal(c.store.viewerOrderById(bought.orderId).withdrawalState,null);
+  assert.deepEqual(c.store.dashboardFilms(owner)[0].stats,results);
+  assert.equal(c.checkout.accessAllowed({offer:existing,orderId:bought.orderId,kind:'buy'}),true);
+  assert.equal((await c.checkout.status({offer:existing,token:c.token})).status,'paid');
+  const {code} = c.store.reserveRecovery(existing,'viewer@example.test');
+
+  const replacement = 'acct_replacement';
+  const next = c.store.stripeContext(owner,'test');
+  assert.ok(next.claimAccount(replacement,'test'));
+  Object.assign(next.state,{creatorId:owner,accountId:replacement,channel:'oauth',status:'ready',chargesEnabled:true,payoutsEnabled:true});
+  next.save();
+  c.behavior.sellers.add(replacement);
+  const newOffer = {...c.offer, account:replacement};
+  const recovered = c.store.redeemRecovery(existing,code);
+  const reads = c.calls.length;
+  assert.equal((await c.checkout.status({offer:existing,token:recovered})).kind,'buy');
+  assert.equal(await c.checkout.verifyPurchase({offer:existing,orderId:bought.orderId}),true);
+  assert.ok(c.calls.slice(reads).every(call=>call.recipient===account));
+  assert.equal(await c.checkout.verifyPurchase({offer:{...existing,owner:'Someone else'},orderId:bought.orderId}),false);
+  assert.equal(await c.checkout.verifyPurchase({offer:{...existing,revision:'replacement cut'},orderId:bought.orderId}),false);
+  await assert.rejects(c.checkout.start({offer:newOffer,token:openToken,origin}),{statusCode:410});
+  const reopened = await c.checkout.start({offer:newOffer,token:viewerToken(),origin});
+  assert.equal(reopened.account,replacement);
+  assert.equal(c.store.viewerOrderById(reopened.orderId).account,replacement);
+  assert.deepEqual(c.calls.filter(call=>call.method==='POST' && call.path==='/v1/checkout/sessions').map(call=>call.recipient),
+    [account,account,replacement]);
+  const charge = c.intents.get(c.first().payment_intent).latest_charge;
+  c.refunds.push({object:'refund',id:'re_return',charge:charge.id,payment_intent:charge.payment_intent,
+    currency:'usd',amount:bought.amount,status:'succeeded'});
+  Object.assign(charge,{refunded:true,amount_refunded:bought.amount});
+  await c.checkout.webhook(...c.sign({...c.event(),id:'evt_return',type:'charge.refunded',data:{object:charge}}));
+  assert.equal(c.checkout.accessAllowed({offer:existing,orderId:bought.orderId,kind:'buy'}),false);
+  assert.equal(c.store.dashboardFilms(owner)[0].stats.refunded,bought.amount);
+  assert.equal(c.store.viewerOrderById(reopened.orderId).withdrawalState,null);
+});
+
+test('a pre-existing rental retains its original expiry and historical receipt through connection reset',async t=>{
+  const c = await context(t,{legacy:true});
+  c.pay();
+  const paid = await c.status();
+  const {owner} = c.offer, existing = {...c.offer,account:null};
+  const previous = c.store.stripeContext(owner,'test');
+  assert.ok(c.store.resetStripe(owner,'test',previous.confirmation));
+  const checked = await c.checkout.status({offer:existing,token:c.token});
+  assert.equal(checked.expiresAt,paid.expiresAt);
+  const grant = {offer:existing,kind:'rent',rentalExpiresAt:paid.expiresAt};
+  assert.ok(c.checkout.accessAllowed(grant));
+  assert.ok(await c.checkout.verifyPlayback(grant));
+  assert.equal(c.checkout.accessAllowed({...grant,offer:{...existing,scope:'another-film'}}),false);
+});
+
+test('normal HTTP checkout, order, renewal, media and original routes keep the paid film isolated across reset', async t => {
+  const c = await context(t);
+  const {id,owner} = c.offer;
+  const saved = c.store.film(owner,id);
+  const otherId = 'f-' + randomUUID();
+  c.store.saveFilm(owner, saved.bucket, {...saved,id:otherId,title:'Other film'});
+  for (const filmId of [id,otherId]) c.store.setFilmPublication(owner,filmId,true);
+  const catalog = createPublicFilms({store:c.store,env:c.env,authority:c.offer.authority,
+    sourceFor:()=>({head:async()=>sourceHead,read:async()=>Buffer.from('film')}),
+    openMedia:async()=>({revision:c.offer.revision,segments:[{duration:1}],segment:async()=>Buffer.from('film'),close(){}})});
+  const server = await makeServer(null,{checkout:c.checkout,catalog});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const base='http://127.0.0.1:'+server.address().port;
+  c.behavior.origin = base;
+  const post=(action,body,filmId=id)=>fetch(base+'/film/'+filmId+'/'+action,{method:'POST',headers:{Origin:base,'Content-Type':'text/plain'},body});
+  const open = await post('buy',c.token);
+  assert.equal(open.status,200);
+  assert.equal((await open.json()).account,c.offer.account);
+  c.pay();
+  const receipt = (await (await post('order',c.token)).json()).receipt;
+  const grant = (await (await post('session',receipt)).json()).grant;
+  const authenticated = {headers:{Authorization:'Bearer '+grant}};
+  async function access() {
+    const confirmed = await post('order',c.token);
+    assert.equal(confirmed.status,200);
+    assert.equal((await confirmed.json()).kind,'buy');
+    assert.equal((await post('session',receipt)).status,200);
+    for (const path of ['play/index.m3u8','play/key','play/0.ts','download']) {
+      const response = await fetch(base+'/film/'+id+'/'+path,authenticated);
+      assert.equal(response.status,200,path);
+      const body = Buffer.from(await response.arrayBuffer());
+      assert.ok(body.length);
+      if (path==='download') assert.equal(body.toString(),'film');
+    }
+  }
+  const old = c.store.stripeContext(owner,'test');
+  assert.ok(c.store.resetStripe(owner,'test',old.confirmation));
+  assert.equal((await post('checkout',viewerToken())).status,404);
+  await access();
+  const next = c.store.stripeContext(owner,'test');
+  next.claimAccount('acct_next','test');
+  Object.assign(next.state,old.state,{accountId:'acct_next'});
+  next.save();
+  c.behavior.sellers.add('acct_next');
+  const replacement = await post('buy',viewerToken());
+  assert.equal(replacement.status,200);
+  assert.equal((await replacement.json()).account,'acct_next');
+  await access();
+  assert.equal((await post('session',receipt,otherId)).status,403);
+  assert.equal((await fetch(base+'/film/'+otherId+'/play/key',authenticated)).status,403);
+  assert.equal((await fetch(base+'/film/'+otherId+'/download',authenticated)).status,403);
+});
 
 test('a reload or concurrent click reuses Checkout Elements, polling and verified Connect webhook fulfill once', async t => {
   const c=await context(t);
@@ -677,6 +811,27 @@ test('unpublish while Stripe is creating a session never releases its client sec
   await assert.rejects(started,{statusCode:410});
   assert.equal(c.first().status,'expired');
   assert.deepEqual(await c.status(),{status:'expired'});
+});
+
+test('a separate setup process resetting the recipient during session creation closes the old form even if the same account reconnects',async t=>{
+  const c = await context(t);
+  const admin = openSetupStore(c.folder);
+  t.after(()=>admin.close());
+  const created = Promise.withResolvers(), resume = Promise.withResolvers();
+  c.behavior.holdCreateResponse=()=>{created.resolve();return resume.promise;};
+  const started = c.start();
+  await created.promise;
+  const selected = admin.stripeContext(c.offer.owner,'test');
+  assert.ok(admin.resetStripe(c.offer.owner,'test',selected.confirmation));
+  const connected = admin.stripeContext(c.offer.owner,'test');
+  assert.ok(connected.claimAccount(c.offer.account,'test'));
+  Object.assign(connected.state,selected.state);
+  connected.save();
+  resume.resolve();
+  await assert.rejects(started,{statusCode:410});
+  assert.equal(c.first().status,'expired');
+  await assert.rejects(c.start(),{statusCode:410});
+  assert.equal(c.calls.filter(call=>call.method==='POST'&&call.path==='/v1/checkout/sessions').length,1);
 });
 
 test('an unavailable Stripe expiration is queued across restart and publication never restores a withdrawn form',async t=>{
