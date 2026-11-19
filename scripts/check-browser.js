@@ -284,6 +284,13 @@ try {
   await new Promise(resolve => hostServer.listen(0, '127.0.0.1', resolve));
   await attempt('preview', () => testDownloader('preview'));
   await attempt('embeddedPreview', () => testDownloader('preview', true));
+  await attempt('previewRepresentation', async () => {
+    const saved = name => (tests[name].outcomes || []).find(item => item.result === 'saved' && item.fullyDecoded);
+    const first = saved('preview'), embedded = saved('embeddedPreview');
+    if (!first || !embedded) return { compared: false };
+    assert.equal(first.sha256, embedded.sha256, 'Unchanged public preview must be byte-identical across range requests');
+    return { compared: true, sha256: first.sha256 };
+  });
   if (!previewOnly) {
     await attempt('rental', () => testDownloader('rental'));
     await attempt('embeddedRental', () => testDownloader('rental', true));
