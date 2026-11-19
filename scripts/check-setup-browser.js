@@ -148,7 +148,7 @@ try {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = 'http://127.0.0.1:' + server.address().port;
-  browser = await chromium.launch({ channel: 'chromium' });
+  browser = await chromium.launch({ channel: process.env.STREAM_BROWSER_CHANNEL || 'chromium' });
   report.chromium = browser.version();
   for (const [mode, storage] of [['new', 'new'], ['existing', 'existing'], ['new', 'existing'], ['existing', 'new'], ['reuse', 'existing']]) {
     const first = !report.scenarios.length;
