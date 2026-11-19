@@ -12,6 +12,7 @@ import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
   ['/checkout.js', ['../public/checkout.js', 'text/javascript']],
+  ['/payment.js', ['../public/payment.js', 'text/javascript']],
   ['/screening.css', ['../public/screening.css', 'text/css']],
   ['/style.css', ['../public/style.css', 'text/css']],
   ['/hls.js', ['../node_modules/hls.js/dist/hls.light.min.js', 'text/javascript']]
@@ -72,9 +73,9 @@ const stripePlayerHeaders = {
   'Referrer-Policy': 'strict-origin',
   'Content-Security-Policy': [
     "default-src 'none'", "script-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com",
-    "style-src 'self'", "connect-src 'self' https://api.stripe.com https://checkout.stripe.com",
-    "frame-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com https://hooks.stripe.com",
-    "img-src 'self' data: https://*.stripe.com", "media-src 'self' blob:", "worker-src 'none'",
+    "style-src 'self'", "connect-src 'self' https://api.stripe.com https://checkout.stripe.com https://link.com https://*.link.com",
+    "frame-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com https://hooks.stripe.com https://link.com https://*.link.com",
+    "img-src 'self' data: https://*.stripe.com https://*.link.com", "media-src 'self' blob:", "worker-src 'none'",
     "frame-ancestors *", "base-uri 'none'", "form-action 'self'"
   ].join('; ')
 };

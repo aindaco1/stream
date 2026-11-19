@@ -44,19 +44,20 @@ async function context(t, { legacy = false } = {}) {
   const calls = [], sessions = new Map(), intents = new Map(), requests = new Map();
   const behavior = { available: true, platform: 'acct_platform', lose: false, missingSecret: false };
   const purchased = Math.floor(Date.now() / 1000) - 300;
-  function addSession(suffix, amount, markers, embedded) {
+  function addSession(suffix, amount, markers, uiMode, allowedMethods = null) {
     const id = 'cs_test_' + suffix, pi = 'pi_' + suffix;
     sessions.set(id, { id, object:'checkout.session', status:'open', payment_status:'unpaid', payment_intent:pi,
       livemode:false, mode:'payment', currency:'usd', amount_total:amount, amount_subtotal:amount,
-      metadata:markers, client_reference_id:markers.order, ui_mode:embedded ? 'embedded_page' : 'hosted',
-      client_secret:embedded && !behavior.missingSecret ? id+'_secret_rehearsal' : null });
+      metadata:markers, client_reference_id:markers.order, ui_mode:uiMode,
+      allowed_payment_method_types:allowedMethods,
+      client_secret:uiMode !== 'hosted' && !behavior.missingSecret ? id+'_secret_rehearsal' : null });
     intents.set(pi, {id:pi, object:'payment_intent', livemode:false, status:'succeeded', amount, amount_received:amount, currency:'usd', metadata:{...markers},
       latest_charge:{id:'ch_' + suffix,object:'charge',livemode:false,status:'succeeded',paid:true,captured:true,refunded:false,disputed:false,
         amount, amount_captured:amount,amount_refunded:0,currency:'usd',created:purchased,payment_intent:pi,payment_method_details:{type:'card'}}});
     return id;
   }
   if (legacy) addSession('legacy',99,{order:orderId,flow:'stream-viewer-rental',product:'stream-rental-prototype',
-    scope:rentalScope({film:offer.scope,revision:offer.revision})}, false);
+    scope:rentalScope({film:offer.scope,revision:offer.revision})}, 'hosted');
   async function fetchImpl(href, init) {
     const url = new URL(href), method = init.method, headers = new Headers(init.headers);
     const recipient = headers.get('Stripe-Account');
@@ -72,10 +73,19 @@ async function context(t, { legacy = false } = {}) {
       assert.equal(url.pathname, '/v1/checkout/sessions');
       const amount = Number(form.get('line_items[0][price_data][unit_amount]'));
       assert.equal(headers.get('Stripe-Version'), '2026-10-28.endive');
-      assert.equal(form.get('ui_mode'), 'embedded_page');
-      assert.equal(form.get('redirect_on_completion'), 'never');
+      const uiMode = form.get('ui_mode');
+      if (uiMode === 'embedded_page') {
+        assert.equal(form.get('redirect_on_completion'), 'never');
+        assert.equal(form.has('return_url'),false);
+      } else {
+        assert.equal(uiMode,'elements');
+        assert.equal(form.has('redirect_on_completion'),false);
+        assert.equal(form.get('return_url'),origin + '/embed/' + offer.id + '?order=' + form.get('client_reference_id'));
+      }
       assert.equal(form.has('payment_method_types[0]'),false);
-      for (const k of ['success_url','cancel_url','return_url','payment_intent_data[transfer_data][destination]']) assert.equal(form.has(k),false);
+      const methods = [...form].filter(([name]) => name.startsWith('allowed_payment_method_types')).map(([,value])=>value);
+      calls.at(-1).allowedMethods = methods;
+      for (const k of ['success_url','cancel_url','payment_intent_data[transfer_data][destination]']) assert.equal(form.has(k),false);
       const key = headers.get('Idempotency-Key');
       assert.ok(key);
       let id = requests.get(key);
@@ -86,7 +96,7 @@ async function context(t, { legacy = false } = {}) {
         assert.equal(markers.order,order);
         assert.equal(markers.amount,String(amount));
         for (const [k,v] of Object.entries(markers)) assert.equal(v,form.get('payment_intent_data[metadata][' + k + ']'));
-        id = addSession(suffix, amount, markers, true);
+        id = addSession(suffix, amount, markers, uiMode, methods.length ? methods : null);
         requests.set(key, id);
       }
       if (behavior.lose) { behavior.lose=false; throw new Error('Interrupted after creating session'); }
@@ -111,14 +121,25 @@ async function context(t, { legacy = false } = {}) {
     start: (kind = 'rent') => checkout.start({ offer,token,origin,kind }), status: () => checkout.status({offer,token}) };
 }
 
-test('a reload or concurrent click reuses embedded Checkout, polling and verified Connect webhook fulfill once', async t => {
+async function priorOrder(c,kind,uiMode = 'elements') {
+  const order = c.store.reserveViewerOrder({ ...c.offer, tokenHash:await sha256Hex(c.token),
+    platform:'acct_platform', origin, kind, amount:c.offer.prices[kind] });
+  const db = new DatabaseSync(join(c.folder,'setup.sqlite'));
+  db.prepare('UPDATE viewer_test_orders SET uiMode=?, cardOnly=0 WHERE orderId=?').run(uiMode,order.orderId);
+  db.close();
+  return order;
+}
+
+test('a reload or concurrent click reuses Checkout Elements, polling and verified Connect webhook fulfill once', async t => {
   const c=await context(t);
   assert.deepEqual(await c.status(),{ status:'pending' });
   assert.equal(c.calls.length,0);
   const [a,b]=await Promise.all([c.start(),c.start()]);
   assert.deepEqual(a,b);
-  assert.deepEqual(a,{clientSecret:c.first().client_secret,publishableKey:'pk_test_fixture',account:c.offer.account});
+  assert.deepEqual(a,{clientSecret:c.first().client_secret,publishableKey:'pk_test_fixture',account:c.offer.account,
+    uiMode:'elements',orderId:c.first().client_reference_id,title:c.offer.title,kind:'rent',amount:99,currency:'usd'});
   assert.equal(c.calls.filter(x=>x.method==='POST').length,1);
+  assert.deepEqual(c.calls.find(x=>x.method==='POST').allowedMethods,['card']);
   const order=c.store.viewerOrderBySession(c.first().id);
   assert.equal(order.tokenHash,await sha256Hex(c.token));
   assert.ok(!JSON.stringify(order).includes(c.token));
@@ -282,6 +303,8 @@ test('the saved order retains its original price and kind when a filmmaker chang
   await assert.rejects(freshStart('unknown'), {statusCode:400});
   const previous = await c.start();
   assert.equal(previous.clientSecret,c.first().client_secret);
+  assert.equal(previous.amount,149);
+  assert.equal(previous.kind,'rent');
   await freshStart('buy');
   assert.deepEqual([...c.sessions.values()].map(row=>row.amount_total),[149,800]);
   c.pay();
@@ -305,6 +328,7 @@ test('buy metadata and local settlement stay bound to the same order, amount and
 
 test('a delayed payment stays locked during processing and a verified failure allows a new checkout', async t => {
   const c = await context(t);
+  await priorOrder(c,'buy');
   await c.start('buy');
   const session = c.first(), intent = c.intents.get(session.payment_intent);
   session.status = 'complete';
@@ -325,6 +349,7 @@ test('a delayed payment stays locked during processing and a verified failure al
 test('a rental settled after three days receives 48 hours from its signed payment event, including after replay and restart', async t => {
   t.mock.timers.enable({ apis:['Date'], now:Date.now() });
   const c = await context(t);
+  await priorOrder(c,'rent');
   await c.start();
   const session = c.first(), intent = c.intents.get(session.payment_intent);
   intent.latest_charge.payment_method_details = {type:'us_bank_account'};
@@ -359,6 +384,7 @@ test('a rental settled after three days receives 48 hours from its signed paymen
 test('first canonical confirmation recovers missed delayed webhooks without moving the rental clock later', async t => {
   t.mock.timers.enable({ apis:['Date'], now:Date.now() });
   const c = await context(t);
+  await priorOrder(c,'rent');
   await c.start();
   const session = c.first(), intent = c.intents.get(session.payment_intent);
   intent.latest_charge.payment_method_details = {type:'sepa_debit'};
@@ -389,4 +415,42 @@ test('old hosted orders migrate as 99-cent rentals and can still fulfill from th
   assert.deepEqual(await c.start(),{status:'paid'});
   assert.equal(await c.checkout.verifyPurchase({offer:c.offer,orderId:order.orderId}),false);
   assert.equal(c.calls.filter(call=>call.method==='POST').length,0);
+});
+
+test('an embedded page from a previous release retries in its original mode and returns the held purchase terms', async t => {
+  const c = await context(t);
+  const order = await priorOrder(c,'buy','embedded_page');
+  c.behavior.lose = true;
+  await assert.rejects(c.start('buy'),{statusCode:503});
+  c.offer.prices = {rent:null,buy:999};
+  c.offer.title = 'New title';
+  c.store.setFilmPrices(c.offer.owner,c.offer.id,c.offer.prices);
+  const prior = await c.start('buy');
+  assert.equal(prior.uiMode,'embedded_page');
+  assert.equal(prior.title,order.title);
+  assert.equal(prior.amount,499);
+  assert.equal(prior.kind,'buy');
+  assert.equal(prior.orderId,order.orderId);
+  assert.deepEqual(await c.start('buy'),prior);
+  assert.equal(c.sessions.size,1);
+  assert.ok(c.calls.filter(call=>call.method==='POST').every(call=>call.allowedMethods.length===0));
+  c.pay();
+  assert.equal((await c.status()).kind,'buy');
+});
+
+test('existing Elements orders retain their dynamic methods on retry and new orders require a card-only form', async t => {
+  const c = await context(t);
+  await priorOrder(c,'buy');
+  c.behavior.lose = true;
+  await assert.rejects(c.start('buy'),{statusCode:503});
+  const legacy = await c.start('buy');
+  assert.equal(legacy.uiMode,'elements');
+  assert.deepEqual(c.calls.filter(call=>call.method==='POST').map(call=>call.allowedMethods),[[],[]]);
+  const token = viewerToken();
+  const open = () => c.checkout.start({offer:c.offer,token,origin,kind:'buy'});
+  const fresh = await open();
+  const session = [...c.sessions.values()].find(value=>value.client_reference_id===fresh.orderId);
+  assert.deepEqual(session.allowed_payment_method_types,['card']);
+  session.allowed_payment_method_types = ['card','klarna'];
+  await assert.rejects(open(),{statusCode:409});
 });

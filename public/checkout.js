@@ -68,6 +68,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   const payment = byId('payment');
   const ownership = byId('ownership');
   const status = byId('status');
+  const statusHome = status.parentElement;
   const check = byId('check-payment');
   const download = byId('download');
   const target = document.createElement('iframe');
@@ -82,7 +83,22 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   if (validToken(saved)) attempts = { rent: saved, active: 'rent' };
   const knownPurchase = slot && read('localStorage', slot + ':purchase');
   const activeKind = kinds.includes(attempts.active) ? attempts.active : 'rent';
-  let token = [returnedToken, knownPurchase, attempts[activeKind]].find(validToken);
+  const address = new URL(location.href);
+  const returnId = address.searchParams.get('order');
+  const authSlot = id => 'stream:authentication:' + film + ':' + id;
+  let returned;
+  if (returnId) {
+    try { returned = JSON.parse(read('sessionStorage', authSlot(returnId))); } catch { /* The original player owns the attempt. */ }
+    for (const key of ['order', 'redirect_status', 'payment_intent', 'payment_intent_client_secret']) address.searchParams.delete(key);
+    history.replaceState(history.state, '', address.pathname + address.search);
+  }
+  let token = [returnedToken, ...(returnId ? [returned?.token] : [knownPurchase, attempts[activeKind]])].find(validToken);
+  if (returnId && token && kinds.includes(returned?.kind)) {
+    attempts[returned.kind] = token;
+    attempts.active = returned.kind;
+    write('sessionStorage', slot, JSON.stringify(attempts));
+  }
+  if (returnId && !token) status.textContent = 'Return to the original film player and select Check payment after bank verification.';
   let unlocked;
   let generation = 0;
   let instance;
@@ -100,11 +116,12 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     payment.hidden = true;
     document.body.classList.remove('paying');
     byId('stripe-checkout').replaceChildren();
+    if (status.parentElement !== statusHome) statusHome.append(status);
   }
 
   function showOffer() {
     const available = offers.filter(kind => !unlocked || (unlocked.kind === 'rent' && kind === 'buy'));
-    check.hidden = !token || token === unlocked?.token;
+    check.hidden = !payment.hidden || !token || token === unlocked?.token;
     panel.hidden = !available.length && check.hidden;
     for (const kind of kinds) {
       const button = byId(kind);
@@ -162,10 +179,16 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
         status.textContent = 'This payment or rental has expired. Choose an offer to start again.';
         showOffer();
       } else if (result.status === 'pending') {
-        if (manual || delay >= delays.length) status.textContent = 'Payment is pending. Finish checkout or check again in a moment.';
+        if (manual || delay >= delays.length) {
+          check.hidden = false;
+          status.textContent = 'Payment is pending. Finish checkout or check again in a moment.';
+        }
       } else throw new Error('Order unavailable');
     } catch {
-      if (attempt === token) status.textContent = 'Payment status is unavailable. Select Check payment to try again.';
+      if (attempt === token) {
+        check.hidden = false;
+        status.textContent = 'Payment status is unavailable. Select Check payment to try again.';
+      }
     } finally {
       if (checking === attempt) {
         checking = undefined;
@@ -188,27 +211,47 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     document.body.classList.add('paying');
     window.scrollTo(0, 0);
     const heading = byId('checkout-heading');
-    heading.textContent = kind === 'rent' ? 'Rent this film' : 'Buy this film';
+    heading.textContent = byId('film-title').textContent;
+    byId('order-terms').textContent = kind === 'rent' ? 'Test rental · 48 hours from payment' : 'Test purchase · Watch and download';
+    byId('order-price').textContent = '';
+    byId('payment-feedback').append(status);
     heading.focus({ preventScroll: true });
     showOffer();
     status.textContent = 'Opening secure test checkout…';
-    schedule();
+    clearTimeout(timer);
     try {
       const result = await postToken(film, kind === 'rent' ? 'checkout' : 'buy', attempt);
       if (run !== generation) return;
       if (result.status === 'paid') { await inspect(true, true); return; }
       if (!result.clientSecret || !result.publishableKey || !result.account) throw new Error('Checkout unavailable');
-      await stripeScript();
+      if (typeof result.title === 'string' && result.title) heading.textContent = result.title;
+      if (result.currency === 'usd' && Number.isSafeInteger(result.amount) && result.amount > 0) {
+        byId('order-price').textContent = currency.format(result.amount / 100);
+      }
+      const [, card] = await Promise.all([stripeScript(), result.uiMode === 'elements' ? import('/payment.js') : undefined]);
       if (run !== generation) return;
       const stripe = window.Stripe(result.publishableKey, { stripeAccount: result.account });
-      const form = await stripe.createEmbeddedCheckoutPage({
-        fetchClientSecret: async () => result.clientSecret,
-        onComplete: () => { if (run === generation) { delay = 0; inspect(true, true); } }
-      });
+      const complete = () => {
+        if (run !== generation) return;
+        delay = 0;
+        inspect(true, true);
+      };
+      let form;
+      if (result.uiMode === 'elements') {
+        if (result.kind !== kind || result.currency !== 'usd' || !Number.isSafeInteger(result.amount) || result.amount < 1 ||
+            typeof result.title !== 'string' || !result.title || !/^[A-Za-z0-9_-]{1,128}$/.test(result.orderId || '')) {
+          throw new Error('Invalid offer');
+        }
+        write('sessionStorage', authSlot(result.orderId), JSON.stringify({ kind, token: attempt }));
+        form = card.createCardForm(stripe, result, schedule, complete);
+      } else if (result.uiMode === 'embedded_page' || !result.uiMode) {
+        schedule();
+        form = await stripe.createEmbeddedCheckoutPage({ fetchClientSecret: async () => result.clientSecret, onComplete: complete });
+      } else throw new Error('Unknown checkout type');
       if (run !== generation) { form.destroy(); return; }
       instance = form;
-      form.mount('#stripe-checkout');
-      status.textContent = 'Complete payment here. Your film will start when payment is confirmed.';
+      await form.mount('#stripe-checkout');
+      if (run === generation) status.textContent = '';
     } catch {
       if (run !== generation) return;
       closeForm();
@@ -272,7 +315,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   });
   if (token) {
     showOffer();
-    inspect(true);
+    inspect(true, Boolean(returnId));
   }
   return { showOffer, purchaseReceipt };
 }

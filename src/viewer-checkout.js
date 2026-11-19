@@ -6,7 +6,7 @@ import { isPrice } from './prices.js';
 
 const LEGACY_FLOW = 'stream-viewer-rental';
 const FLOW = 'stream-viewer-checkout';
-const EMBEDDED_API = { stripeVersion: '2026-10-28.endive' };
+const CHECKOUT_API = { stripeVersion: '2026-10-28.endive' };
 const SESSION = /^cs_test_[a-zA-Z0-9]+$/;
 const INTENT = /^pi_[a-zA-Z0-9]+$/;
 const RENTAL_SECONDS = 48 * 3600;
@@ -55,7 +55,7 @@ function sameMetadata(data, order) {
 function checkSession(session, order) {
   if (session?.object !== 'checkout.session' || !SESSION.test(session.id) || (order.sessionId && session.id !== order.sessionId) ||
       session.livemode !== false || session.mode !== 'payment' || session.currency !== 'usd' ||
-      (order.uiMode === 'embedded_page' && session.ui_mode !== 'embedded_page') ||
+      (order.uiMode !== 'hosted' && session.ui_mode !== order.uiMode) ||
       session.amount_subtotal !== order.amount || session.amount_total !== order.amount || session.client_reference_id !== order.orderId ||
       !sameMetadata(session.metadata, order)) throw mismatch();
 }
@@ -120,16 +120,22 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
       throw expired();
     }
     const stripe = await client(order);
-    const options = order.uiMode === 'hosted' ? undefined : EMBEDDED_API;
+    const options = order.uiMode === 'hosted' ? undefined : CHECKOUT_API;
     let session;
     if (order.sessionId) {
       session = await stripe.checkout.sessions.retrieve(order.sessionId, options);
     } else {
       if (order.uiMode === 'hosted') throw new ViewerCheckoutError('Start a new checkout for this film.', 410);
+      if (order.uiMode !== 'embedded_page' && order.uiMode !== 'elements') throw mismatch();
       await verifyReadySeller({ store, env, fetchImpl, owner: order.owner, account: order.account });
       const markers = metadata(order);
+      // Retried creates must send the parameters from the order's original UI.
+      const redirect = order.uiMode === 'elements' ?
+        { return_url: order.origin + '/embed/' + encodeURIComponent(order.filmId) + '?order=' + order.orderId } :
+        { redirect_on_completion: 'never' };
       session = await stripe.checkout.sessions.create({
-        mode: 'payment', ui_mode: 'embedded_page', redirect_on_completion: 'never', adaptive_pricing: { enabled: false },
+        mode: 'payment', ui_mode: order.uiMode, ...redirect, adaptive_pricing: { enabled: false },
+        ...(order.cardOnly ? { allowed_payment_method_types: ['card'] } : {}),
         client_reference_id: order.orderId, metadata: markers, payment_intent_data: { metadata: markers },
         line_items: [{ quantity: 1, price_data: { currency: 'usd', unit_amount: order.amount,
           product_data: { name: order.title, description: order.kind === 'rent' ?
@@ -150,9 +156,12 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
       throw new ViewerCheckoutError('Your payment is still processing.', 409);
     }
     if (order.uiMode === 'hosted') throw new ViewerCheckoutError('Finish the earlier checkout in its original tab.', 409);
+    const allowedMethods = session.allowed_payment_method_types ?? session.payment_method_types;
+    if (order.cardOnly && (!Array.isArray(allowedMethods) || allowedMethods.length !== 1 || allowedMethods[0] !== 'card')) throw mismatch();
     if (session.status !== 'open' || typeof session.client_secret !== 'string' ||
         !session.client_secret.startsWith(session.id + '_secret_') || session.client_secret.length > 1024) throw mismatch();
-    return { clientSecret: session.client_secret, publishableKey, account: order.account };
+    return { clientSecret: session.client_secret, publishableKey, account: order.account,
+      uiMode: order.uiMode, orderId: order.orderId, title: order.title, kind: order.kind, amount: order.amount, currency: session.currency };
   }
 
   async function start({ offer, token, origin, kind = 'rent' }) {
@@ -173,7 +182,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
   async function reconcile(order, retrievedSession, paidEvent) {
     return shared(checking, order.orderId, async () => {
       const stripe = await client(order);
-      const options = order.uiMode === 'hosted' ? undefined : EMBEDDED_API;
+      const options = order.uiMode === 'hosted' ? undefined : CHECKOUT_API;
       const session = retrievedSession ?? await stripe.checkout.sessions.retrieve(order.sessionId, options);
       checkSession(session, order);
       if (session.status === 'expired') {
@@ -197,7 +206,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
         return { status: 'expired' };
       }
       const now = Math.floor(Date.now() / 1000);
-      const useConfirmation = order.uiMode === 'embedded_page' && order.kind === 'rent' && charge.payment_method_details?.type !== 'card';
+      const useConfirmation = order.uiMode !== 'hosted' && order.kind === 'rent' && charge.payment_method_details?.type !== 'card';
       // A bank debit can create its Charge days before it succeeds. Stripe's
       // paid event dates that success; a missed webhook uses first verified payment.
       const datedEvent = paidEvent?.intent === intent.id && Number.isSafeInteger(paidEvent.created) &&

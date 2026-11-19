@@ -50,16 +50,19 @@ stripe listen --events checkout.session.completed,checkout.session.async_payment
 
 Open `http://127.0.0.1:8793/screening`. To share it over HTTPS, set `STREAM_PUBLIC_ORIGIN` to the exact viewer origin, forward the original Host header, and forward Connect events to that origin’s `/checkout/webhook`. The viewer service exposes only explicitly published films and viewer routes. For a registered Stripe webhook destination, choose events on **Connected accounts** and use that destination’s own signing secret. [Stripe Connect webhooks](https://docs.stripe.com/connect/webhooks)
 
-Embed a published film on another site with its viewer URL. Give it enough space for the payment form. Use HTTPS for the publisher and the player.
+Embed a published film on another site with its viewer URL. Let the iframe shrink with its container and allow vertical scrolling for small screens, larger text, and bank verification. Use HTTPS for the publisher and the player.
 
 ```html
 <iframe src="https://stream.example.org/embed/f-00000000-0000-4000-8000-000000000001"
-  title="Film title" width="640" height="570" allow="autoplay; fullscreen; payment" allowfullscreen></iframe>
+  title="Film title" width="640" height="570" style="max-width: 100%; box-sizing: border-box"
+  allow="autoplay; fullscreen; payment" allowfullscreen></iframe>
 ```
 
-After the preview, select an available offer and pay by card in that player. Stripe Checkout collects card details inside the embed. Stream submits a direct charge to the filmmaker’s connected account and verifies payment server-side. The player starts the film when payment clears, with a play control if the browser requires a tap. Other embeds keep their own checkout and playback state. Rentals run for 48 hours from purchase. A buyer can stream the film, download the original MP4, and save a private access link to return later. Anyone holding the private link can use it. Keep it out of shared embeds. [Stripe direct charges](https://docs.stripe.com/connect/direct-charges?platform=web&ui=embedded-page) · [Stripe test cards](https://docs.stripe.com/testing)
+After the preview, viewers choose a 48-hour rental or a one-time purchase when the filmmaker offers it. The film title, offer and total appear together in the player. Stripe hosts the email and card fields and supports browser autofill. Viewers can also type their details. The Pay button displays the total from Stripe and accepts a single submission while confirmation is in progress. An issuer may ask for card verification. Normal card payments complete in the player. [Stripe Payment Element](https://docs.stripe.com/payments/payment-element) · [Stripe confirmation](https://docs.stripe.com/js/custom_checkout/confirm)
 
-Stream disables completion redirects in Stripe. The filmmaker’s Stripe configuration determines which eligible payment methods appear. An issuer can ask the viewer to verify a payment. Stripe recommends avoiding nested frames for methods that require redirects. If the publisher adds an iframe sandbox, allow scripts, same-origin access, forms and downloads for Stream. Test checkout with the publisher’s actual embed policy. [Stripe embedded Checkout](https://docs.stripe.com/payments/accept-a-payment?payment-ui=checkout&ui=embedded-page) · [Checkout completion behavior](https://docs.stripe.com/payments/checkout/custom-success-page?payment-ui=embedded-page)
+Stream verifies the direct charge on the filmmaker’s connected account before unlocking playback. Other embeds keep their own checkout and playback state. Rentals start at payment. Buyers can watch, download the original MP4 and save a private access link. Anyone holding that link can use the purchase. Keep it out of shared embeds. [Stripe direct charges](https://docs.stripe.com/connect/direct-charges) · [Stripe test cards](https://docs.stripe.com/testing)
+
+New sandbox orders use Stripe Checkout Sessions with the Payment Element and offer card payment. Earlier orders can finish on their original checkout. Saved-card suggestions depend on the browser, its settings, and the publisher’s iframe permissions. If the publisher adds an iframe sandbox, allow scripts, same-origin access, forms and downloads for Stream. Test checkout and bank verification under the publisher’s actual embed policy. [Stripe integration security](https://docs.stripe.com/security/guide) · [Stripe card authentication](https://docs.stripe.com/payments/3d-secure)
 
 For a repeatable browser regression, generate the clock fixture with `npm run fixture` once, then run `npm run check:viewer-checkout`. It exercises separate publisher and player origins, real media playback, and a simulated payment provider.
 
