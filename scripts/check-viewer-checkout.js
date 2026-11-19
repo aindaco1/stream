@@ -69,8 +69,19 @@ const host = 'http://localhost:' + publisher.address().port;
 
 async function preview(frame) {
   assert.equal(await frame.locator('#purchase').isHidden(), true);
+  await frame.page().bringToFront();
+  await frame.locator('video').evaluate(video => { video.muted = true; });
   await frame.getByRole('button', { name: 'Play 10-second preview' }).click();
-  await frame.waitForFunction(() => document.querySelector('video').currentTime > .1);
+  try {
+    await frame.waitForFunction(() => document.querySelector('video').currentTime > .1, null, { polling: 100 });
+  } catch (error) {
+    const state = await frame.locator('video').evaluate(video => ({
+      duration: video.duration, position: video.currentTime, ready: video.readyState,
+      paused: video.paused, error: video.error?.code, visibility: document.visibilityState,
+      status: document.querySelector('#status').textContent
+    }));
+    throw new Error('Preview playback failed: ' + JSON.stringify(state), { cause: error });
+  }
   await frame.evaluate(() => {
     const video = document.querySelector('video');
     if (Math.abs(video.duration - 10) > .1) throw Error('Wrong preview duration');
@@ -112,8 +123,10 @@ try {
 
   const page = await context.newPage();
   await page.goto(host);
-  const children = () => page.mainFrame().childFrames();
-  let [first, second, duplicate] = children();
+  // Out-of-process child frames can attach in a different order after reload.
+  const children = async () => Promise.all((await page.locator('iframe').elementHandles())
+    .map(element => element.contentFrame()));
+  let [first, second, duplicate] = await children();
   await preview(first);
   await preview(second);
   await preview(duplicate);
@@ -130,7 +143,7 @@ try {
   await first.getByRole('button', { name: 'Check payment' }).click();
   await first.getByText('Payment is pending.', { exact: false }).waitFor();
   await page.reload();
-  [first, second, duplicate] = children();
+  [first, second, duplicate] = await children();
   await first.getByRole('button', { name: 'Reopen test checkout' }).waitFor();
   assert.equal(await duplicate.locator('#purchase').isHidden(), true);
   await preview(duplicate);
@@ -152,6 +165,7 @@ try {
   await first.waitForFunction(() => document.querySelector('video').currentTime > .25);
   await first.locator('video').evaluate(v => { v.currentTime = 120; });
   await first.waitForFunction(() => document.querySelector('video').currentTime > 120.25);
+  await first.locator('video').evaluate(video => video.pause());
   assert.equal(await duplicate.getByRole('button', { name: 'Play rental' }).count(), 0);
   hosted.get('2').status = 'expired';
   await duplicate.getByRole('button', { name: 'Check payment' }).click();
@@ -167,7 +181,7 @@ try {
     if (window !== top) Object.defineProperty(window, 'sessionStorage', { get() { throw Error('Storage is unavailable'); } });
   });
   await page.reload();
-  [, second] = children();
+  [, second] = await children();
   await preview(second);
   await second.evaluate(() => { window.open = () => null; });
   await second.getByRole('button', { name: 'Start test rental' }).click();
