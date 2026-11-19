@@ -22,3 +22,7 @@ jobs:
           fi
       - run: npm ci --ignore-scripts
       - run: npm test
+      - name: Rehearse filmmaker setup in Chromium
+        run: |
+          npx playwright install --with-deps chromium
+          npm run check:setup

@@ -13,9 +13,12 @@
     "rental:test": "node --env-file-if-exists=.env scripts/test-rental.js",
     "test": "node --test test/*.test.js",
     "inspect": "node --env-file-if-exists=.env scripts/inspect.js",
-    "check:browser": "node scripts/check-browser.js"
+    "check:browser": "node scripts/check-browser.js",
+    "invite": "node --env-file-if-exists=.env scripts/invite.js",
+    "check:setup": "node scripts/check-setup-browser.js"
   },
   "dependencies": {
+    "@dustwave/admin-shell": "file:shared/dust-wave-platform/packages/admin-shell",
     "@dustwave/worker-core": "file:shared/dust-wave-platform/packages/worker-core",
     "aws4fetch": "1.0.20",
     "hls.js": "1.7.4",

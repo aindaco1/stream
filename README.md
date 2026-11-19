@@ -2,6 +2,37 @@
 
 An open-source film player for filmmakers who keep their originals in their own storage. Each test filmmaker connects a private Cloudflare R2 object, offers a ten-second preview, and unlocks a 48-hour rental after a Stripe sandbox purchase. The player runs on localhost. It makes no persistent streaming copies.
 
+## Guided filmmaker setup
+
+Start Stream with `npm start` and give each pilot filmmaker their own sign-in link. In a second terminal, run:
+
+```sh
+npm run invite -- "Filmmaker name"
+```
+
+The filmmaker opens the link and selects **Open filmmaker setup**. It expires after 30 minutes and can be used once. Their signed-in session lasts 14 days. For a returning filmmaker, issue another invite with the same unique name to reopen their workspace. The operator can use a private handoff to share the invitation. The default local link works on the Mac running Stream.
+
+1. **Get paid with Stripe.** New filmmakers continue to Stripe for identity and payout details. Existing users can connect an eligible Standard business when Dust Wave has enabled that option. Otherwise Stripe can reuse eligible business details under their existing login for a new connected account. Return to Stream to see what is ready or needs attention. Both payment and payout capabilities must be active. You can proceed with storage while Stripe reviews your information.
+2. **Store your film on Cloudflare.** Sign in or create a Cloudflare account. Activate R2 if prompted, select or create a dedicated private bucket, and follow the card to create a bucket-scoped **Object Read only** credential. The card checks access with a signed bucket HEAD that also works on an empty bucket. The filmmaker confirms the token scope and the bucket’s public-access settings in Cloudflare. A successful read alone cannot establish either setting. You can replace a credential and retry a failed connection.
+3. **Add a film.** Confirm the rights statement for this film to unlock the upload guide. Upload the file under **Objects** in your own Cloudflare dashboard or choose a file already there. Copy its exact object key, including folders. Enter a title, then choose **Check film and create preview**. Stream checks the original using conditional range reads, validates the supported MP4 format, and renders the opening ten seconds. **Watch private preview** opens the result. Each new film has its own rights confirmation and private preview. **Save draft** remembers an unfinished title and object key.
+
+New films stay private to their filmmaker during setup. The existing public demo players and sandbox purchase rehearsal are described below.
+
+### Operator configuration
+
+Stream runs as one Node server bound to loopback. For a hosted pilot, terminate TLS ahead of the server, forward the original Host, and set `STREAM_PUBLIC_ORIGIN` to the exact HTTPS origin in both the service and invite CLI. Keep query strings, invitation links, form bodies and credentials out of proxy logs. Do not forward payment callbacks to the demo rental CLI.
+
+| Setting | Purpose |
+| --- | --- |
+| `STREAM_STATE_DIR` | Private state directory, outside the checkout and cloud sync. The `filmmakers/` subdirectory holds SQLite and its owner-only credential encryption key. Back up both privately. Run one web process per state directory. |
+| `STRIPE_CONNECT_SECRET_KEY` | Dust Wave’s server-side Connect platform key. Use a sandbox key for rehearsal. Filmmakers enter identity and bank information on Stripe. |
+| `STRIPE_CONNECT_CLIENT_ID` | Optional, mode-matching Standard OAuth client ID. Enable eligible existing-account connections in the Connect platform and register the exact `/setup/stripe/oauth` redirect on your origin. |
+| `STRIPE_CONNECT_LIVE` | Test mode is the default. Live onboarding requires an explicit value of `1`, a matching live platform key and an HTTPS origin. Test and live connections are stored independently. |
+
+Configure the platform for Accounts v2 merchant onboarding with a full Stripe Dashboard, direct charges and Stripe-managed fees and losses. Set Connect branding, enable networked onboarding to reuse eligible details, and configure collection of external payout details. The card stays available for explanation when the operator has not configured Connect. Storage and private previews work independently. [Stripe-hosted onboarding](https://docs.stripe.com/connect/hosted-onboarding?accounts-namespace=v2) · [Networked onboarding](https://docs.stripe.com/connect/networked-onboarding) · [Existing Standard accounts](https://docs.stripe.com/connect/oauth-standard-accounts)
+
+The setup cards come from Admin Shell **0.16.0** in the pinned Dust Wave Platform submodule. Stream owns the filmmaker sessions, rights records, provider calls and media checks. To run the form rehearsal, install Chromium with `npx playwright install chromium` and run `npm run check:setup`. It uses simulated providers, actual browser forms and the private preview renderer. [Cloudflare R2 credentials](https://developers.cloudflare.com/r2/api/tokens/) · [Cloudflare uploads](https://developers.cloudflare.com/r2/objects/upload-objects/)
+
 ## Try the preview
 
 Use Node 22.23.4+, 24.22.1+, or 26.12.1+ on those major lines, and FFmpeg with libx264 and AAC. The fixture generator makes a 136-second clock with a tone that changes pitch at ten seconds.
