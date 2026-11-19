@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -106,4 +107,10 @@ test('a preview covering the whole film is unavailable and its rental remains pl
   } finally {
     short.close();
   }
+});
+
+test('preview bytes remain stable across separate HTTP range requests', async () => {
+  const first = await film.preview();
+  await delay(1050); // MP4 creation time has one-second precision.
+  assert.deepEqual(await film.preview(), first);
 });

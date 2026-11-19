@@ -188,14 +188,14 @@ try {
     }, () => { counts.interruptedBodies++; }));
   });
 
-  async function testDownloader(kind, embedded = false) {
+  async function testDownloader(kind, embedded = false, compact = false) {
     const paid = kind === 'rental';
     const page = await context.newPage();
     let popup;
     try {
       let player = page;
       if (embedded) {
-        await page.goto('http://localhost:' + hostServer.address().port + '/single');
+        await page.goto('http://localhost:' + hostServer.address().port + (compact ? '/compact' : '/single'));
         player = page.frame({ name: 'film0' });
         assert.ok(player, 'Off-site embed loaded');
         if (paid) {
@@ -275,10 +275,11 @@ try {
   // The embedding site publishes public iframe URLs. The test simulates the
   // receipt return only inside the selected frame, outside the host document.
   hostServer = createServer((req, res) => {
-    const films = req.url === '/single' ? ['clock'] : ['clock', 'second', 'clock'];
+    const films = ['/compact', '/single'].includes(req.url) ? ['clock'] : ['clock', 'second', 'clock'];
+    const size = req.url === '/compact' ? '' : 'width="384" height="340"';
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end('<!doctype html><title>Independent embeds</title>' + films.map((film, i) =>
-      '<iframe width="384" height="340" name="film' + i + '" allow="autoplay" src="' + embed(film) + '"></iframe>').join(''));
+      '<iframe ' + size + ' name="film' + i + '" allow="autoplay" src="' + embed(film) + '"></iframe>').join(''));
   });
   await new Promise(resolve => hostServer.listen(0, '127.0.0.1', resolve));
   await attempt('preview', () => testDownloader('preview'));
@@ -286,6 +287,7 @@ try {
   if (!previewOnly) {
     await attempt('rental', () => testDownloader('rental'));
     await attempt('embeddedRental', () => testDownloader('rental', true));
+    await attempt('compactEmbeddedRental', () => testDownloader('rental', true, true));
     await attempt('independentEmbeds', async () => {
       const page = await context.newPage();
       try {
@@ -294,9 +296,10 @@ try {
         assert.ok(rental && second && otherClock, 'All three embeds loaded');
         await rental.goto('about:blank');
         await rental.goto(embed('clock', true));
-        const [full, free, sibling] = await Promise.all([
-          startPlayer(rental, paidName), startPlayer(second, previewName), startPlayer(otherClock, previewName)
-        ]);
+        // One viewer has one pointer. Start each frame in turn and leave all playing.
+        const full = await startPlayer(rental, paidName);
+        const free = await startPlayer(second, previewName);
+        const sibling = await startPlayer(otherClock, previewName);
         const seekTime = await seek(full, 120);
         const previewTimes = await Promise.all([free, sibling].map(video => video.evaluate(v => ({ time: v.currentTime, duration: v.duration }))));
         assert.ok(previewTimes.every(v => v.time > 0 && v.duration <= 10.001));

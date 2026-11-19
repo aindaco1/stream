@@ -131,6 +131,8 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
         const target = new BufferTarget();
         const format = preview ? new Mp4OutputFormat({ fastStart: 'in-memory' }) : new MpegTsOutputFormat();
         const output = new Output({ target, format });
+        // Every byte range of the same preview must address one stable MP4 representation.
+        if (preview) output.setMetadataTags({ creationTime: null });
         const videoOut = new EncodedVideoPacketSource('avc');
         output.addVideoTrack(videoOut);
         const jobs = [{ sink: video, outputTrack: videoOut, decoderConfig: videoConfig, isVideo: true }];
