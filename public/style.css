@@ -1,65 +1,64 @@
-:root { color-scheme: dark; font: 100%/1.5 Inter, 'Helvetica Neue', Arial, sans-serif; color: #faf9f7; background: #181817; }
+:root {
+  color-scheme: dark; font: 100%/1.5 Inter, 'Helvetica Neue', Arial, sans-serif;
+  color: #faf9f7; background: #181817;
+  --gutter: clamp(1rem, 3vw, 1.5rem);
+  --section-gap: 1rem;
+}
 * { box-sizing: border-box; }
-body { margin: 0; }
-main { max-width: 60rem; margin: auto; }
+[hidden] { display: none !important; }
+body, p, h1 { margin: 0; }
+main { max-width: 60rem; margin-inline: auto; }
 video { display: block; background: #080808; width: 100%; aspect-ratio: 16 / 9; }
-.details { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding: 1rem 1.25rem .5rem; }
-h1 { margin: 0; font-size: clamp(1.1rem, 3vw, 1.5rem); line-height: 1.25; font-weight: 600; }
-p { margin: .2rem 0; color: #c5c4bf; font-size: .875rem; }
-button { border: 0; border-radius: .35rem; background: #f1efe7; color: #161715; padding: .7rem 1rem; font: inherit; font-weight: 600; cursor: pointer; }
-button:focus-visible { outline: 3px solid #f0ba73; outline-offset: 3px; }
+h1 { font-size: clamp(1.1rem, 3vw, 1.5rem); line-height: 1.25; font-weight: 600; overflow-wrap: anywhere; }
+p { color: #c5c4bf; font-size: .875rem; }
+a, summary { color: #f2d6ad; text-underline-offset: .2em; }
+button {
+  border: 0; border-radius: .35rem; background: #f1efe7; color: #161715; min-height: 2.75rem;
+  padding: .625rem 1rem; font: inherit; font-weight: 600; cursor: pointer;
+}
+:is(a, button, input, summary):focus-visible { outline: 3px solid #f0ba73; outline-offset: 2px; }
 button:disabled { opacity: .65; cursor: wait; }
-#status { padding: 0 1.25rem .75rem; }
-#status:empty { display: none; }
+.secondary { background: #33332f; color: #faf9f7; }
+.actions, .details { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.details { justify-content: space-between; }
+.details h1 + p { margin-top: .25rem; }
+body[data-checkout]:not(.paying) main { display: grid; gap: var(--section-gap); padding-block-end: var(--section-gap); }
+body[data-checkout]:not(.paying) main > :not(video) { min-width: 0; margin-inline: var(--gutter); }
+#purchase, #restore-form { display: grid; gap: .75rem; }
+#status:empty, #restore-feedback:empty, #rental-end:empty { display: none; }
+#stripe-checkout { min-width: 0; }
+summary { cursor: pointer; min-height: 2.75rem; padding-block: .625rem; }
+#access-tools label, #restore-tools label { display: block; font-size: .875rem; }
+#access-link, #restore-email { width: min(100%, 24rem); min-width: 0; min-height: 2.75rem; padding: .5rem .625rem; font: inherit; }
+#restore-email { display: block; margin-top: .25rem; font-size: 1rem; }
+#restore-form button { justify-self: start; }
+#restore-feedback, #access-tools details p + label { margin-top: .75rem; }
+#access-tools .actions { margin-top: .25rem; }
+#access-tools p:not(:empty) + details { margin-top: .5rem; }
+body.paying :is(#access-tools, #restore-tools) { display: none; }
+.checkout-page main { display: grid; gap: 1rem; max-width: 32rem; padding: clamp(2rem, 12vh, 6rem) var(--gutter); }
+.checkout-page h1 { font-size: 1.8rem; }
+.checkout-page p { font-size: 1rem; }
 @media (max-height: 400px) {
-  main { height: 100dvh; display: grid; grid-template-rows: minmax(0, 1fr) auto auto; }
+  :root { --gutter: .75rem; --section-gap: .5rem; }
+  body[data-checkout]:not(.paying) main { height: 100dvh; grid-template-rows: minmax(0, 1fr); }
   video { height: 100%; min-height: 0; aspect-ratio: auto; object-fit: contain; }
-  .details { gap: .5rem; padding: .35rem .6rem; }
+  .details { gap: .5rem; }
   .details p { display: none; }
   h1 { font-size: 1rem; }
-  button { font-size: .875rem; padding: .5rem .65rem; min-height: 2.75rem; }
-  #status { padding: .2rem .6rem .4rem; }
-}
-
-[hidden] { display: none !important; }
-.actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .85rem; }
-#purchase { padding: .5rem 1.25rem 1rem; }
-#purchase p { margin-bottom: .45rem; }
-.secondary { background: #33332f; color: #faf9f7; }
-a { color: #f2d6ad; text-underline-offset: .2em; }
-a:focus-visible { outline: 3px solid #f0ba73; outline-offset: 3px; }
-.checkout-page main { display: block; max-width: 32rem; height: auto; padding: clamp(2rem, 12vh, 6rem) 1.25rem; }
-.checkout-page h1 { font-size: 1.8rem; margin: .5rem 0 1rem; overflow-wrap: anywhere; }
-.checkout-page p { margin: .5rem 0; font-size: 1rem; }
-.checkout-page #status { padding: 0; }
-.checkout-page .actions, .checkout-page #return-film { margin-top: .75rem; }
-@media (max-height: 400px) {
-  main:has(#purchase:not([hidden])) { display: block; height: auto; }
+  button { font-size: .875rem; padding: .5rem .75rem; }
+  body[data-checkout]:not(.paying) main:has(#purchase:not([hidden]), #ownership:not([hidden]), details[open]) {
+    height: auto; grid-template-rows: auto;
+  }
   main:has(#purchase:not([hidden])) video { height: 35dvh; }
-  #purchase { padding: .25rem .6rem .45rem; }
+  main:has(#ownership:not([hidden]), details[open]) video { height: 65dvh; }
+  body[data-access] main:has(:is(#purchase, #ownership):not([hidden])) video { height: max(60dvh, calc(100dvh - 3.25rem)); }
+  #terms { font-size: .8125rem; line-height: 1.25; }
 }
-
 @media (max-height: 240px) {
   main:has(#purchase:not([hidden])) video.preview-ended { display: none; }
   main:has(#purchase:not([hidden])) .details > div { flex: 1; min-width: 0; }
   main:has(#purchase:not([hidden])) h1 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-}
-
-#ownership { margin: .5rem 1.25rem 1rem; }
-#stripe-checkout { min-width: 0; }
-#ownership { display: flex; align-items: start; flex-wrap: wrap; gap: .75rem 1rem; }
-#ownership details { flex: 1 1 16rem; }
-#ownership summary { cursor: pointer; padding: .5rem 0; color: #f2d6ad; }
-#ownership summary:focus-visible { outline: 3px solid #f0ba73; }
-#ownership label { display: block; font-size: .875rem; }
-#access-link { min-width: 0; width: min(100%, 24rem); padding: .65rem; font: inherit; }
-
-@media (max-height: 400px) {
-  main:has(#ownership:not([hidden])) { display: block; height: auto; }
-  main:has(#ownership:not([hidden])) video { height: 65dvh; }
-  body[data-access] main:has(:is(#purchase, #ownership):not([hidden])) video { height: max(60dvh, calc(100dvh - 3.25rem)); }
-  #ownership { margin: .35rem .6rem .75rem; }
-  #terms { font-size: .8rem; line-height: 1.2; }
 }
 
 /* The film stays dark. Checkout uses the paper, type and primary action from
@@ -76,7 +75,7 @@ body.paying main {
 }
 body.paying :is(.details, #ownership, #purchase .actions > :is(#buy, #rent), #terms, video) { display: none; }
 body.paying #payment { order: -1; min-width: 0; }
-.payment-header { padding-bottom: .75rem; border-bottom: 1px solid var(--pay-line); margin-bottom: .9rem; }
+.payment-header { padding-bottom: .75rem; border-bottom: 1px solid var(--pay-line); margin-bottom: 1rem; }
 .payment-nav, .order-line { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .payment-nav { color: var(--pay-muted); font-size: .875rem; }
 #close-checkout {
@@ -89,7 +88,7 @@ body.paying #payment { order: -1; min-width: 0; }
 }
 .order-line p { color: var(--pay-muted); margin: 0; font-size: .925rem; }
 #order-price { color: var(--pay-ink); white-space: nowrap; font-size: 1rem; font-variant-numeric: tabular-nums; }
-#card-form { display: grid; gap: .85rem; min-width: 0; }
+#card-form { display: grid; gap: 1rem; min-width: 0; }
 #card-form > div { min-width: 0; }
 .payment-credit { color: var(--pay-muted); margin: 0; font-size: .8125rem; text-align: center; }
 #contact-element:empty, #payment-element:empty { display: none; }
@@ -105,7 +104,7 @@ body.paying main:has(#card-form:not([hidden])) {
   padding: 3px; scroll-padding-block: 3px;
 }
 #payment:has(#card-form:not([hidden])) .payment-action {
-  display: grid; flex: none; gap: .2rem; padding: .4rem 3px 0;
+  display: grid; flex: none; gap: .5rem; padding: .75rem 3px 0;
 }
 body.paying #purchase:has(#check-payment[hidden]) { display: none; }
 #confirm-payment, body.paying #check-payment { min-height: 44px; font-size: 1rem; }
@@ -118,10 +117,10 @@ body.paying #purchase:has(#check-payment[hidden]) { display: none; }
   color: var(--pay-error); font-weight: 600; font-size: .95rem; line-height: 1.4;
   border-left: 3px solid currentColor; padding-left: .65rem; margin: 0;
 }
-body.paying #purchase { padding: .4rem 0 0; }
+body.paying #purchase { padding: .5rem 0 0; }
 body.paying #check-payment { color: var(--pay-muted); background: transparent; text-decoration: underline; padding: .5rem 0; }
 body.paying :focus-visible { outline: 3px solid var(--pay-focus); outline-offset: 2px; }
-body.paying #status { color: var(--pay-muted); padding: 0 0 .7rem; margin: 0; }
+body.paying #status { color: var(--pay-muted); padding: 0 0 .75rem; margin: 0; }
 @media (min-width: 42rem) {
   body.paying main {
     --checkout-margin: 2rem; padding: 1.25rem 1.75rem; margin-block: 1rem;
@@ -129,19 +128,11 @@ body.paying #status { color: var(--pay-muted); padding: 0 0 .7rem; margin: 0; }
   }
 }
 @media (max-height: 400px) {
-  body.paying main { --checkout-margin: 0px; padding-block: .4rem; margin-block: 0; }
+  body.paying main { --checkout-margin: 0px; padding-block: .5rem; margin-block: 0; }
 }
 
 @media (max-width: 26rem) {
   body.paying main { padding-inline: .5rem; }
-  .payment-header { margin-bottom: .65rem; padding-bottom: .55rem; }
-  #card-form { gap: .6rem; }
+  .payment-header { margin-bottom: .75rem; padding-bottom: .5rem; }
+  #card-form { gap: .75rem; }
 }
-
-#access-tools, #restore-tools { margin: .35rem 1.25rem .75rem; }
-#access-tools summary, #restore-tools summary { cursor: pointer; color: #f2d6ad; padding: .5rem 0; }
-#access-tools label, #restore-tools label { display: block; font-size: .875rem; }
-#restore-form input { width: min(100%, 22rem); padding: .6rem; font: inherit; }
-body.paying :is(#access-tools, #restore-tools) { display: none; }
-
-#email-return { padding: .5rem 1.25rem; }
