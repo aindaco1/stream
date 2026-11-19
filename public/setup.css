@@ -83,4 +83,4 @@ button:hover, .primary-link:hover { background: #163e28; }
 .saved-films li + li { margin-top: 1.5rem; }
 .film-sharing > a { justify-self: start; }
 .film-sharing textarea { width: 100%; resize: vertical; }
-.copy-status:empty { display: none; }
+.copy-status:empty { position: absolute; }
