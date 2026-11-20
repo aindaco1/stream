@@ -18,6 +18,8 @@ The filmmaker opens the link and selects **Open filmmaker setup**. It expires af
 
 A filmmaker can set the rental and purchase prices for a film in setup. Leaving a price blank removes that offer from new checkouts. Existing saved films start with their previous $0.99 rental. New films stay private to their filmmaker during setup. The existing public demo players and sandbox purchase rehearsal are described below.
 
+Select **Appearance** in the filmmaker header to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, setup and the dashboard.
+
 ### Filmmaker dashboard
 
 Open **Film dashboard** and choose **Films**. On a phone, use the **Filmmaker workspace** and **Dashboard sections** menus. Find your saved film, set rental and purchase prices, choose 1–720 rental hours and a preview of 0–30 whole seconds, then publish and copy the embed code. A zero-second preview shows the offers immediately. The preview must end before the film does. The filmmaker can change future offers without altering the price or expiry of an existing order.

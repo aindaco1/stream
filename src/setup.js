@@ -22,17 +22,11 @@ class SetupError extends Error {
   constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; }
 }
 
-function page(title, inner, script = '') {
-  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-    '<link rel="stylesheet" href="/setup/style.css"><title>' + escapeHtml(title) + ' · Stream</title></head><body><main class="setup-shell"><h1>' +
-    escapeHtml(title) + '</h1>' + inner + '</main>' + script + '</body></html>';
-}
-
 function signInPage(message = '') {
   const feedback = message ? '<p role="alert">' + escapeHtml(message) + '</p>' : '';
-  return page('Filmmaker sign-in', feedback + '<p>Open the private invitation from Dust Wave, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.</p>' +
+  return workspacePage('Filmmaker sign-in', null, '<h1>Filmmaker sign-in</h1>' + feedback + '<p>Open the private invitation from Dust Wave, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.</p>' +
     '<form method="post" action="/setup/sign-in"><label>Invitation code <input name="code" type="password" required autocomplete="one-time-code" maxlength="64"></label> ' +
-    '<button type="submit">Open filmmaker setup</button></form>', '<script src="/setup/sign-in.js" defer></script>');
+    '<button type="submit">Open filmmaker setup</button></form>');
 }
 
 async function readForm(req) {
@@ -90,7 +84,9 @@ export async function createSetup({
   sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm
 } = {}) {
   const style = await readFile(new URL('../public/setup.css', import.meta.url));
+  const darkStyle = await readFile(new URL('../public/setup-dark.css', import.meta.url));
   const scripts = new Map(await Promise.all(Object.entries({
+    '/setup/appearance.js': new URL(import.meta.resolve('@dustwave/admin-shell/appearance-browser')),
     '/setup/dashboard.js': new URL('../public/setup-dashboard.js', import.meta.url),
     '/setup/navigation.js': new URL('../public/setup-navigation.js', import.meta.url),
     '/setup/tabs.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs')),
@@ -146,6 +142,7 @@ export async function createSetup({
       }));
     };
     if (get && path === '/setup/style.css') return send(200, 'text/css', style, commonHeaders);
+    if (get && path === '/setup/dark.css') return send(200, 'text/css', darkStyle, commonHeaders);
     if (get && scripts.has(path)) return send(200, 'text/javascript', scripts.get(path), commonHeaders);
     if (get && path === '/setup/sign-in.js') {
       return send(200, 'text/javascript', "const code=location.hash.slice(1); if(code){history.replaceState(null,'',location.pathname); if(/^[\\w-]{43}$/.test(code)) document.querySelector('[name=code]').value=code;}", commonHeaders);

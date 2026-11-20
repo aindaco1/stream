@@ -207,15 +207,21 @@ export function workspacePage(title, csrf, content, { dashboard = false } = {}) 
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="same-origin">
     <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/setup/style.css">
-    <script type="module" src="/setup/navigation.js"></script>${dashboard ? '<script src="/setup/dashboard.js" defer></script>' : ''}</head>
+    <link rel="stylesheet" href="/setup/dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
+    <script src="/setup/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
+    ${csrf ? '<script type="module" src="/setup/navigation.js"></script>' : '<script src="/setup/sign-in.js" defer></script>'}
+    ${dashboard ? '<script src="/setup/dashboard.js" defer></script>' : ''}</head>
     <body><a class="skip" href="#main">Skip to content</a>
     <header class="masthead"><div class="bar"><strong class="brand">Stream</strong>
-      <form method="post" action="/setup/sign-out">${hidden('csrf', csrf)}
-      <button class="sign-out" type="submit">Sign out</button></form></div>
-      <nav class="workspace-nav" aria-label="Filmmaker workspace"><div class="tab-bar">
+      <label class="appearance">Appearance<select data-appearance-select>
+        <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
+      </select></label>
+      ${csrf ? `<form method="post" action="/setup/sign-out">${hidden('csrf', csrf)}
+        <button class="sign-out" type="submit">Sign out</button></form>` : ''}</div>
+      ${csrf ? `<nav class="workspace-nav" aria-label="Filmmaker workspace"><div class="tab-bar">
         <a href="/setup/dashboard"${dashboard ? current : ''}>Film dashboard</a>
         <a href="/setup"${dashboard ? '' : current}>Filmmaker setup</a>
-      </div></nav></header>
+      </div></nav>` : ''}</header>
     <main class="setup-shell" id="main" tabindex="-1">${content}</main></body></html>`;
 }
 

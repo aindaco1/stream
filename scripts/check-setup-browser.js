@@ -62,6 +62,34 @@ const stripe = {
   }
 };
 
+async function checkAppearance(page, origin) {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto(origin + '/setup/sign-in');
+  const choice = page.getByRole('combobox', { name: 'Appearance' });
+  const scheme = mode => page.waitForFunction(expected =>
+    getComputedStyle(document.documentElement).colorScheme === expected, mode);
+  assert.equal(await choice.inputValue(), 'system');
+  await scheme('dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await scheme('light');
+  await choice.selectOption('dark');
+  await scheme('dark');
+  await page.reload();
+  assert.equal(await choice.inputValue(), 'dark');
+  const second = await page.context().newPage();
+  try {
+    await second.goto(origin + '/setup/sign-in');
+    const there = second.getByRole('combobox', { name: 'Appearance' });
+    assert.equal(await there.inputValue(), 'dark');
+    await there.selectOption('light');
+    await scheme('light');
+    assert.equal(await choice.inputValue(), 'light');
+    await choice.selectOption('system');
+    await second.waitForFunction(() => document.querySelector('[data-appearance-select]').value === 'system');
+    await choice.selectOption('dark');
+  } finally { await second.close(); }
+}
+
 async function signIn(page, origin, owner) {
   await page.goto(origin + '/setup/sign-in');
   await page.getByLabel('Invitation code').fill(setup.store.invite(owner));
@@ -335,7 +363,9 @@ try {
       });
       page.on('console', event => { if (event.type() === 'error' && event.text().includes('Content Security Policy')) trace.push({ problem: 'Page reported a Content Security Policy error' }); });
       page.setDefaultTimeout(8000);
+      if (first) await checkAppearance(page, origin);
       await signIn(page, origin, owner);
+      if (first) assert.equal(await page.getByRole('combobox', { name: 'Appearance' }).inputValue(), 'dark');
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       if (evidence && (first || mode === 'reuse')) {
         await page.screenshot({ path: path.join(evidence, first ? 'setup-mobile.png' : 'setup-desktop.png'), fullPage: true });
@@ -370,6 +400,7 @@ try {
         assert.ok((await workspace.boundingBox()).height >= 44);
         await workspace.selectOption('/setup/dashboard');
         await page.getByRole('heading', { name: 'Film dashboard' }).waitFor();
+        assert.equal(await page.getByRole('combobox', { name: 'Appearance' }).inputValue(), 'dark');
         const sections = page.getByRole('combobox', { name: 'Dashboard sections' });
         assert.ok((await sections.boundingBox()).height >= 44);
         await sections.selectOption('overview');
