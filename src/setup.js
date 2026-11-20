@@ -9,7 +9,8 @@ import { guidedBucketForm, parseR2BucketUrl, R2SetupError } from './setup-r2.js'
 import { openSetupStore } from './setup-store.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { escapeHtml, renderBucketAccess, renderDashboard, renderSetupPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
+import { escapeHtml, infoFields, selectedFields } from './film-embed.js';
+import { filmSection, renderBucketAccess, renderDashboard, renderSetupPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
@@ -26,16 +27,16 @@ function signInPage(message = '') {
   const feedback = message ? '<p role="alert">' + escapeHtml(message) + '</p>' : '';
   return workspacePage('Filmmaker sign-in', null, '<h1>Filmmaker sign-in</h1>' + feedback + '<p>Open the private invitation from Dust Wave, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.</p>' +
     '<form method="post" action="/setup/sign-in"><label>Invitation code <input name="code" type="password" required autocomplete="one-time-code" maxlength="64"></label> ' +
-    '<button type="submit">Open filmmaker setup</button></form>');
+    '<button type="submit">Open setup</button></form>');
 }
 
-async function readForm(req) {
+async function readForm(req, limit = 8192) {
   if (req.headers['content-type']?.split(';')[0] !== 'application/x-www-form-urlencoded') throw new SetupError('Use the setup form.', 415);
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 8192) throw new SetupError('The form is too large.', 413);
+    if (size > limit) throw new SetupError('The form is too large.', 413);
     chunks.push(chunk);
   }
   const fields = new URLSearchParams(Buffer.concat(chunks).toString());
@@ -87,6 +88,7 @@ export async function createSetup({
   const darkStyle = await readFile(new URL('../public/setup-dark.css', import.meta.url));
   const scripts = new Map(await Promise.all(Object.entries({
     '/setup/appearance.js': new URL(import.meta.resolve('@dustwave/admin-shell/appearance-browser')),
+    '/setup/film-embed.js': new URL('./film-embed.js', import.meta.url),
     '/setup/dashboard.js': new URL('../public/setup-dashboard.js', import.meta.url),
     '/setup/navigation.js': new URL('../public/setup-navigation.js', import.meta.url),
     '/setup/tabs.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs')),
@@ -112,7 +114,7 @@ export async function createSetup({
   async function handle(req, { path, origin, send, sendMp4 }) {
     const { searchParams } = new URL(req.url, origin);
     const redirect = (to, extra = {}) => send(303, 'text/plain', '', { ...commonHeaders, ...extra, Location: to });
-    const html = (status, markup) => send(status, 'text/html; charset=utf-8', markup, commonHeaders);
+    const html = (status, markup, extra) => send(status, 'text/html; charset=utf-8', markup, { ...commonHeaders, ...extra });
     const reject = (status, message) => send(status, 'text/plain; charset=utf-8', message, commonHeaders);
     const method = req.method;
     const get = method === 'GET' || method === 'HEAD';
@@ -124,21 +126,16 @@ export async function createSetup({
     const provider = stripe ?? createStripeSetup({ env, origin });
     const mode = env.STRIPE_CONNECT_LIVE === '1' ? 'live' : 'test';
     const display = (status = 200, feedback = {}) => {
-      const { r2, stripe: savedStripe, draft } = store.maker(session.owner);
+      const { r2, stripe: savedStripe } = store.maker(session.owner);
       const state = stripeSetupStateForMode(savedStripe, mode);
-      const film = store.film(session.owner, draft.id);
       return html(status, renderSetupPage({
         filmmaker: { name: session.owner }, csrf: session.csrf,
-        initialSection: path.startsWith('/setup/stripe/') ? 'payments' : path.startsWith('/setup/r2') ? 'storage' :
-          ['/setup/film', '/setup/film/prices', '/setup/rights', '/setup/next'].includes(path) ? 'film' : undefined,
+        initialSection: path.startsWith('/setup/stripe/') ? 'payments' : path.startsWith('/setup/r2') ? 'storage' : undefined,
         stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
           canReset: Boolean(state.accountId || state.flow || state.createRequest),
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
         r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
-        rights: { accepted: Boolean(draft.rights), statement: rightsStatement }, draft: { ...draft, ...store.storageDraft(session.owner) },
-        films: store.films(session.owner).map(row => ({ ...row, previewPath: '/setup/preview/' + row.id })),
-        film: film && { id: film.id, title: film.title, prices: film.prices, duration: film.duration, previewSeconds: film.previewSeconds,
-          rentalHours: film.rentalHours, previewPath: '/setup/preview/' + draft.id }, ...feedback
+        draft: store.storageDraft(session.owner) || {}, ...feedback
       }));
     };
     if (get && path === '/setup/style.css') return send(200, 'text/css', style, commonHeaders);
@@ -160,18 +157,33 @@ export async function createSetup({
     }
     const preview = previewPattern.exec(path);
     if (!session) {
-      if (get && (path === '/setup' || path === '/setup/dashboard')) return redirect('/setup/sign-in');
+      if (get && (path === '/setup' || path === '/setup/dashboard' || path === '/setup/dashboard/new')) return redirect('/setup/sign-in');
       if (get && callbackPattern.test(path)) return html(401, signInPage('Your Stream session has ended. Sign in again and continue from the Stripe card.'));
       return reject(401, 'Sign in to your filmmaker workspace.');
     }
     if (get && path === '/setup') return display();
     const owner = session.owner;
-    const step = (title, inner) => workspacePage(title, session.csrf, '<h1>' + escapeHtml(title) + '</h1>' + inner);
-    const dashboard = (status = 200, error) => html(status, renderDashboard({ csrf: session.csrf, owner, error,
-      origin: viewerOrigin(env, origin), films: store.dashboardFilms(owner).map(film => ({
-        ...film, published: publications.isPublished(owner, film.id)
-      })) }));
+    const step = (title, inner, options) => workspacePage(title, session.csrf, '<h1>' + escapeHtml(title) + '</h1>' + inner, options);
+    const newFilm = (status = 200, feedback = {}) => {
+      const { r2, draft } = store.maker(owner);
+      if (store.film(owner, draft.id)) return feedback.error ? dashboard(status, feedback.error) : redirect('/setup/dashboard#' + draft.id);
+      const message = feedback.error ? `<p class="feedback error" role="alert">${escapeHtml(feedback.error)}</p>` :
+        feedback.notice ? `<p class="feedback" role="status">${escapeHtml(feedback.notice)}</p>` : '';
+      return html(status, step('Add a film', message + '<section id="film" class="film-card">' + filmSection({
+        r2: r2 ? { ...r2, status: 'ready' } : {}, draft, csrf: session.csrf,
+        rights: { accepted: Boolean(draft.rights), statement: rightsStatement }
+      }) + '</section><p><a href="/setup/dashboard#films">Back to films</a></p>', { dashboard: true }));
+    };
+    const dashboard = (status = 200, error) => {
+      const viewer = viewerOrigin(env, origin);
+      return html(status, renderDashboard({ csrf: session.csrf, owner, error, draft: store.maker(owner).draft,
+        origin: viewer, selectionFilm: searchParams.get('film'), infoSaved: searchParams.get('saved') === 'details',
+        selection: searchParams.getAll('include').join(','),
+        films: store.dashboardFilms(owner).map(film => ({ ...film, published: publications.isPublished(owner, film.id) }))
+      }), { 'Content-Security-Policy': csp + '; frame-src ' + viewer });
+    };
     if (get && path === '/setup/dashboard') return dashboard();
+    if (get && path === '/setup/dashboard/new') return newFilm();
     if (get && path === '/setup/stripe/reset') {
       const { state, confirmation } = store.stripeContext(owner, mode);
       if (!state.accountId && !state.flow && !state.createRequest) return redirect('/setup#payments');
@@ -187,7 +199,7 @@ export async function createSetup({
       const seconds = film && previewSeconds(film.previewSeconds);
       if (!film || !seconds) return reject(404, 'Preview unavailable.');
       if (!preview[2]) return html(200, step(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata" src="' +
-        path + '/clip.mp4"></video><p><a href="/setup#film">Back to filmmaker setup</a></p>'));
+        path + '/clip.mp4"></video><p><a href="/setup/dashboard#' + film.id + '">Back to film</a></p>', { dashboard: true }));
       const key = film.id + '/' + seconds;
       if (!activePreviews.has(key)) {
         activePreviews.set(key, inspect(owner, film.bucket, film.objectKey, film.revision, seconds).finally(() => activePreviews.delete(key)));
@@ -198,10 +210,11 @@ export async function createSetup({
     const callback = callbackPattern.exec(path);
     if (!callback && method !== 'POST') return reject(404, 'Page unavailable.');
     if (callback && method !== 'GET') return reject(405, 'Return from Stripe using the original link.');
-    if (busy.has(owner)) return display(409, { error: 'A setup step is still running. Wait a moment and reload.' });
+    const filmAction = ['/setup/rights', '/setup/film', '/setup/next'].includes(path);
+    if (busy.has(owner)) return (filmAction ? newFilm : display)(409, { error: 'A setup step is still running. Wait a moment and reload.' });
     busy.add(owner);
     try {
-      const data = callback ? {} : await readForm(req);
+      const data = callback ? {} : await readForm(req, path === '/setup/dashboard/info' ? 32768 : 8192);
       if (!callback && data.csrf !== session.csrf) return reject(403, 'Reload setup before submitting this form.');
       if (path === '/setup/sign-out') { store.signOut(sessionId); return redirect('/setup/sign-in', { 'Set-Cookie': cookie('', 0) }); }
       const { r2, draft } = store.maker(owner);
@@ -241,9 +254,23 @@ export async function createSetup({
         store.saveBucket(owner, config);
         return redirect('/setup#storage');
       }
-      if (['/setup/film/prices', '/setup/dashboard/settings', '/setup/dashboard/publication'].includes(path)) {
+      if (['/setup/film/prices', '/setup/dashboard/settings', '/setup/dashboard/publication', '/setup/dashboard/info'].includes(path)) {
         const saved = store.film(owner, data.filmId || '');
         if (!saved) throw new SetupError('Saved film unavailable.', 404);
+        if (path === '/setup/dashboard/info') {
+          const info = {};
+          for (const { name, label, limit } of infoFields) {
+            const value = (data[name] ?? '').replace(/\r\n?/g, '\n').trim();
+            if (value.length > limit || /[\u0000-\u0008\u000b-\u001f\u007f]/u.test(value)) {
+              throw new SetupError(`Enter up to ${limit} characters of plain text for ${label.toLowerCase()}.`, 422);
+            }
+            info[name] = value;
+          }
+          store.setFilmInfo(owner, saved.id, info);
+          const query = new URLSearchParams({ film: saved.id, saved: 'details' });
+          for (const field of selectedFields(data.show || '')) query.append('include', field.name);
+          return redirect('/setup/dashboard?' + query + '#info-' + saved.id);
+        }
         if (path === '/setup/dashboard/publication') {
           if (data.visibility === 'private') {
             store.setFilmPublication(owner, saved.id, false);
@@ -256,9 +283,9 @@ export async function createSetup({
             catch { throw new SetupError('Publishing requires a ready Stripe test account, confirmed rights and access to the saved original in R2. Check your connections and try again.', 422); }
           } else throw new SetupError('Choose whether to publish this film.');
         } else store.setFilmSettings(owner, saved.id, settingsForm(data, saved));
-        return redirect(path.startsWith('/setup/dashboard/') ? '/setup/dashboard#' + saved.id : '/setup#film');
+        return redirect('/setup/dashboard#' + saved.id);
       }
-      if (!['/setup/rights', '/setup/film', '/setup/next'].includes(path)) return reject(404, 'Page unavailable.');
+      if (!filmAction) return reject(404, 'Page unavailable.');
       if (data.draftId !== draft.id) throw new SetupError('This tab has an older draft. Reload setup to continue.', 409);
       if (!r2) throw new SetupError('Connect your R2 bucket first.');
       const completed = store.film(owner, draft.id);
@@ -266,7 +293,7 @@ export async function createSetup({
         if (!completed) throw new SetupError('Finish the current film before starting another.');
         store.nextDraft(owner);
       } else if (completed) {
-        return redirect('/setup#film');
+        return redirect('/setup/dashboard#' + draft.id);
       } else if (path === '/setup/rights') {
         if (data.rightsAccepted !== 'yes') throw new SetupError('Confirm your distribution rights before adding this film.');
         draft.rights ??= { version: rightsVersion, statement: rightsStatement, acceptedAt: new Date().toISOString() };
@@ -283,7 +310,7 @@ export async function createSetup({
         // Previously saved drafts and older forms retain their rental default.
         const settings = settingsForm(data, draft);
         store.saveDraft(owner, { ...draft, title, objectKey, ...settings });
-        if (saving) return display(200, { notice: 'Draft saved. You can return to this film any time.' });
+        if (saving) return newFilm(200, { notice: 'Draft saved. You can return to this film any time.' });
         let film;
         try { film = await inspect(owner, r2, objectKey, undefined, settings.previewSeconds); }
         catch (error) {
@@ -292,12 +319,13 @@ export async function createSetup({
         }
         store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision });
       }
-      return redirect('/setup#film');
+      return redirect(path === '/setup/film' ? '/setup/dashboard#' + draft.id : '/setup/dashboard/new');
     } catch (e) {
-      if (path.startsWith('/setup/dashboard/')) return dashboard(e instanceof SetupError ? e.statusCode : 503,
+      if (path.startsWith('/setup/dashboard/') || path === '/setup/film/prices') return dashboard(e instanceof SetupError ? e.statusCode : 503,
         e instanceof SetupError ? e.message : 'This change could not finish. Try again.');
-      if (e instanceof SetupError || e instanceof StripeSetupError || e instanceof R2SetupError) return display(e.statusCode || 400, { error: e.message });
-      return display(503, { error: 'This step could not finish. Your completed steps are saved. Try again.' });
+      const show = filmAction ? newFilm : display;
+      if (e instanceof SetupError || e instanceof StripeSetupError || e instanceof R2SetupError) return show(e.statusCode || 400, { error: e.message });
+      return show(503, { error: 'This step could not finish. Your completed steps are saved. Try again.' });
     } finally { busy.delete(owner); }
   }
   return { handle, store, close: () => store.close() };

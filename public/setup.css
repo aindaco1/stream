@@ -102,7 +102,7 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .film-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 6rem), 1fr)); gap: 1rem .75rem; }
 .film-stats dt { color: var(--muted); font-size: .875rem; }
 .film-stats dd { font-weight: 650; font-variant-numeric: tabular-nums; }
-.price-editor, .film-sharing, .film-publication { border-block-start: 1px solid var(--line); padding-block-start: 1.25rem; }
+.price-editor, .film-info-editor, .film-sharing, .film-publication { border-block-start: 1px solid var(--line); padding-block-start: 1.25rem; }
 .price-fields { min-width: 0; border: 0; padding: 0; container-type: inline-size; }
 .price-fields legend { padding: 0 0 .5rem; font-size: 1.125rem; font-weight: 650; }
 .price-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
@@ -110,9 +110,21 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .price-grid input[type=number] { width: 13ch; max-width: 100%; font-variant-numeric: tabular-nums; }
 @container (min-width: 37rem) { .price-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container (max-width: 15rem) { .price-grid { grid-template-columns: minmax(0, 1fr); } }
-.saved-films { list-style: none; padding: 0; }
-.saved-films li { display: grid; gap: .75rem; }
-.saved-films li + li { margin-top: 1.5rem; }
 .film-sharing > a { justify-self: start; }
 .film-sharing textarea { width: 100%; resize: vertical; }
 .copy-status:empty { position: absolute; }
+.film-list, .embed-preview { display: grid; min-width: 0; gap: 1rem; }
+.film-list-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
+.film-sharing h4, .film-info-editor h4, .embed-preview h5 { margin: 0; font-size: 1.125rem; }
+.dashboard-film h3 { font-size: clamp(1.28rem, 4vw, 1.65rem); }
+.dashboard-film header > a { display: inline-block; margin-top: .65rem; }
+.info-fields { display: grid; gap: 1rem; }
+@media (min-width: 42rem) {
+  .info-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .info-fields > :first-child { grid-column: 1 / -1; }
+}
+.film-info-editor textarea { width: 100%; resize: vertical; }
+.embed-options { min-width: 0; padding: 0; border: 0; }
+.embed-options legend { padding: 0 0 .5rem; font-weight: 650; }
+.embed-options label { min-height: 2.75rem; align-items: center; }
+.embed-preview iframe { display: block; width: 100%; border: 0; background: #181818; }

@@ -362,6 +362,10 @@ export function openSetupStore(directory) {
       return sql("UPDATE films SET metadata=json_set(metadata,'$.prices',json(?),'$.rentalHours',?,'$.previewSeconds',?) WHERE owner=? AND id=?")
         .run(JSON.stringify(prices), rentalHours, previewSeconds, owner, id).changes === 1;
     },
+    setFilmInfo(owner, id, info) {
+      return sql("UPDATE films SET metadata=json_set(metadata,'$.info',json(?)) WHERE owner=? AND id=?")
+        .run(JSON.stringify(info), owner, id).changes === 1;
+    },
     setFilmPublication(owner, id, published) {
       return transaction(() => {
         const changed = sql(`INSERT INTO film_publication (filmId,owner,published) SELECT id,owner,? FROM films WHERE id=? AND owner=?
@@ -405,8 +409,8 @@ export function openSetupStore(directory) {
           WHERE owner=? AND intentId IS NOT NULL AND paidAt IS NOT NULL GROUP BY filmId) p ON p.filmId=f.id
         WHERE f.owner=? ORDER BY f.rowid DESC`).all(owner, owner);
       return rows.map(({ metadata, ...stats }) => {
-        const { id, title, prices, previewSeconds, rentalHours, duration } = JSON.parse(metadata);
-        return { id, title, prices, previewSeconds, rentalHours, duration, stats };
+        const { id, title, prices, previewSeconds, rentalHours, duration, info } = JSON.parse(metadata);
+        return { id, title, prices, previewSeconds, rentalHours, duration, info, stats };
       });
     },
     films(owner) {

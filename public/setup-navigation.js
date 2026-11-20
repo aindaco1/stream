@@ -14,6 +14,8 @@ const pages = mountResponsiveTabSelect(workspace, {
 // A history traversal can restore a select's old form value from the page cache.
 window.addEventListener('pageshow', () => { pages.select.value = currentPage; });
 
+// Older setup links pointed to a film tab. Its contents now live on Dashboard.
+if (location.pathname === '/setup' && location.hash === '#film') location.replace('/setup/dashboard#films');
 const sections = document.querySelector('.workspace-sections');
 if (sections) {
   const list = sections.querySelector('.subtabs');

@@ -99,9 +99,9 @@ test('guided setup carries an authenticated filmmaker from empty storage to priv
   assert.equal((await submit('r2', config)).status, 303);
   assert.equal((await submit('film', film)).status, 403);
   assert.equal(reads.length, 0);
-  assert.doesNotMatch(await (await get('/setup')).text(), /Open your R2 bucket in Cloudflare/);
+  assert.doesNotMatch(await (await get('/setup/dashboard/new')).text(), /Open your R2 bucket in Cloudflare/);
   assert.equal((await submit('rights', { draftId: id, rightsAccepted: 'yes' })).status, 303);
-  assert.match(await (await get('/setup')).text(), /Open your R2 bucket in Cloudflare/);
+  assert.match(await (await get('/setup/dashboard/new')).text(), /Open your R2 bucket in Cloudflare/);
   assert.equal((await submit('film', { draftId: id, title: 'Working title', intent: 'save' })).status, 200);
   assert.equal(setup.store.maker('Ada').draft.title, 'Working title');
   assert.equal(reads.length, 0);
@@ -112,7 +112,7 @@ test('guided setup carries an authenticated filmmaker from empty storage to priv
   const original = setup.store.film('Ada', id);
   assert.ok(original.rights.acceptedAt);
   assert.deepEqual(original.prices, { rent: 99, buy: null });
-  assert.match(await (await get('/setup')).text(), /Edit prices for The Screening/);
+  assert.match(await (await get('/setup/dashboard')).text(), /Edit prices and playback for The Screening/);
   const pricing = { filmId: id, rentPrice: '', buyPrice: '2.99' };
   assert.equal((await submit('film/prices', { ...pricing, buyPrice: '0.49' })).status, 422);
   assert.equal((await submit('film/prices', { ...pricing, buyPrice: '2.999' })).status, 422);
@@ -142,10 +142,10 @@ test('guided setup carries an authenticated filmmaker from empty storage to priv
   assert.equal((await submit('rights', { draftId: id, rightsAccepted: 'yes' })).status, 303);
   const updated = { ...film, draftId: id, title: 'Another film', rentPrice: '1.49', buyPrice: '4.99' };
   assert.equal((await submit('film', { ...updated, intent: 'save' })).status, 200);
-  assert.match(await (await get('/setup')).text(), /name="buyPrice"[^>]*value="4\.99"/);
+  assert.match(await (await get('/setup/dashboard/new')).text(), /name="buyPrice"[^>]*value="4\.99"/);
   assert.equal((await submit('film', updated)).status, 303);
   assert.deepEqual(setup.store.film('Ada', id).prices, { rent: 149, buy: 499 });
-  assert.match(await (await get('/setup')).text(), /Edit prices for The Screening/);
+  assert.match(await (await get('/setup/dashboard')).text(), /Edit prices and playback for The Screening/);
   assert.equal((await submit('sign-out', {})).status, 303);
   assert.equal((await get(preview)).status, 401);
 });
