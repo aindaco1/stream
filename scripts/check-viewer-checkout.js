@@ -45,7 +45,7 @@ let mismatchedTotal;
 let opening;
 let downloadChecks = 0;
 const checkout = {
-  async start({ offer, token, kind, tipPercent }) {
+  async start({ offer, token, kind, tipPercent, viewingAddress }) {
     assert.match(token, /^[A-Za-z0-9_-]{43}$/);
     assert.ok(['rent', 'buy'].includes(kind));
     if (interruptNext) { interruptNext = false; throw Error('Simulated outage'); }
@@ -55,6 +55,13 @@ const checkout = {
       const taxPolicy = offer.id === 'second' || (offer.id === 'first' && kind === 'buy') ? 'marketplace-v1' : undefined;
       const order = { offer, kind, id: 'session_' + (orders.size + 1), status: 'pending',
         filmAmount, tipPercent, tipAmount, taxPolicy, amount: filmAmount + tipAmount, attempts: 0, submissions: 0, pendingChecks: 0 };
+      if (viewingAddress) {
+        assert.deepEqual([viewingAddress.country,viewingAddress.state,viewingAddress.city,viewingAddress.postalCode], ['US','NM','Albuquerque','87102']);
+        if (viewingAddress.line1 === '1 Civic Plaza NW') {
+          assert.deepEqual([filmAmount,tipAmount],[99,10]);
+          order.quote = { manualTax:true, chargedTotalCents:117, taxCents:9, tipTaxCents:1 };
+        } else order.quote = { useViewingAddress:true };
+      }
       orders.set(token, order);
       sessions.set(order.id, order);
     }
@@ -65,7 +72,7 @@ const checkout = {
     return order.status === 'paid' ? { status: 'paid' } :
       { clientSecret: order.id, publishableKey: 'pk_test_fixture', account: order.taxPolicy ? null : 'acct_' + offer.id, taxPolicy: order.taxPolicy,
         uiMode: offer.id === 'legacy' ? 'embedded_page' : 'elements', orderId: order.id, amount: order.amount,
-        filmAmount: order.filmAmount, tipPercent, tipAmount: order.tipAmount, currency: 'usd', title: offer.title, kind };
+        filmAmount: order.filmAmount, tipPercent, tipAmount: order.tipAmount, currency: 'usd', title: offer.title, kind, ...order.quote };
   },
   async abandon({ offer, token }) {
     const order = orders.get(token);
@@ -141,14 +148,14 @@ function stripeFixture(vendor) {
     const filmId = location.pathname.split('/')[2];
     if (key !== 'pk_test_fixture' || (stripeAccount && stripeAccount !== 'acct_' + filmId)) throw Error('Seller mismatch');
     return {
-      initCheckoutElementsSdk({ clientSecret, elementsOptions }) {
+      initCheckoutElementsSdk({ clientSecret, elementsOptions, defaultValues }) {
         if (!elementsOptions?.appearance) throw Error('Checkout appearance missing');
         const complete = new Map();
         const change = new Set();
         let quote, added = 0, included = 0;
         const money = cents => ({ amount: new Intl.NumberFormat('en-US', { style: 'currency', currency: quote.currency }).format(cents / 100), minorUnitsAmount: cents });
         function session() {
-          const ready = !quote.taxPolicy || complete.get('billing');
+          const ready = !quote.taxPolicy || quote.manualTax || complete.get('billing');
           return { currency: quote.currency, email: null, tax: { status: ready ? 'ready' : 'requires_billing_address' },
             total: { subtotal: money(quote.amount), taxExclusive: money(added), taxInclusive: money(included), total: money(quote.amount + added) },
             canConfirm: Boolean(ready && complete.get('contact') && complete.get('card')) };
@@ -184,17 +191,23 @@ function stripeFixture(vendor) {
           off(event, callback) { if (event === 'change') change.delete(callback); },
           createContactDetailsElement: () => element('contact'),
           createBillingAddressElement(options) {
-            if (!quote.taxPolicy || options.autocomplete?.mode !== 'automatic') throw Error('Unexpected address configuration');
+            if (!quote.taxPolicy || quote.manualTax || quote.useViewingAddress || options.autocomplete?.mode !== 'automatic') throw Error('Unexpected billing address configuration');
+            return element('billing');
+          },
+          createShippingAddressElement() {
+            if (!quote.useViewingAddress || defaultValues?.shippingAddress?.address?.postal_code !== '87102') throw Error('Missing viewing address');
             return element('billing');
           },
           createPaymentElement(options) {
             if (options.paymentMethodOrder?.[0] !== 'card') throw Error('Card should be the first available method');
             if (options.layout?.defaultCollapsed === true) throw Error('Card fields should be open');
-            if (quote.taxPolicy && options.fields.billingDetails.address !== 'never') throw Error('Duplicate billing fields');
+            const fullBilling = quote.taxPolicy && !quote.manualTax && !quote.useViewingAddress;
+            if (options.fields.billingDetails.address !== (fullBilling ? 'never' : 'if_required')) throw Error('Unexpected billing fields');
             return element('card');
           },
           async loadActions() {
             quote = await fixtureOrder(clientSecret, 'read');
+            if (quote.manualTax) { added = quote.taxCents - quote.tipTaxCents; included = quote.tipTaxCents; }
             if (quote.taxPolicy ? stripeAccount !== undefined : stripeAccount !== 'acct_' + filmId) throw Error('Wrong Stripe account');
             return { type: 'success', actions: {
               getSession: session,
@@ -249,7 +262,7 @@ async function install(context) {
     assert.equal(new URL(frame.url()).pathname, '/embed/' + order.offer.id);
     if (operation === 'read') {
       const quote = { amount: order.amount, filmAmount: order.filmAmount, tipAmount: order.tipAmount,
-        taxPolicy: order.taxPolicy, currency: 'usd', ...mismatchedTotal };
+        taxPolicy: order.taxPolicy, currency: 'usd', ...order.quote, ...mismatchedTotal };
       mismatchedTotal = undefined;
       return quote;
     }
@@ -673,6 +686,43 @@ try {
   await privateFrame.getByRole('slider').fill('0');
   await complete(privateFrame, 'buy', { blockAutoplay: true });
   await privateFrame.getByRole('button', { name: 'Download film' }).waitFor();
+
+  checkout.manualNmEnabled = true;
+  offers.get('second').previewSeconds = 0;
+  const nm = await context.newPage();
+  await nm.setViewportSize({ width:320, height:240 });
+  await nm.goto(app + '/embed/second');
+  await nm.locator('#rent').click();
+  await nm.locator('#view-in-nm').click();
+  await nm.locator('#viewing-street').fill('1 Civic Plaza NW');
+  await nm.locator('#viewing-city').fill('Albuquerque');
+  await nm.locator('#viewing-postal').fill('87102');
+  assert.ok(await nm.locator('#continue-to-payment').evaluate(button => {
+    const rect = button.getBoundingClientRect();
+    return rect.height >= 44 && rect.bottom <= innerHeight && rect.top >= 0 && document.documentElement.scrollWidth === innerWidth;
+  }));
+  await nm.setViewportSize({ width:375, height:680 });
+  await nm.locator('#continue-to-payment').click();
+  await nm.getByRole('button', { name:'Pay $1.17', exact:true }).waitFor();
+  await nm.getByText('Film tax $0.08 · Tax included in tip $0.01').waitFor();
+  assert.ok(await nm.locator('#billing-location').isHidden());
+  assert.ok(!await nm.evaluate(() => JSON.stringify(sessionStorage).includes('Civic Plaza')));
+  const manual = [...orders.values()].at(-1);
+  await nm.locator('#close-checkout').click();
+  await nm.locator('#rent').click();
+  await nm.getByRole('button', { name:'Pay $1.17', exact:true }).waitFor();
+  assert.equal([...orders.values()].at(-1),manual);
+  await nm.locator('#change-location').click();
+  await nm.locator('#view-in-nm').click();
+  await nm.locator('#viewing-street').fill('Unresolved street');
+  await nm.locator('#continue-to-payment').click();
+  await nm.getByRole('heading', { name:'Viewing address' }).waitFor();
+  await nm.getByText('Confirm your viewing address to calculate tax.').waitFor();
+  assert.equal(manual.status,'expired');
+  await nm.locator('#change-location').click();
+  await nm.locator('#view-elsewhere').click();
+  await nm.getByRole('heading', { name:'Billing address' }).waitFor();
+  await nm.close();
 
   for (const [token, order] of orders) {
     assert.ok(!requests.some(({ url, referrer }) => [url, referrer].some(address =>

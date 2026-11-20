@@ -22,7 +22,11 @@ test('the public server exposes published embeds and selects checkout from the v
       async verify(id) { calls.push(['verify', id]); return get(id); }
     },
     checkout: {
-      async start({ offer }) { calls.push(['checkout', offer.account]); return { url: 'https://checkout.stripe.com/example' }; },
+      manualNmEnabled: true,
+      async start({ offer, viewingAddress, tipPercent }) {
+        calls.push(viewingAddress ? ['viewing address', offer.account, viewingAddress, tipPercent] : ['checkout', offer.account]);
+        return { url: 'https://checkout.stripe.com/example' };
+      },
       async status({ offer }) { calls.push(['status', offer.account]); return { status: 'pending' }; },
       async webhook(raw, signature) { calls.push(['event', raw.toString(), signature]); return { received: true }; }
     }
@@ -42,7 +46,9 @@ test('the public server exposes published embeds and selects checkout from the v
   for (const path of ['/setup', '/setup/stripe', '/embed/clock', '/pay/unknown', '/embed/unlisted']) {
     assert.equal((await request(path)).status, 404);
   }
-  assert.match((await request('/embed/film-a')).headers.get('content-security-policy'), /frame-ancestors \*/);
+  const embed = await request('/embed/film-a');
+  assert.match(embed.headers.get('content-security-policy'), /frame-ancestors \*/);
+  assert.match(await embed.text(), /data-manual-nm="true"/);
   assert.equal((await request('/pay/film-a')).headers.get('x-frame-options'), 'DENY');
   assert.equal((await post('/film/film-a/checkout', token, 'https://publisher.example')).status, 403);
   assert.equal((await post('/film/film-a/checkout', JSON.stringify({ account: films[1].account }))).status, 400);
@@ -53,6 +59,20 @@ test('the public server exposes published embeds and selects checkout from the v
   const event = await request('/checkout/webhook', { method: 'POST', headers: { 'Stripe-Signature': 'test-signature' }, body: '  {"event":true}\n' });
   assert.deepEqual(await event.json(), { received: true });
   assert.deepEqual(calls, [['verify', 'film-a'], ['checkout', 'acct_sellerA'], ['status', 'acct_sellerB'], ['event', '  {"event":true}\n', 'test-signature']]);
+  const address = { country:'US', state:'NM', line1:'1 Civic Plaza NW', city:'Albuquerque', postalCode:'87102' };
+  const input = { token, tipPercent:10, viewingAddress:address };
+  const submit = (path, data, from = origin) => request('/film/film-a/' + path, {
+    method:'POST', headers:{ Origin:from, 'Content-Type':'application/json' }, body:JSON.stringify(data)
+  });
+  for (const action of ['checkout','buy']) assert.equal((await submit(action,input)).status,200);
+  assert.deepEqual(calls.at(-1), ['viewing address','acct_sellerA',address,10]);
+  for (const malformed of [{...input, taxCents:0}, {...input, viewingAddress:{...address, rate:0}}, {...input, tipPercent:'0'},
+    {...input, viewingAddress:{...address, line1:'  '}}, {...input, viewingAddress:{...address, postalCode:'871'}}]) {
+    assert.equal((await submit('checkout',malformed)).status,400);
+  }
+  assert.equal((await submit('checkout',input,'https://publisher.example')).status,403);
+  assert.equal((await submit('order',input)).status,403);
+  assert.equal((await submit('checkout',{...input, extra:'x'.repeat(2048)})).status,413);
 });
 
 test('media indexes share concurrent opens, evict only idle renders, and reject excess capacity promptly', async () => {

@@ -39,10 +39,11 @@ function newToken() {
 }
 
 async function postToken(film, path, token) {
+  const json = typeof token !== 'string';
   const response = await fetch('/film/' + encodeURIComponent(film) + '/' + path, {
-    method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: token,
+    method: 'POST', headers: { 'Content-Type': json ? 'application/json' : 'text/plain' }, body: json ? JSON.stringify(token) : token,
     credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer',
-    signal: AbortSignal.timeout(15000)
+    signal: AbortSignal.timeout(json ? 35000 : 15000)
   });
   if (!response.ok) throw new Error('Request unavailable');
   return response.json();
@@ -96,6 +97,12 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   const priorTip = validToken(attempts[activeKind]) ? (attempts[activeKind + 'Tip'] ?? 0) : tip.defaultValue;
   tip.value = String(attempts.selectedTip ?? priorTip);
   const starts = new Map();
+  const manualNm = document.body.dataset.manualNm === 'true';
+  const locationForm = byId('viewing-location');
+  const nmFields = byId('nm-location-fields');
+  const changeLocation = byId('change-location');
+  let finishLocation;
+  let activeFormKind;
   const address = new URL(location.href);
   const returnId = address.searchParams.get('order');
   const authSlot = id => 'stream:authentication:' + film + ':' + id;
@@ -122,9 +129,10 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
 
   function persist() { write('sessionStorage', slot, JSON.stringify(attempts)); }
 
-  function startOrder(kind, attempt, percent) {
+  function startOrder(kind, attempt, percent, viewingAddress) {
     if (starts.has(attempt)) return starts.get(attempt);
-    const opening = postToken(film, kind === 'rent' ? 'checkout' : 'buy', attempt + (percent ? ' ' + percent : ''))
+    const data = viewingAddress ? { token: attempt, tipPercent: percent, viewingAddress } : attempt + (percent ? ' ' + percent : '');
+    const opening = postToken(film, kind === 'rent' ? 'checkout' : 'buy', data)
       .then(result => {
         if (attempts[kind] === attempt) {
           attempts[kind + 'Opened'] = attempt;
@@ -136,15 +144,58 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     return opening;
   }
 
+  // Keyboard changes can shrink only the visual viewport of a mobile embed.
+  const viewport = window.visualViewport;
+  function fitKeyboard() {
+    if (viewport && viewport.scale === 1 && viewport.height < window.innerHeight) {
+      document.body.style.setProperty('--checkout-viewport', Math.floor(viewport.height) + 'px');
+    } else document.body.style.removeProperty('--checkout-viewport');
+  }
+
   function closeForm() {
     generation++;
+    finishLocation?.();
+    changeLocation.hidden = true;
     instance?.destroy();
     instance = undefined;
     payment.hidden = true;
     document.body.classList.remove('paying');
+    viewport?.removeEventListener('resize', fitKeyboard);
+    document.body.style.removeProperty('--checkout-viewport');
     byId('stripe-checkout').replaceChildren();
     if (status.parentElement !== statusHome) statusHome.append(status);
   }
+
+  function showLocation(retry) {
+    locationForm.hidden = false;
+    if (retry) byId('view-in-nm').click();
+    else byId('view-in-nm').focus();
+    return new Promise(resolve => {
+      finishLocation = address => {
+        locationForm.hidden = true;
+        nmFields.hidden = true;
+        byId('view-in-nm').setAttribute('aria-expanded', 'false');
+        byId('continue-to-payment').hidden = true;
+        finishLocation = undefined;
+        resolve(address);
+      };
+    });
+  }
+
+  byId('view-in-nm').addEventListener('click', () => {
+    nmFields.hidden = false;
+    byId('view-in-nm').setAttribute('aria-expanded', 'true');
+    byId('continue-to-payment').hidden = false;
+    byId('viewing-street').focus();
+  });
+  byId('view-elsewhere').addEventListener('click', () => finishLocation?.(null));
+  locationForm.addEventListener('submit', event => {
+    event.preventDefault();
+    if (nmFields.hidden) return;
+    finishLocation?.({ country: 'US', state: 'NM', line1: byId('viewing-street').value.trim(),
+      city: byId('viewing-city').value.trim(), postalCode: byId('viewing-postal').value.trim() });
+  });
+  changeLocation.addEventListener('click', () => open(activeFormKind, true));
 
   function showOffer() {
     const available = offers.filter(kind => !unlocked || (unlocked.kind === 'rent' && kind === 'buy'));
@@ -246,14 +297,17 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     }
   }
 
-  async function open(kind) {
+  async function open(kind, editLocation = false) {
     closeForm();
     const run = generation;
+    activeFormKind = kind;
     const percent = Number(tip.value);
     const previous = attempts[kind];
     delay = 0;
     payment.hidden = false;
     document.body.classList.add('paying');
+    viewport?.addEventListener('resize', fitKeyboard);
+    fitKeyboard();
     window.scrollTo(0, 0);
     const heading = byId('checkout-heading');
     heading.textContent = byId('film-title').textContent;
@@ -264,10 +318,19 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     byId('payment-feedback').append(status);
     heading.focus({ preventScroll: true });
     showOffer();
-    status.textContent = 'Opening secure test checkout…';
+    status.textContent = '';
     clearTimeout(timer);
     try {
-      if (validToken(previous) && Number(attempts[kind + 'Tip'] || 0) !== percent) {
+      const hasPrevious = validToken(previous);
+      const replace = hasPrevious && (editLocation || Number(attempts[kind + 'Tip'] || 0) !== percent);
+      let viewingAddress;
+      const unconfirmedLocation = hasPrevious && attempts[kind + 'Nm'] && attempts[kind + 'Opened'] !== previous;
+      if (manualNm && (!hasPrevious || replace || unconfirmedLocation)) {
+        viewingAddress = await showLocation(unconfirmedLocation);
+        if (run !== generation) return;
+      }
+      status.textContent = 'Opening secure test checkout…';
+      if (replace) {
         // A closed form can still be waiting for Stripe to open the session.
         // Resolve its outcome before replacing the viewer's only recovery token.
         if (attempts[kind + 'Opened'] !== previous) await startOrder(kind, previous, Number(attempts[kind + 'Tip'] || 0));
@@ -289,9 +352,10 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
       const attempt = token = validToken(attempts[kind]) ? attempts[kind] : newToken();
       attempts[kind] = attempt;
       attempts[kind + 'Tip'] = percent;
+      if (!hasPrevious || replace || unconfirmedLocation) attempts[kind + 'Nm'] = Boolean(viewingAddress);
       attempts.active = kind;
       persist();
-      const result = await startOrder(kind, attempt, percent);
+      const result = await startOrder(kind, attempt, percent, viewingAddress);
       if (run !== generation) return;
       if (result.status === 'paid') { await inspect(true, true); return; }
       const marketplace = result.taxPolicy === 'marketplace-v1';
@@ -329,7 +393,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
           throw new Error('Invalid offer');
         }
         write('sessionStorage', authSlot(result.orderId), JSON.stringify({ kind, token: attempt }));
-        form = card.createCardForm(stripe, result, schedule, complete);
+        form = card.createCardForm(stripe, result, schedule, complete, viewingAddress);
       } else if (result.uiMode === 'embedded_page' || !result.uiMode) {
         schedule();
         form = await stripe.createEmbeddedCheckoutPage({ fetchClientSecret: async () => result.clientSecret, onComplete: complete });
@@ -337,7 +401,14 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
       if (run !== generation) { form.destroy(); return; }
       instance = form;
       await form.mount('#stripe-checkout');
-      if (run === generation) status.textContent = '';
+      if (run === generation) {
+        status.textContent = '';
+        changeLocation.hidden = !(manualNm && marketplace);
+        if (manualNm && marketplace) {
+          heading.focus({ preventScroll:true });
+          byId('checkout-scroll').scrollTop = 0;
+        }
+      }
     } catch {
       if (run !== generation) return;
       closeForm();
@@ -354,7 +425,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   });
   check.addEventListener('click', () => inspect(true, true));
   byId('close-checkout').addEventListener('click', () => {
-    const button = byId(attempts.active);
+    const button = byId(activeFormKind);
     closeForm();
     showOffer();
     button?.focus();

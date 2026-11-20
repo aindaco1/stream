@@ -16,14 +16,14 @@ const pricing = {
 
 function feeCopy(provider, expanded = false) {
   const { summary, example, details, url, link } = pricing[provider];
-  const taxPricing = provider === 'stripe' ? '<p>Stripe lists a separate Tax Basic fee of 0.5% of the full checkout total where Dust Wave is registered to collect. Dust Wave covers that fee in the marketplace model. <a href="https://stripe.com/tax/pricing">Stripe Tax pricing</a></p>' : '';
+  const taxPricing = provider === 'stripe' ? '<p>When Stream uses Stripe Tax, Stripe lists a separate Tax Basic fee of 0.5% of the full checkout total where Dust Wave is registered to collect. Dust Wave covers that fee. Stream calculates tax itself for eligible New Mexico orders, which saves that fee. The card processing fee still applies. <a href="https://stripe.com/tax/pricing">Stripe Tax pricing</a></p>' : '';
   return `<p>${summary} <a href="${url}">${link}</a></p>${taxPricing}${expanded ? `<p>${example}</p>` : ''}
     ${expanded && details ? `<details><summary>How does Cloudflare count requests?</summary><p>${details}</p></details>` : ''}`;
 }
 
 export function renderSetupCosts(provider) {
   if (!Object.hasOwn(pricing, provider)) throw new TypeError('Unknown setup cost provider.');
-  const pilot = provider === 'stripe' ? 'Payments in the pilot use test cards. Tax calculations and transfers run in the Stripe sandbox.' : 'Your bucket is billed normally during the pilot.';
+  const pilot = provider === 'stripe' ? 'Payments in the pilot use test cards. Payments and filmmaker transfers run in the Stripe sandbox.' : 'Your bucket is billed normally during the pilot.';
   return `<div class="provider-costs"><h3>${pricing[provider].heading}</h3>${feeCopy(provider)}<p>${pilot}</p></div>`;
 }
 
@@ -40,7 +40,7 @@ export function renderFilmmakerFaq() {
       <h3>${pricing.r2.heading}</h3>${feeCopy('r2', true)}
     </section>
     <section><h2>How does checkout calculate tax?</h2>
-      <p>New marketplace checkouts use Stripe Tax and the viewer’s billing location. Applicable film tax is added to your price. Any tax on an optional tip is included in the tip amount the viewer chose. Checkout shows the total before payment.</p>
+      <p>For viewers watching in New Mexico, Stream can use their viewing address to look up the local gross receipts tax rate. Other locations use Stripe Tax at checkout. Applicable film tax is added to your price. Any tax on an optional tip is included in the tip amount the viewer chose. The viewer sees the total and pays once.</p>
       <p>The pilot tests Dust Wave as the marketplace responsible for collection. A test charge can show zero tax, for example when the product is exempt or the sandbox has no registration for the viewer’s location. Before live sales, Dust Wave needs to confirm its obligations, configure live registrations where required, and arrange filing and remittance. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for platforms and marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
     </section>
     <section><h2>What can I upload?</h2>

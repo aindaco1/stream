@@ -6,8 +6,9 @@ import { isPrice } from './prices.js';
 import { adjustmentEvents, adjustmentReader, adjustmentReference } from './payment-adjustments.js';
 import { orderTotal, processingFee, tipFor } from './checkout-tips.js';
 
-import { MARKETPLACE_POLICY, isMarketplace, marketplaceEnabled, checkoutItems, matchesMarketplaceSession, verifiedTax,
+import { MARKETPLACE_POLICY, isMarketplace, marketplaceEnabled, checkoutItems, manualCheckoutItems, matchesMarketplaceSession, verifiedTax,
   settleFilmmaker, transferGroup } from './marketplace-checkout.js';
+import { resolveNewMexicoQuote, newMexicoTotals } from './new-mexico-grt.js';
 
 const LEGACY_FLOW = 'stream-viewer-rental';
 const FLOW = 'stream-viewer-checkout';
@@ -61,11 +62,13 @@ function metadata(order) {
   return order.uiMode === 'hosted' ? { ...markers, flow: LEGACY_FLOW } :
     { ...markers, flow: FLOW, kind: order.kind, amount: String(orderTotal(order)),
       ...(isMarketplace(order) && { tax_policy:order.taxPolicy, filmmaker:order.account }),
+      ...(order.nmQuote && { grt_policy:'nm-manual-v1', grt_location:JSON.parse(order.nmQuote).code }),
       ...(order.tipAmount > 0 && { film_amount:String(order.amount), tip_percent:String(order.tipPercent), tip_amount:String(order.tipAmount) }) };
 }
 
 function sameMetadata(data, order) {
   if (!isMarketplace(order) && data?.tax_policy != null) return false;
+  if (!order.nmQuote && (data?.grt_policy != null || data?.grt_location != null)) return false;
   if (!order.tipAmount && (data?.tip_percent !== undefined || data?.tip_amount !== undefined || data?.film_amount !== undefined)) return false;
   if (order.uiMode === 'hosted' && (order.kind !== 'rent' || order.amount !== 99 || data?.kind || data?.amount)) return false;
   return Object.entries(metadata(order)).every(([k, v]) => data?.[k] === v);
@@ -115,6 +118,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
   const serverConfigured = /^(sk|rk)_test_[a-zA-Z0-9]+$/.test(key) && env.STRIPE_CONNECT_LIVE !== '1';
   const configured = serverConfigured && /^pk_test_[a-zA-Z0-9]+$/.test(publishableKey);
   const marketplace = marketplaceEnabled(env);
+  const manualNmEnabled = marketplace && env.STREAM_NM_MANUAL_TAX !== '0';
   let platform;
   const creating = new Map();
   const checking = new Map();
@@ -214,13 +218,17 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
         { return_url: order.origin + '/embed/' + encodeURIComponent(order.filmId) + '?order=' + order.orderId } :
         { redirect_on_completion: 'never' };
       const marketplace = isMarketplace(order);
+      const items = order.nmQuote ? await manualCheckoutItems(key,order,store,fetchImpl) : checkoutItems(order);
       session = await stripe.checkout.sessions.create({
         mode: 'payment', ui_mode: order.uiMode, ...redirect, adaptive_pricing: { enabled: false },
         ...(order.cardOnly ? { allowed_payment_method_types: ['card'] } : {}),
-        ...(marketplace && { automatic_tax:{enabled:true, liability:{type:'self'}}, billing_address_collection:'required' }),
+        ...(marketplace && (order.nmQuote
+          ? { automatic_tax:{enabled:false}, expires_at:Math.floor(order.createdAt / 1000) + 24 * 3600 - 60 }
+          : { automatic_tax:{enabled:true, liability:{type:'self'}},
+              ...(order.viewingAddressTag ? { shipping_address_collection:{allowed_countries:['US']} } : { billing_address_collection:'required' }) })),
         client_reference_id: order.orderId, metadata: markers, payment_intent_data: {
           metadata: markers, ...(marketplace ? { transfer_group:transferGroup(order) } : order.tipAmount > 0 && { application_fee_amount:order.tipAmount })
-        }, line_items:checkoutItems(order)
+        }, line_items:items
       }, { ...options, idempotencyKey: 'stream-viewer-' + order.orderId });
       checkSession(session, order);
       store.bindViewerSession(order.orderId, session.id);
@@ -250,12 +258,14 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
         !session.client_secret.startsWith(session.id + '_secret_') || session.client_secret.length > 1024) throw mismatch();
     return { clientSecret: session.client_secret, publishableKey, account: isMarketplace(order) ? null : order.account,
       ...(isMarketplace(order) && {taxPolicy:order.taxPolicy}),
+      ...(order.nmQuote && {manualTax:true,...newMexicoTotals(order,JSON.parse(order.nmQuote))}),
+      ...(isMarketplace(order) && order.viewingAddressTag && !order.nmQuote && {useViewingAddress:true}),
       uiMode: order.uiMode, orderId: order.orderId, title: order.title, kind: order.kind, amount: orderTotal(order),
       filmAmount:order.amount, tipPercent:order.tipPercent, tipAmount:order.tipAmount, currency: session.currency,
       ...(order.kind === 'rent' && {rentalHours:order.rentalHours}) };
   }
 
-  async function start({ offer, token, origin, kind = 'rent', tipPercent = 0 }) {
+  async function start({ offer, token, origin, kind = 'rent', tipPercent = 0, viewingAddress }) {
     if (!configured) throw new ViewerCheckoutError('Sandbox checkout is unavailable.', 503);
     if (!offer.account) throw mismatch();
     if (kind !== 'rent' && kind !== 'buy') throw new ViewerCheckoutError('Choose a rental or a purchase.');
@@ -267,8 +277,14 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     if (tipFor(amount,tipPercent) === null) throw new ViewerCheckoutError('Choose an available tip amount.');
     const id = await checkingPlatform();
     if (offer.account === id) throw mismatch();
+    const viewingAddressTag = viewingAddress ? store.viewingAddressTag(viewingAddress) : null;
+    const nmQuote = !previous && manualNmEnabled && viewingAddress
+      ? await resolveNewMexicoQuote(viewingAddress,{fetchImpl}) : null;
     const order = previous ?? store.reserveViewerOrder({ ...offer, tokenHash: digest, platform: id, origin: base, kind, amount, tipPercent,
-      taxPolicy: marketplace ? MARKETPLACE_POLICY : 'none' });
+      taxPolicy: marketplace ? MARKETPLACE_POLICY : 'none', nmQuote, viewingAddressTag });
+    if (viewingAddressTag && order.viewingAddressTag !== viewingAddressTag) {
+      throw new ViewerCheckoutError('Start a new checkout to change your viewing location.',409);
+    }
     if (!sameFilm(order, offer) || order.kind !== kind || order.tipPercent !== tipPercent || order.platform !== id || order.origin !== base) throw mismatch();
     if (order.account !== offer.account) {
       // openSession can only reconcile a paid/withdrawn order here. Never
@@ -302,7 +318,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
       return { status: 'pending' };
     }
     const charge = checkCharge(intent, order, session.amount_total, applicationFee);
-    const totals = marketplace ? await verifiedTax(key,order,session,fetchImpl) : {};
+    const totals = marketplace ? await verifiedTax(key,order,session,fetchImpl,store) : {};
     if ((adjustment && (charge.id !== adjustment.chargeId || (adjustment.intentId && intent.id !== adjustment.intentId))) ||
         (order.intentId && order.intentId !== intent.id) || (order.chargeId && order.chargeId !== charge.id)) throw mismatch();
     const paymentState = await adjustmentReader(key,marketplace ? null : order.account,fetchImpl).state(order,charge,adjustment);
@@ -489,6 +505,6 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     };
   }
 
-  return { configured, indexPreviousOrders, retryFilmmakerTransfers, closeWithdrawnSessions, start: guarded(start), abandon: guarded(abandon), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
+  return { configured, manualNmEnabled, indexPreviousOrders, retryFilmmakerTransfers, closeWithdrawnSessions, start: guarded(start), abandon: guarded(abandon), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
     verifyPurchase: guarded(verifyPurchase), webhook: guarded(webhook) };
 }

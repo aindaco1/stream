@@ -69,6 +69,10 @@ export function openSetupStore(directory) {
       filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, published INTEGER NOT NULL CHECK (published IN (0,1))
     );
     CREATE TABLE IF NOT EXISTS film_counts (filmId TEXT PRIMARY KEY, previews INTEGER NOT NULL, plays INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS viewer_nm_tax_rates (
+      platform TEXT NOT NULL, location TEXT NOT NULL, ppm INTEGER NOT NULL, inclusive INTEGER NOT NULL,
+      stripeId TEXT NOT NULL, PRIMARY KEY(platform,location,ppm,inclusive)
+    );
     CREATE TABLE IF NOT EXISTS film_view_receipts (
       filmId TEXT NOT NULL, kind TEXT NOT NULL, digest TEXT NOT NULL, createdAt INTEGER NOT NULL,
       PRIMARY KEY(filmId,kind,digest)
@@ -120,6 +124,8 @@ export function openSetupStore(directory) {
     if (!columns.has('tipAmount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipAmount INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('stripeFeeCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN stripeFeeCents INTEGER');
     if (!columns.has('taxPolicy')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN taxPolicy TEXT NOT NULL DEFAULT 'none' CHECK(taxPolicy IN ('none','marketplace-v1'))");
+    if (!columns.has('nmQuote')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN nmQuote TEXT');
+    if (!columns.has('viewingAddressTag')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN viewingAddressTag TEXT');
     if (!columns.has('taxCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN taxCents INTEGER');
     if (!columns.has('tipTaxCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipTaxCents INTEGER');
     if (!columns.has('chargedTotalCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN chargedTotalCents INTEGER');
@@ -268,7 +274,21 @@ export function openSetupStore(directory) {
         .run(intentId, orderId, intentId);
       if (result.changes !== 1) throw new Error('The test order has a conflicting Stripe payment.');
     },
-    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount, tipPercent = 0, rentalHours: hours = 48, taxPolicy = 'none' }) {
+    viewingAddressTag(address) {
+      const fields = ['country','state','line1','line2','city','postalCode'].map(field =>
+        String(address[field] ?? '').trim().replace(/\s+/gu, ' ').toUpperCase());
+      return createHmac('sha256',key).update(JSON.stringify(['viewing-location',...fields])).digest('base64url');
+    },
+    nmRateId(platform, quote, inclusive) {
+      return sql('SELECT stripeId FROM viewer_nm_tax_rates WHERE platform=? AND location=? AND ppm=? AND inclusive=?')
+        .get(platform,quote.code,quote.ratePartsPerMillion,Number(inclusive))?.stripeId;
+    },
+    rememberNmRate(platform, quote, inclusive, stripeId) {
+      sql('INSERT OR IGNORE INTO viewer_nm_tax_rates VALUES(?,?,?,?,?)')
+        .run(platform,quote.code,quote.ratePartsPerMillion,Number(inclusive),stripeId);
+      return store.nmRateId(platform,quote,inclusive);
+    },
+    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount, tipPercent = 0, rentalHours: hours = 48, taxPolicy = 'none', nmQuote = null, viewingAddressTag = null }) {
       return transaction(() => {
         const existing = store.viewerOrderForToken(tokenHash);
         if (existing) return existing;
@@ -291,8 +311,8 @@ export function openSetupStore(directory) {
           error.code = 'viewer_rate_limit';
           throw error;
         }
-        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours,taxPolicy) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?,?)")
-          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, kind === 'rent' ? hours : 48, taxPolicy);
+        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours,taxPolicy,nmQuote,viewingAddressTag) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?,?,?,?)")
+          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, kind === 'rent' ? hours : 48, taxPolicy, nmQuote && JSON.stringify(nmQuote), viewingAddressTag);
         return store.viewerOrderForToken(tokenHash);
       });
     },

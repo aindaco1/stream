@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" type="module"></script>
 </head>
-<body data-checkout="{{checkout}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
+<body data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
   <main aria-labelledby="film-title">
     <video controls playsinline preload="none"{{poster}} aria-label="{{title}}"></video>
     <div class="details">
@@ -37,8 +37,26 @@
           <div class="order-line"><p id="order-terms"></p><strong id="order-price"></strong></div>
           <p id="order-tip" hidden></p>
           <p id="order-tax" aria-live="polite" aria-atomic="true"></p>
+          <button id="change-location" class="text-action" type="button" hidden>Change viewing location</button>
         </header>
         <div id="payment-feedback"></div>
+        <form id="viewing-location" hidden>
+          <fieldset>
+            <legend>Where will you watch?</legend>
+            <div class="actions">
+              <button type="button" id="view-in-nm" aria-expanded="false" aria-controls="nm-location-fields">New Mexico</button>
+              <button type="button" id="view-elsewhere">Somewhere else</button>
+            </div>
+          </fieldset>
+          <div id="nm-location-fields" hidden>
+            <p>Enter your viewing address to calculate New Mexico tax.</p>
+            <label>Street address<input id="viewing-street" autocomplete="section-viewing address-line1" maxlength="200" required></label>
+            <div class="viewing-city-zip">
+              <label>City<input id="viewing-city" autocomplete="section-viewing address-level2" maxlength="100" required></label>
+              <label>ZIP code<input id="viewing-postal" autocomplete="section-viewing postal-code" inputmode="numeric" pattern="[0-9]{5}(-[0-9]{4})?" maxlength="10" required></label>
+            </div>
+          </div>
+        </form>
         <div id="stripe-checkout"></div>
         <form id="card-form" hidden>
           <div id="contact-element"></div>
@@ -51,6 +69,7 @@
         </form>
       </div>
       <div class="payment-action">
+        <button type="submit" form="viewing-location" id="continue-to-payment" hidden>Continue to payment</button>
         <button type="submit" form="card-form" id="confirm-payment" disabled>Pay</button>
         <p class="payment-credit">Stream · All sales are final · Payments by Stripe</p>
       </div>

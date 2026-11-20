@@ -20,7 +20,7 @@ function appearance(container) {
   };
 }
 
-export function createCardForm(stripe, order, onSubmit, complete) {
+export function createCardForm(stripe, order, onSubmit, complete, viewingAddress) {
   const form = document.querySelector('#card-form');
   const button = document.querySelector('#confirm-payment');
   const errorBox = form.querySelector('#payment-error');
@@ -28,9 +28,17 @@ export function createCardForm(stripe, order, onSubmit, complete) {
   const tax = document.querySelector('#order-tax');
   const billing = document.querySelector('#billing-location');
   const marketplace = order.taxPolicy === 'marketplace-v1';
+  const manual = marketplace && order.manualTax === true;
+  const automatic = marketplace && !manual;
+  const useViewingAddress = automatic && order.useViewingAddress === true;
+  const format = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
   const checkout = stripe.initCheckoutElementsSdk({
     clientSecret: order.clientSecret,
-    elementsOptions: { appearance: appearance(form), loader: 'auto' }
+    elementsOptions: { appearance: appearance(form), loader: 'auto' },
+    ...(useViewingAddress && viewingAddress && { defaultValues: { shippingAddress: { address: {
+      country: viewingAddress.country, state: viewingAddress.state, city: viewingAddress.city,
+      line1: viewingAddress.line1, postal_code: viewingAddress.postalCode
+    } } } })
   });
   let contact;
   let address;
@@ -43,13 +51,6 @@ export function createCardForm(stripe, order, onSubmit, complete) {
   let displayedAmount;
   const narrow = window.matchMedia('(max-width: 26rem)');
   const resize = () => checkout.changeAppearance(appearance(form));
-  const viewport = window.visualViewport;
-  function resizeToKeyboard() {
-    // Some mobile browsers shrink only the visual viewport for the keyboard.
-    if (viewport && viewport.scale === 1 && viewport.height < window.innerHeight) {
-      document.body.style.setProperty('--checkout-viewport', Math.floor(viewport.height) + 'px');
-    } else document.body.style.removeProperty('--checkout-viewport');
-  }
 
   function feedback(message) {
     errorBox.textContent = message;
@@ -59,17 +60,20 @@ export function createCardForm(stripe, order, onSubmit, complete) {
   function display(session) {
     if (destroyed) return;
     const { total, taxExclusive, taxInclusive } = session.total || {};
-    const ready = !marketplace || session.tax?.status === 'ready';
-    const added = marketplace ? taxExclusive?.minorUnitsAmount : 0;
-    const included = marketplace ? taxInclusive?.minorUnitsAmount : 0;
+    const ready = !automatic || session.tax?.status === 'ready';
+    const added = manual ? order.taxCents - order.tipTaxCents : automatic ? taxExclusive?.minorUnitsAmount : 0;
+    const included = manual ? order.tipTaxCents : automatic ? taxInclusive?.minorUnitsAmount : 0;
     // The held film and tip amounts already include any tax on the tip.
     matches = ready && session.currency === order.currency && Boolean(total?.amount) &&
       Number.isSafeInteger(added) && added >= 0 && Number.isSafeInteger(included) && included >= 0 &&
-      (!marketplace || included <= order.tipAmount) && total.minorUnitsAmount === order.amount + added;
+      (!marketplace || included <= order.tipAmount) && total.minorUnitsAmount === order.amount + added &&
+      (!manual || (order.chargedTotalCents === total.minorUnitsAmount &&
+        (taxExclusive == null || added === taxExclusive.minorUnitsAmount) &&
+        (taxInclusive == null || included === taxInclusive.minorUnitsAmount)));
     displayedAmount = matches ? total.minorUnitsAmount : undefined;
     if (marketplace) {
-      tax.textContent = !ready ? 'Enter your billing address to calculate tax.' : matches
-        ? 'Film tax ' + taxExclusive.amount + (included > 0 ? ' · Tax included in tip ' + taxInclusive.amount : '') : '';
+      tax.textContent = !ready ? (useViewingAddress ? 'Confirm your viewing address to calculate tax.' : 'Enter your billing address to calculate tax.') : matches
+        ? 'Film tax ' + format.format(added / 100) + (included > 0 ? ' · Tax included in tip ' + format.format(included / 100) : '') : '';
     }
     const amount = matches ? total.amount : '';
     price.textContent = amount && marketplace ? 'Total ' + amount : amount;
@@ -131,9 +135,10 @@ export function createCardForm(stripe, order, onSubmit, complete) {
         contact.on('loaderror', loadError);
         contact.mount('#contact-element');
       }
-      if (marketplace) {
+      if (automatic) {
         billing.hidden = false;
-        address = checkout.createBillingAddressElement({ autocomplete: { mode: 'automatic' } });
+        document.querySelector('#billing-label').textContent = useViewingAddress ? 'Viewing address' : 'Billing address';
+        address = useViewingAddress ? checkout.createShippingAddressElement() : checkout.createBillingAddressElement({ autocomplete: { mode: 'automatic' } });
         address.on('loaderror', loadError);
         address.mount('#billing-address-element');
       }
@@ -141,7 +146,7 @@ export function createCardForm(stripe, order, onSubmit, complete) {
         paymentMethodOrder: ['card'],
         wallets: { link: 'never' },
         layout: 'tabs',
-        fields: { billingDetails: { email: 'never', address: marketplace ? 'never' : 'if_required' } }
+        fields: { billingDetails: { email: 'never', address: automatic && !useViewingAddress ? 'never' : 'if_required' } }
       });
       payment.on('loaderror', loadError);
       payment.mount('#payment-element');
@@ -149,15 +154,11 @@ export function createCardForm(stripe, order, onSubmit, complete) {
       display(actions.getSession());
       form.addEventListener('submit', submit);
       narrow.addEventListener('change', resize);
-      viewport?.addEventListener('resize', resizeToKeyboard);
-      resizeToKeyboard();
     },
     destroy() {
       destroyed = true;
       form.removeEventListener('submit', submit);
       narrow.removeEventListener('change', resize);
-      viewport?.removeEventListener('resize', resizeToKeyboard);
-      document.body.style.removeProperty('--checkout-viewport');
       contact?.destroy();
       address?.destroy();
       payment?.destroy();

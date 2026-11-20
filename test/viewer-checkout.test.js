@@ -85,6 +85,12 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
       charges_enabled: behavior.available, payouts_enabled: behavior.available });
     if (marketplace) assert.equal(recipient,null);
     else assert.ok(behavior.sellers.has(recipient));
+    if (url.pathname === '/v1/tax_rates') {
+      const inclusive = form.get('inclusive') === 'true';
+      assert.equal(form.get('percentage'),'7.6250');
+      return Response.json({object:'tax_rate',active:true,livemode:false,id:inclusive ? 'txr_tip' : 'txr_film',
+        inclusive,percentage:7.625,country:'US',state:'NM',jurisdiction:form.get('jurisdiction')});
+    }
     if (url.pathname.endsWith('/line_items')) {
       return Response.json({object:'list',has_more:false,data:lineItems.get(url.pathname.split('/').at(-2))});
     }
@@ -157,9 +163,20 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
           markers.tax_policy = form.get('metadata[tax_policy]');
           markers.filmmaker = form.get('metadata[filmmaker]');
           assert.equal(markers.filmmaker,account);
-          assert.equal(form.get('automatic_tax[liability][type]'),'self');
-          assert.equal(form.get('automatic_tax[enabled]'),'true');
-          assert.equal(form.get('billing_address_collection'),'required');
+          if (form.get('metadata[grt_policy]')) {
+            markers.grt_policy = form.get('metadata[grt_policy]');
+            markers.grt_location = form.get('metadata[grt_location]');
+            assert.equal(form.get('automatic_tax[enabled]'),'false');
+            assert.equal(form.get('line_items[0][tax_rates][0]'),'txr_film');
+            assert.equal(form.get('line_items[1][tax_rates][0]'),'txr_tip');
+          } else {
+            assert.equal(form.get('automatic_tax[liability][type]'),'self');
+            assert.equal(form.get('automatic_tax[enabled]'),'true');
+            if (form.has('shipping_address_collection[allowed_countries][0]')) {
+              assert.equal(form.get('shipping_address_collection[allowed_countries][0]'),'US');
+              assert.equal(form.get('billing_address_collection'),null);
+            } else assert.equal(form.get('billing_address_collection'),'required');
+          }
         }
         assert.equal(markers.order,order);
         assert.equal(markers.amount,String(amount));
@@ -168,6 +185,9 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
         if (marketplace) {
           Object.assign(sessions.get(id),{automatic_tax:{enabled:true,liability:{type:'self'},status:'requires_location_inputs'},
             total_details:{amount_discount:0,amount_shipping:0,amount_tax:0}});
+          if (form.has('shipping_address_collection[allowed_countries][0]')) {
+            sessions.get(id).shipping_address_collection = {allowed_countries:['US']};
+          }
           intents.get(sessions.get(id).payment_intent).transfer_group = form.get('payment_intent_data[transfer_group]');
           const lines = [filmAmount,...(tipAmount ? [tipAmount] : [])].map((unit_amount,index) => {
             const prefix = 'line_items[' + index + '][price_data]';
@@ -176,6 +196,20 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
             return {price,quantity:1,currency:'usd',amount_tax:0,amount_discount:0,amount_total:unit_amount};
           });
           lineItems.set(id,lines);
+          if (markers.grt_policy) {
+            assert.deepEqual([filmAmount,tipAmount],[99,10]);
+            for (const [i,line] of lines.entries()) {
+              line.amount_tax = i ? 1 : 8;
+              line.amount_total = i ? 10 : 107;
+              line.taxes = [{amount:line.amount_tax,rate:{id:i ? 'txr_tip' : 'txr_film'}}];
+            }
+            const session = sessions.get(id);
+            session.automatic_tax = {enabled:false};
+            session.total_details.amount_tax = 9;
+            session.amount_total = 117;
+            const intent = intents.get(session.payment_intent);
+            intent.amount = intent.amount_received = intent.latest_charge.amount = intent.latest_charge.amount_captured = 117;
+          }
         } else if (tipAmount) {
           const intent = intents.get(sessions.get(id).payment_intent);
           intent.application_fee_amount = tipAmount;
@@ -1065,6 +1099,53 @@ test('a merchant-only filmmaker cannot sell a marketplace rental before transfer
   c.behavior.transferCapability=false;
   await assert.rejects(c.start(),{statusCode:503});
   assert.equal(c.sessions.size,0);
+});
+
+test('a manual order keeps its district across retries and verifies the actual line rates before granting access', async t => {
+  const c = await context(t,{marketplace:true});
+  const address = {country:'US',state:'NM',line1:'1 Civic Plaza NW',city:'Albuquerque',postalCode:'87102'};
+  const request = {offer:c.offer,token:c.token,origin,kind:'rent',tipPercent:10};
+  const nmQuote = {code:'02-701',ratePartsPerMillion:76250,validFrom:'2026-07-01',validThrough:'2027-06-30',source:'EDAC NM E911 / NM TRD'};
+  // Resume a previously located order, even after the operator disables new manual quotes.
+  c.store.reserveViewerOrder({...c.offer,tokenHash:await sha256Hex(c.token),platform:'acct_platform',origin,
+    kind:'rent',amount:99,tipPercent:10,taxPolicy:'marketplace-v1',nmQuote,viewingAddressTag:c.store.viewingAddressTag(address)});
+  const restarted = createViewerCheckout({store:c.store,env:{...c.env,STREAM_NM_MANUAL_TAX:'0'},fetchImpl:c.fetchImpl});
+  c.behavior.lose = true;
+  await assert.rejects(restarted.start(request),{statusCode:503});
+  const order = await restarted.start({...request,viewingAddress:address});
+  assert.deepEqual([order.manualTax,order.taxCents,order.tipTaxCents,order.chargedTotalCents],[true,9,1,117]);
+  assert.equal(c.sessions.size,1);
+  assert.equal(c.calls.filter(call => call.path === '/v1/tax_rates').length,2);
+  await assert.rejects(restarted.start({...request,viewingAddress:{...address,postalCode:'87120'}}),{statusCode:409});
+  const [film,tip] = c.lineItems.get(c.first().id);
+  c.pay();
+  const event = c.event();
+  delete event.account;
+  const notify = () => restarted.webhook(...c.sign(event,undefined,'whsec_platform'),true);
+  // A neighboring district can return exactly the same cents.
+  film.taxes[0].rate.id = 'txr_otherdistrict';
+  await assert.rejects(notify(),{statusCode:503});
+  assert.equal(c.store.viewerOrderById(order.orderId).paidAt,null);
+  film.taxes[0].rate.id = 'txr_film';
+  tip.amount_tax = 0;
+  await assert.rejects(notify(),{statusCode:503});
+  tip.amount_tax = 1;
+  await notify();
+  assert.ok((await c.status()).receipt);
+  assert.equal(c.store.viewerOrderById(order.orderId).taxCents,9);
+});
+
+test('an unresolved NM viewing address uses Stripe automatic tax on the viewing address', async t => {
+  const c = await context(t,{marketplace:true});
+  const request = {offer:c.offer,token:c.token,origin,kind:'rent',tipPercent:10,
+    viewingAddress:{country:'US',state:'NM',line1:'PO Box 123',city:'Albuquerque',postalCode:'87102'}};
+  const opened = await c.checkout.start(request);
+  assert.equal(opened.useViewingAddress,true);
+  assert.equal(opened.manualTax,undefined);
+  assert.equal(c.first().automatic_tax.enabled,true);
+  assert.equal(c.store.viewerOrderById(opened.orderId).nmQuote,null);
+  c.first().shipping_address_collection = null;
+  await assert.rejects(c.checkout.start(request),{statusCode:409});
 });
 
 test('an explicitly rejected transfer can retry after the recipient becomes active without repeating the charge', async t => {
