@@ -84,6 +84,8 @@ async function checkAppearance(page, origin) {
   await choice.selectOption('dark');
   await scheme('dark');
   assert.ok(await choice.evaluate(select => document.activeElement === select && getComputedStyle(select).outlineStyle === 'none'));
+  // selectOption commits the value but Linux Chrome can leave the native picker open.
+  await page.keyboard.press('Escape');
   await choice.press('Tab');
   await page.keyboard.press('Shift+Tab');
   assert.ok(await choice.evaluate(select => document.activeElement === select && getComputedStyle(select).outlineStyle === 'solid'));

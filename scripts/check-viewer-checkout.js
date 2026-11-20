@@ -327,7 +327,9 @@ async function preview(frame, captions = false) {
       await pip.click();
       await frame.waitForFunction(() => !document.pictureInPictureElement);
     }
-    await menu.click();
+    // Exercise pointer selection without leaving an OS-owned picker over the playing video.
+    await menu.focus();
+    await menu.dispatchEvent('pointerdown', { pointerType: 'mouse' });
     await menu.selectOption('s2');
     await frame.waitForFunction(() => [...document.querySelector('video').textTracks]
       .some(track => track.mode === 'showing' && track.cues?.length === 1 && track.cues[0].endTime === 10));
