@@ -101,8 +101,8 @@ async function checkAppearance(page, origin) {
 async function signIn(page, origin, owner) {
   await page.goto(origin + '/setup/sign-in');
   await page.getByLabel('Invitation code').fill(setup.store.invite(owner));
-  await page.getByRole('button', { name: 'Open setup' }).click();
-  await page.getByRole('heading', { name: 'Setup', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('heading', { name: 'Settings', exact: true }).waitFor();
 }
 
 async function checkThumbnails(page, publicUrl, fixtureBucket) {
@@ -160,13 +160,13 @@ async function openWorkspace(page, name) {
   if (await page.getByRole('heading', { name, exact: true, level: 1 }).isVisible()) return;
   const menu = page.locator('.workspace-nav select');
   await menu.waitFor({ state: 'attached' });
-  if (await menu.isVisible()) await menu.selectOption({ Dashboard: '/setup/dashboard', Setup: '/setup', Settings: '/setup/settings' }[name]);
+  if (await menu.isVisible()) await menu.selectOption({ Dashboard: '/setup/dashboard', Settings: '/setup/settings' }[name]);
   else await page.getByRole('link', { name, exact: true }).click();
   await page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 }
 
 async function openSection(page, id) {
-  await openWorkspace(page, 'Setup');
+  await openWorkspace(page, 'Settings');
   const panel = page.locator('#' + id + '[role=tabpanel]');
   await panel.waitFor({ state: 'attached' });
   if (await panel.isVisible()) return;
@@ -243,6 +243,7 @@ async function resetAndReconnect(page, owner, otherOwner, previewPath) {
   assert.equal(providerCalls, previousCalls, 'Reset with no unfinished checkouts does not call the provider');
   assert.equal(await page.locator('#storage .provider-status').textContent(), 'Connected');
   await openWorkspace(page, 'Dashboard');
+  await page.locator('.dashboard-film > summary').click();
   const savedPreview = page.getByRole('link', { name: 'Watch private preview' });
   assert.equal(await savedPreview.getAttribute('href'), previewPath);
   await savedPreview.click();
@@ -373,7 +374,7 @@ async function registerFilm(page, shouldRecover, origin, owner) {
   await section.getByRole('button', { name: 'Check film and create preview' }).click();
   const preview = page.getByRole('link', { name: 'Watch private preview' });
   await preview.waitFor();
-  assert.ok(await page.getByRole('heading', { name: 'Projection test <first cut>' }).isVisible());
+  assert.ok(await page.getByText('Projection test <first cut>', { exact: true }).isVisible());
   return preview.getAttribute('href');
 }
 
@@ -395,7 +396,7 @@ async function checkFilmUpload(page, movies) {
   const original = Buffer.concat([clip, padding]);
   await video.setInputFiles({ name: 'second screening.mp4', mimeType: 'video/mp4', buffer: original });
   await section.getByRole('button', { name: 'Check film and create preview' }).click();
-  const card = page.locator('.dashboard-film').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
+  const card = page.locator('.dashboard-film').filter({ has: page.getByText(title, { exact: true }) });
   await card.waitFor();
   assert.equal(movies.objects.size, 1);
   const [[key, object]] = movies.objects;
@@ -406,7 +407,7 @@ async function checkFilmUpload(page, movies) {
   await page.waitForFunction(() => document.querySelector('video')?.duration === 10);
   await page.getByRole('link', { name: 'Back to film' }).click();
   const editor = card.locator('.thumbnail-editor');
-  const otherCard = page.locator('.dashboard-film').filter({ has: page.getByRole('heading', { name: 'Projection test <first cut>' }) });
+  const otherCard = page.locator('.dashboard-film').filter({ hasText: 'Projection test <first cut>' });
   const other = otherCard.locator('.thumbnail-editor');
   assert.equal(await page.locator('.thumbnail-editor').count(), 2);
   const image = await sharp({ create: { width: 320, height: 180, channels: 3, background: '#896c50' } }).png().toBuffer();
@@ -414,9 +415,12 @@ async function checkFilmUpload(page, movies) {
   await editor.locator('canvas').waitFor();
   await editor.getByRole('button', { name: 'Save thumbnail' }).click();
   await editor.getByText('Thumbnail saved.', { exact: true }).waitFor();
+  assert.equal(await otherCard.getAttribute('open'), null);
+  assert.ok(await card.locator('.thumbnail-poster').isVisible());
+  await otherCard.locator('summary').first().click();
+  assert.equal(await card.getAttribute('open'), null);
   assert.ok(await other.getByRole('button', { name: 'Save thumbnail' }).isDisabled());
   assert.ok(await otherCard.locator('.thumbnail-poster').isHidden());
-  assert.ok(await card.locator('.thumbnail-poster').isVisible());
   assert.ok(original.equals(object.data), 'A poster edit leaves the uploaded film intact');
   report.filmUpload = { parts: 2, bytes: object.data.length, privatePreviewSeconds: 10, thumbnailIsolated: true };
 }
@@ -427,6 +431,7 @@ async function checkLegacyBucketUpgrade(page, owner) {
     accessKeyId: '5'.repeat(32), secretAccessKey: '6'.repeat(64) });
   await openWorkspace(page, 'Dashboard');
   const card = page.locator('.dashboard-film');
+  await card.locator('summary').first().click();
   assert.equal(await card.locator('.thumbnail-editor').count(), 0);
   await card.getByRole('link', { name: 'Enable uploads for this bucket' }).click();
   const token = page.getByLabel('R2 token value');
@@ -525,7 +530,7 @@ try {
       if (first) {
         await checkAppearance(page, origin);
         await page.goto(origin + '/setup/sign-in');
-        await page.getByRole('link', { name: 'Filmmaker FAQ' }).click();
+        await page.locator('header').getByRole('link', { name: 'FAQ', exact: true }).click();
         await page.getByRole('heading', { name: 'What does it cost?' }).waitFor();
         assert.ok(await page.getByRole('link', { name: 'Cloudflare R2 pricing' }).isVisible());
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -541,11 +546,11 @@ try {
         assert.ok(await page.getByText('Stripe’s standard U.S. rate', { exact: false }).isVisible());
         await openSection(page, 'storage');
         assert.ok(await page.getByText('10 GB of storage free', { exact: false }).isVisible());
-        await openWorkspace(page, 'Settings');
-        assert.ok(await page.getByRole('link', { name: 'Stripe pricing', exact: true }).isVisible());
-        await page.getByRole('link', { name: 'Manage Stripe connection' }).click();
+        await page.goto(origin + '/setup#payments');
         await page.locator('#payments[role=tabpanel]').waitFor();
-        report.pricing = { publicFaq: true, setup: true, settings: true };
+        assert.equal(new URL(page.url()).pathname, '/setup/settings');
+        assert.deepEqual(await page.locator('.workspace-nav .tab-bar a').allTextContents(), ['Dashboard', 'Settings']);
+        report.pricing = { publicFaq: true, settings: true, oldSetupLink: true };
       }
       if (storage === 'existing') await connectBucket(page, mode === 'reuse' ? 'selected keys' : 'manual', mode === 'existing');
       const previewWithoutPayments = mode === 'new' && storage === 'existing';
@@ -558,6 +563,8 @@ try {
         await finishStripe(page, mode, false);
       }
       await openWorkspace(page, 'Dashboard');
+      const filmRow = page.locator('details.dashboard-film');
+      if (!await filmRow.evaluate(el => el.open)) await filmRow.locator('summary').first().click();
       await page.getByRole('link', { name: 'Watch private preview' }).click();
       await page.waitForFunction(() => document.querySelector('video')?.duration === 10);
       await page.getByRole('link', { name: 'Back to film' }).click();
@@ -583,7 +590,18 @@ try {
           const films = await page.getByRole('heading', { name: 'Films' }).boundingBox();
           assert.ok(overview && films && overview.y < films.y);
         }
-        await page.getByRole('textbox', { name: 'Credits', exact: true }).fill('Directed by <Ada>');
+        assert.equal(await page.locator('.dashboard-film[open]').count(), 0);
+        const mainWidth = await page.locator('main').boundingBox();
+        assert.ok(mainWidth.width > 920, 'Use the desktop width for the dashboard');
+        const summary = page.locator('.dashboard-film > summary');
+        await summary.focus();
+        await summary.press('Enter');
+        const credits = page.getByRole('textbox', { name: 'Credits', exact: true });
+        await credits.fill('Directed by <Ada>');
+        await summary.press('Space');
+        assert.ok(await credits.isHidden());
+        await summary.press('Enter');
+        assert.equal(await credits.inputValue(), 'Directed by <Ada>');
         await page.getByRole('textbox', { name: 'Synopsis', exact: true }).fill('A short film.');
         await page.getByRole('button', { name: 'Save film details' }).click();
         await page.getByRole('button', { name: 'Publish film' }).click();

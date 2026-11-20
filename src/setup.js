@@ -15,8 +15,7 @@ import { openSetupStore } from './setup-store.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
 import { escapeHtml, infoFields, selectedFields } from './film-embed.js';
-import { renderFilmmakerSettings } from './filmmaker-help.js';
-import { filmSection, renderBucketAccess, renderDashboard, renderSetupPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
+import { filmSection, renderBucketAccess, renderDashboard, renderSettingsPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
@@ -33,7 +32,7 @@ function signInPage(message = '') {
   const feedback = message ? '<p role="alert">' + escapeHtml(message) + '</p>' : '';
   return workspacePage('Filmmaker sign-in', null, '<h1>Filmmaker sign-in</h1>' + feedback + '<p>Open the private invitation from Dust Wave, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.</p>' +
     '<form method="post" action="/setup/sign-in"><label>Invitation code <input name="code" type="password" required autocomplete="one-time-code" maxlength="64"></label> ' +
-    '<button type="submit">Open setup</button></form>');
+    '<button type="submit">Open settings</button></form>');
 }
 
 async function readForm(req, limit = 8192) {
@@ -139,7 +138,7 @@ export async function createSetup({
     const display = (status = 200, feedback = {}) => {
       const { r2, stripe: savedStripe } = store.maker(session.owner);
       const state = stripeSetupStateForMode(savedStripe, mode);
-      return html(status, renderSetupPage({
+      return html(status, renderSettingsPage({
         filmmaker: { name: session.owner }, csrf: session.csrf,
         initialSection: path.startsWith('/setup/stripe/') ? 'payments' : path.startsWith('/setup/r2') ? 'storage' : undefined,
         stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
@@ -163,7 +162,7 @@ export async function createSetup({
         const { code } = await readForm(req);
         const id = store.signIn(code || '');
         if (!id) return html(401, signInPage('This invitation has expired or was used. Ask Dust Wave for a fresh link.'));
-        return redirect('/setup', { 'Set-Cookie': cookie(id, 14 * 86400) });
+        return redirect('/setup/settings', { 'Set-Cookie': cookie(id, 14 * 86400) });
       } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
     }
     const preview = previewPattern.exec(path);
@@ -172,10 +171,8 @@ export async function createSetup({
       if (get && callbackPattern.test(path)) return html(401, signInPage('Your Stream session has ended. Sign in again and continue from the Stripe card.'));
       return reject(401, 'Sign in to your filmmaker workspace.');
     }
-    if (get && path === '/setup') return display();
-    if (get && path === '/setup/settings') {
-      return html(200, workspacePage('Settings', session.csrf, '<div class="filmmaker-help">' + renderFilmmakerSettings() + '</div>', { settings: true }));
-    }
+    if (get && path === '/setup') return redirect('/setup/settings');
+    if (get && path === '/setup/settings') return display();
     const owner = session.owner;
     const step = (title, inner, options) => workspacePage(title, session.csrf, '<h1>' + escapeHtml(title) + '</h1>' + inner, options);
     const newFilm = (status = 200, feedback = {}) => {
@@ -189,12 +186,12 @@ export async function createSetup({
       }) + '</section><p><a href="/setup/dashboard#films">Back to films</a></p>', { dashboard: true, filmUpload: true }),
         { 'Content-Security-Policy': csp + "; connect-src 'self'" });
     };
-    const dashboard = (status = 200, error) => {
+    const dashboard = (status = 200, error, selectionFilm = searchParams.get('film')) => {
       const viewer = viewerOrigin(env, origin);
       const port = localPreviewPort(env);
       const previewOrigin = port && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin) ? 'http://127.0.0.1:' + port : viewer;
       return html(status, renderDashboard({ csrf: session.csrf, owner, error, draft: store.maker(owner).draft,
-        origin: viewer, previewOrigin, selectionFilm: searchParams.get('film'), infoSaved: searchParams.get('saved') === 'details',
+        origin: viewer, previewOrigin, selectionFilm, infoSaved: searchParams.get('saved') === 'details',
         selection: searchParams.getAll('include').join(','),
         films: store.dashboardFilms(owner).map(film => ({ ...film, published: publications.isPublished(owner, film.id) }))
       }), { 'Content-Security-Policy': csp.replace("img-src 'self'", "img-src 'self' blob:") + "; connect-src 'self'; frame-src " + previewOrigin });
@@ -243,7 +240,7 @@ export async function createSetup({
     if (get && path === '/setup/dashboard/new') return newFilm();
     if (get && path === '/setup/stripe/reset') {
       const { state, confirmation } = store.stripeContext(owner, mode);
-      if (!state.accountId && !state.flow && !state.createRequest) return redirect('/setup#payments');
+      if (!state.accountId && !state.flow && !state.createRequest) return redirect('/setup/settings#payments');
       return html(200, step('Reset Stripe connection', renderStripeReset(session.csrf, mode, state, confirmation)));
     }
     const upgradePath = /^\/setup\/r2\/uploads(?:\/(f-[a-f0-9-]{36}))?$/.exec(path);
@@ -257,7 +254,7 @@ export async function createSetup({
     }
     if (get && path === '/setup/r2/access') {
       const location = store.storageDraft(owner);
-      return location ? bucketAccess(200, location) : redirect('/setup#storage');
+      return location ? bucketAccess(200, location) : redirect('/setup/settings#storage');
     }
     if (get && preview) {
       const film = store.film(owner, preview[1]);
@@ -312,9 +309,10 @@ export async function createSetup({
     const filmAction = ['/setup/rights', '/setup/film', '/setup/next'].includes(path);
     if (busy.has(owner)) return (filmAction ? newFilm : display)(409, { error: 'A setup step is still running. Wait a moment and reload.' });
     busy.add(owner);
+    let editedFilm;
     try {
       const data = callback ? {} : await readForm(req, path === '/setup/dashboard/info' ? 32768 : 8192);
-      if (!callback && data.csrf !== session.csrf) return reject(403, 'Reload setup before submitting this form.');
+      if (!callback && data.csrf !== session.csrf) return reject(403, 'Reload the page before submitting this form.');
       if (path === '/setup/sign-out') { store.signOut(sessionId); return redirect('/setup/sign-in', { 'Set-Cookie': cookie('', 0) }); }
       const { r2, draft } = store.maker(owner);
       if (callback || path === '/setup/stripe/start' || path === '/setup/stripe/check') {
@@ -322,7 +320,7 @@ export async function createSetup({
         const result = callback ? await provider.callback(ctx, callback[1], searchParams) :
           path === '/setup/stripe/start' ? await provider.start(ctx, data.mode, data.country) : await provider.refresh(ctx);
         if (result?.countryRequired) return html(200, step('Choose your business country', renderStripeCountryForm(session.csrf, data.mode)));
-        return redirect(result?.redirect || '/setup#payments');
+        return redirect(result?.redirect || '/setup/settings#payments');
       }
       if (path === '/setup/stripe/reset') {
         if (!store.resetStripe(owner, mode, data.confirmation)) {
@@ -331,7 +329,7 @@ export async function createSetup({
         if (mode === 'test' && await checkout.closeWithdrawnSessions(owner)) {
           return display(200, { notice: 'Stripe was reset. Stream is closing unfinished checkouts and will retry automatically.' });
         }
-        return redirect('/setup#payments');
+        return redirect('/setup/settings#payments');
       }
       if (upgradePath || ['/setup/r2', '/setup/r2/location', '/setup/r2/access'].includes(path)) {
         const guided = path !== '/setup/r2';
@@ -340,7 +338,7 @@ export async function createSetup({
         const upgrade = Boolean(upgradePath);
         if (upgrade) {
           const current = upgradeBucket();
-          if (!current || current.accountId !== accountId || current.bucket !== bucket || current.jurisdiction !== jurisdiction) return reject(409, 'The bucket changed. Reopen Storage setup.');
+          if (!current || current.accountId !== accountId || current.bucket !== bucket || current.jurisdiction !== jurisdiction) return reject(409, 'The bucket changed. Reopen Storage settings.');
         } else store.saveStorageDraft(owner, { accountId, bucket, jurisdiction });
         if (path === '/setup/r2/location') return redirect('/setup/r2/access');
         let config;
@@ -361,11 +359,12 @@ export async function createSetup({
           throw new SetupError(message, code);
         }
         store.saveBucket(owner, config, { select: !upgrade });
-        return redirect(upgrade && upgradeFilm ? '/setup/dashboard#thumbnail-' + upgradeFilm : '/setup#storage');
+        return redirect(upgrade && upgradeFilm ? '/setup/dashboard#thumbnail-' + upgradeFilm : '/setup/settings#storage');
       }
       if (['/setup/film/prices', '/setup/dashboard/settings', '/setup/dashboard/publication', '/setup/dashboard/info'].includes(path)) {
         const saved = store.film(owner, data.filmId || '');
         if (!saved) throw new SetupError('Saved film unavailable.', 404);
+        editedFilm = saved.id;
         if (path === '/setup/dashboard/info') {
           const info = {};
           for (const { name, label, limit } of infoFields) {
@@ -395,7 +394,7 @@ export async function createSetup({
         return redirect('/setup/dashboard#' + saved.id);
       }
       if (!filmAction) return reject(404, 'Page unavailable.');
-      if (data.draftId !== draft.id) throw new SetupError('This tab has an older draft. Reload setup to continue.', 409);
+      if (data.draftId !== draft.id) throw new SetupError('This tab has an older draft. Reload the page to continue.', 409);
       if (!r2) throw new SetupError('Connect your R2 bucket first.');
       const completed = store.film(owner, draft.id);
       if (path === '/setup/next') {
@@ -433,7 +432,7 @@ export async function createSetup({
       return redirect(path === '/setup/film' ? '/setup/dashboard#' + draft.id : '/setup/dashboard/new');
     } catch (e) {
       if (path.startsWith('/setup/dashboard/') || path === '/setup/film/prices') return dashboard(e instanceof SetupError ? e.statusCode : 503,
-        e instanceof SetupError ? e.message : 'This change could not finish. Try again.');
+        e instanceof SetupError ? e.message : 'This change could not finish. Try again.', editedFilm);
       const show = filmAction ? newFilm : display;
       if (e instanceof SetupError || e instanceof StripeSetupError || e instanceof R2SetupError) return show(e.statusCode || 400, { error: e.message });
       return show(503, { error: 'This step could not finish. Your completed steps are saved. Try again.' });

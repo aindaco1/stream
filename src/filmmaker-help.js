@@ -30,30 +30,12 @@ export function renderSetupCosts(provider) {
   return `<div class="provider-costs"><h3>${pricing[provider].heading}</h3>${feeCopy(provider)}<p>${pilot}</p></div>`;
 }
 
-export function renderFilmmakerSettings() {
-  return `<h1>Settings</h1>
-    <p>${platformCosts}</p><p>${sandbox}</p>
-    <section><h2>${pricing.stripe.heading}</h2>
-      ${feeCopy('stripe', true)}
-      <p>See each charge and its net amount in your Stripe Dashboard. Stream’s dashboard shows gross test payments.</p>
-      <p><a href="/setup#payments">Manage Stripe connection</a></p>
-    </section>
-    <section><h2>${pricing.r2.heading}</h2>
-      ${feeCopy('r2', true)}
-      <p><a href="/setup#storage">Manage R2 connection</a></p>
-    </section>
-    <section><h2>Viewer purchases</h2>
-      <p>Sales are final. Set each film’s prices, rental duration and free preview in your dashboard.</p>
-      <p><a href="/setup/dashboard#films">Manage films</a></p>
-    </section>`;
-}
-
 export function renderFilmmakerFaq() {
   return `<h1>Filmmaker FAQ</h1>
     <p>Stream is an open-source player for filmmakers who want to rent or sell a film from their own website. <a href="https://github.com/aindaco1/stream">Stream on GitHub</a></p>
     <section><h2>Can I use Stream today?</h2>
       <p>The pilot is invite-only. ${sandbox}</p>
-      <p>You need distribution rights to your film, a private Cloudflare R2 bucket and a Stripe account eligible to accept card payments and payouts. Setup guides you through creating accounts or using existing ones. Stripe determines eligibility for your business and country. <a href="https://stripe.com/global">Countries supported by Stripe</a></p>
+      <p>You need distribution rights to your film, a private Cloudflare R2 bucket and a Stripe account eligible to accept card payments and payouts. Settings guides you through creating accounts or using existing ones. Stripe determines eligibility for your business and country. <a href="https://stripe.com/global">Countries supported by Stripe</a></p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
       <p>${platformCosts}</p>

@@ -15,7 +15,7 @@ const pages = mountResponsiveTabSelect(workspace, {
 window.addEventListener('pageshow', () => { pages.select.value = currentPage; });
 
 // Older setup links pointed to a film tab. Its contents now live on Dashboard.
-if (location.pathname === '/setup' && location.hash === '#film') location.replace('/setup/dashboard#films');
+if (location.pathname === '/setup/settings' && location.hash === '#film') location.replace('/setup/dashboard#films');
 const sections = document.querySelector('.workspace-sections');
 if (sections) {
   const list = sections.querySelector('.subtabs');

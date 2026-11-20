@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openSetupStore } from '../src/setup-store.js';
-import { renderSetupPage } from '../src/setup-view.js';
+import { renderSettingsPage } from '../src/setup-view.js';
 import assert from 'node:assert/strict';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from '../src/setup-stripe.js';
 
@@ -381,7 +381,7 @@ test('post-submit Stripe review overrides a stale past-due capability instructio
   assert.equal(ctx.state.chargesEnabled, false);
   assert.equal(ctx.state.payoutsEnabled, false);
   const stripe = { ...ctx.state, configured: true, hasAccount: true };
-  const html = renderSetupPage({ csrf: 'token', stripe });
+  const html = renderSettingsPage({ csrf: 'token', stripe });
   assert.match(html, /Under review/);
   assert.match(html, /Check Stripe status/);
   assert.doesNotMatch(html, /Continue on Stripe to review|Continue Stripe setup|action="\/setup\/stripe\/start"/);

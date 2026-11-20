@@ -53,7 +53,7 @@ export function createThumbnails(store, fetcher = fetch) {
     if (!response.ok) {
       await response.body?.cancel();
       if (response.status === 404) return null;
-      if (response.status === 403) throw new ThumbnailError('Check the bucket permissions in Storage setup.', 403);
+      if (response.status === 403) throw new ThumbnailError('Check the bucket permissions in Storage settings.', 403);
       throw new ThumbnailError('Cloudflare could not read the thumbnail. Try again.', 503);
     }
     const h = response.headers;
@@ -70,7 +70,7 @@ export function createThumbnails(store, fetcher = fetch) {
   }
   async function change(owner, film, { version, remove, frame, input }) {
     const access = store.uploadCredentials(owner, film.bucket);
-    if (!access) throw new ThumbnailError('Enable uploads in Storage setup for this bucket.', 403);
+    if (!access) throw new ThumbnailError('Enable uploads in Storage settings for this bucket.', 403);
     const writer = objectWriter(access, thumbnailKey(film.id), ['PutObject', 'DeleteObject']);
     if (!remove) frame = frameValues(frame);
     // Finish decoding the upload before taking a short cross-process lock on remote edits.
@@ -94,7 +94,7 @@ export function createThumbnails(store, fetcher = fetch) {
       const response = await request(owner, film, writer)(remove ? 'DELETE' : 'PUT', headers, undefined, remove ? undefined : image || previous.data);
       await response.body?.cancel();
       if (response.status === 403) observed = previous?.version || '';
-      if (!response.ok) throw new ThumbnailError(response.status === 403 ? 'Cloudflare declined the thumbnail update. Reconnect this bucket in Storage setup.' :
+      if (!response.ok) throw new ThumbnailError(response.status === 403 ? 'Cloudflare declined the thumbnail update. Reconnect this bucket in Storage settings.' :
         'Cloudflare could not save the change. Reload the thumbnail and try again.', response.status === 403 ? 403 : 409);
       observed = next;
       return next;
