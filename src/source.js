@@ -2,7 +2,7 @@ import { open, stat } from 'node:fs/promises';
 import { AwsClient } from 'aws4fetch';
 
 export const BLOCK_SIZE = 128 * 1024;
-const MAX_FILE_BYTES = 1024 * 1024 * 1024;
+export const MAX_FILE_BYTES = 1024 * 1024 * 1024;
 
 function checkedHead(size, revision) {
   if (!Number.isSafeInteger(size) || size < 1 || size > MAX_FILE_BYTES || !revision) {

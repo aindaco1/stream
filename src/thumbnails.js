@@ -1,34 +1,12 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
+import { objectWriter } from './r2-write.js';
 import { r2Request } from './source.js';
 import { cropRect, thumbnailKey } from './thumbnail-frame.js';
 
 const maxBytes = 8 * 1024 * 1024;
 export class ThumbnailError extends Error {
   constructor(message, status = 422) { super(message); this.status = status; }
-}
-export function thumbnailScope(film) {
-  const { accountId, bucket, jurisdiction } = film.bucket;
-  const region = jurisdiction === 'default' ? '' : '.' + jurisdiction;
-  return { accountId, bucket, host: accountId + region + '.r2.cloudflarestorage.com', key: thumbnailKey(film.id) };
-}
-
-function grant(jwt, film) {
-  const invalid = () => new ThumbnailError('Authorize thumbnail access again with a key for this bucket.', 403);
-  const scope = thumbnailScope(film);
-  if (typeof jwt !== 'string' || jwt.length > 4096 || !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(jwt)) throw invalid();
-  let header, claim;
-  try { [header, claim] = jwt.split('.').slice(0, 2).map(part => JSON.parse(Buffer.from(part, 'base64url'))); }
-  catch { throw invalid(); }
-  const now = Math.floor(Date.now() / 1000);
-  if (header?.alg !== 'HS256' || claim?.sub !== scope.accountId || claim.aud !== scope.host ||
-      claim.bucket !== scope.bucket || !/^[a-f0-9]{32}$/i.test(claim.iss) || claim.scope !== undefined ||
-      !Number.isSafeInteger(claim.exp) || claim.exp <= now || claim.exp > now + 3660 ||
-      JSON.stringify(claim.actions) !== '["PutObject","DeleteObject"]' ||
-      JSON.stringify(claim.paths) !== JSON.stringify({ objectPaths: [scope.key] })) throw invalid();
-  // R2 verifies the parent signature. Stream receives only the short-lived, object-specific JWT.
-  return { accessKeyId: claim.iss, secretAccessKey: createHash('sha256').update(jwt).digest('hex'),
-    sessionToken: Buffer.from('jwt/' + jwt).toString('base64') };
 }
 function frameValues(input) {
   if (!input || typeof input !== 'object') throw new ThumbnailError('Check the thumbnail framing.');
@@ -75,6 +53,7 @@ export function createThumbnails(store, fetcher = fetch) {
     if (!response.ok) {
       await response.body?.cancel();
       if (response.status === 404) return null;
+      if (response.status === 403) throw new ThumbnailError('Check the bucket permissions in Storage setup.', 403);
       throw new ThumbnailError('Cloudflare could not read the thumbnail. Try again.', 503);
     }
     const h = response.headers;
@@ -89,8 +68,10 @@ export function createThumbnails(store, fetcher = fetch) {
       return { frame, version, etag: h.get('etag'), data: method === 'GET' ? await bytes(response) : undefined };
     } finally { if (!response.bodyUsed) await response.body?.cancel(); }
   }
-  async function change(owner, film, { jwt, version, remove, frame, input }) {
-    const writer = grant(jwt, film);
+  async function change(owner, film, { version, remove, frame, input }) {
+    const access = store.uploadCredentials(owner, film.bucket);
+    if (!access) throw new ThumbnailError('Enable uploads in Storage setup for this bucket.', 403);
+    const writer = objectWriter(access, thumbnailKey(film.id), ['PutObject', 'DeleteObject']);
     if (!remove) frame = frameValues(frame);
     // Finish decoding the upload before taking a short cross-process lock on remote edits.
     const image = input?.length ? await normalize(input) : undefined;
@@ -113,7 +94,7 @@ export function createThumbnails(store, fetcher = fetch) {
       const response = await request(owner, film, writer)(remove ? 'DELETE' : 'PUT', headers, undefined, remove ? undefined : image || previous.data);
       await response.body?.cancel();
       if (response.status === 403) observed = previous?.version || '';
-      if (!response.ok) throw new ThumbnailError(response.status === 403 ? 'Cloudflare declined thumbnail access. Authorize with an Object Read & Write key scoped to this bucket.' :
+      if (!response.ok) throw new ThumbnailError(response.status === 403 ? 'Cloudflare declined the thumbnail update. Reconnect this bucket in Storage setup.' :
         'Cloudflare could not save the change. Reload the thumbnail and try again.', response.status === 403 ? 403 : 409);
       observed = next;
       return next;

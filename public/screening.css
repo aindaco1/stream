@@ -11,3 +11,6 @@ iframe { display: block; border: 1px solid #404040; background: #181818; width: 
   section { grid-template-columns: minmax(0, 1fr); }
   iframe { height: calc(56.25cqw + 15rem); }
 }
+
+footer { margin-block-start: 2rem; }
+footer a { color: inherit; text-underline-offset: .18em; }

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -11,11 +11,12 @@ import { createPublicFilms } from '../src/public-films.js';
 import sharp from 'sharp';
 import { createThumbnails } from '../src/thumbnails.js';
 import { thumbnailBucket, testWriterId, testWriterSecret } from '../test/fixtures/thumbnail-r2.js';
+import { filmUploadBucket } from '../test/fixtures/film-upload-r2.js';
 import { createRentalAuthority } from '../src/rental.js';
 import { chromium } from 'playwright';
 import { makeServer } from '../src/server.js';
 import { createSetup } from '../src/setup.js';
-import { createFileSource } from '../src/source.js';
+import { createFileSource, createR2Source } from '../src/source.js';
 
 const temporary = await mkdtemp(path.join(tmpdir(), 'stream-setup-browser-'));
 const evidence = process.env.EVIDENCE_DIR ? path.resolve(process.env.EVIDENCE_DIR) : null;
@@ -24,8 +25,8 @@ const report = { providers: 'Synthetic Stripe and R2', scenarios: [] };
 const savedKey = 'First cut/Short film.mp4';
 const accountId = 'a'.repeat(32);
 const bucket = 'screening-room-test';
-const access = 'setup-test-access-only';
-const secret = 'setup-test-secret-only';
+const access = testWriterId;
+const secret = testWriterSecret;
 const bucketUrl = `https://dash.cloudflare.com/${accountId}/r2/default/buckets/${bucket}`;
 const readToken = 'syntheticbucketreadtoken'.repeat(2);
 let browser, server, viewer, setup;
@@ -108,49 +109,58 @@ async function checkThumbnails(page, publicUrl, fixtureBucket) {
   const image = await sharp({ create: { width: 480, height: 480, channels: 3, background: '#526582' } }).png().toBuffer();
   const posterUrl = publicUrl.replace('/embed/', '/film/') + '/thumbnail.jpg';
   const privateRoute = '/setup/thumbnail/' + publicUrl.split('/').pop();
-  const edit = page.getByRole('link', { name: 'Edit thumbnail' });
-  await page.getByRole('link', { name: 'Add thumbnail' }).click();
-  await page.locator('input[type=file]').setInputFiles({ name: 'poster.png', mimeType: 'image/png', buffer: image });
-  await page.getByLabel('Access Key ID').fill(testWriterId);
-  await page.getByLabel('Secret Access Key').fill(testWriterSecret);
-  await page.waitForFunction(() => !document.querySelector('.thumbnail-editor [type=submit]').disabled || document.querySelector('.thumbnail-editor [role=status]').textContent);
-  assert.equal(await page.locator('.thumbnail-editor [role=status]').textContent(), '');
-  await page.getByRole('button', { name: 'Save thumbnail' }).click();
-  await edit.waitFor();
+  const form = page.getByRole('form', { name: 'Thumbnail for Projection test <first cut>', exact: true });
+  const section = form.locator('..');
+  const save = form.getByRole('button', { name: 'Save thumbnail' });
+  assert.equal(await form.locator('input[type=password]').count(), 0);
+  assert.ok(await section.getByText(/1920 × 1080/).isVisible());
+  await form.getByLabel('Thumbnail image').setInputFiles({ name: 'large.jpg', mimeType: 'image/jpeg', buffer: Buffer.alloc(8 * 1024 ** 2 + 1) });
+  await form.getByText('Choose a JPEG, PNG or WebP up to 8 MB.', { exact: true }).waitFor();
+  assert.ok(await save.isDisabled());
+  await form.getByLabel('Thumbnail image').setInputFiles({ name: 'poster.png', mimeType: 'image/png', buffer: image });
+  await form.locator('canvas').waitFor();
+  await save.click();
+  await form.getByText('Thumbnail saved.', { exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, '/setup/dashboard');
   const view = page.locator('.film-sharing iframe').contentFrame();
   await view.locator('video[poster]').waitFor();
   assert.ok(!(await view.locator('video').getAttribute('poster')).includes('cloudflare'));
   const first = await page.request.get(posterUrl);
   assert.equal(first.status(), 200);
   assert.equal((await sharp(await first.body()).metadata()).width, 480);
-  await edit.click();
+  await page.reload();
+  await form.getByRole('button', { name: 'Adjust saved framing' }).click();
   await page.setViewportSize({ width: 320, height: 720 });
-  await page.locator('canvas').waitFor();
+  await form.locator('canvas').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  assert.equal(await page.locator('.thumbnail-auth').evaluate(el => el.open), false);
-  await page.getByLabel('Zoom').fill('200');
-  await page.getByRole('button', { name: 'Save thumbnail' }).click();
-  await edit.waitFor();
+  if (evidence) await section.screenshot({ path: path.join(evidence, 'thumbnail-editor-mobile.png') });
+  await form.getByLabel('Zoom').fill('200');
+  await save.click();
+  await form.getByText('Thumbnail saved.', { exact: true }).waitFor();
   const cropped = await page.request.get(posterUrl);
   assert.equal((await sharp(await cropped.body()).metadata()).width, 240);
   await page.getByRole('button', { name: 'Unpublish film' }).click();
   await page.getByRole('button', { name: 'Publish film' }).waitFor();
   assert.equal((await page.request.get(posterUrl)).status(), 404);
   assert.equal((await page.request.get(new URL(privateRoute + '/source.jpg', page.url()).href)).status(), 200);
-  await edit.click();
+  await form.getByRole('button', { name: 'Adjust saved framing' }).click();
+  await form.locator('canvas').waitFor();
+  assert.equal(await form.getByLabel('Zoom').inputValue(), '200');
   page.once('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: 'Delete thumbnail' }).click();
-  await page.getByRole('link', { name: 'Add thumbnail' }).waitFor();
+  await form.getByRole('button', { name: 'Delete thumbnail' }).click();
+  await form.getByText('Thumbnail deleted.', { exact: true }).waitFor();
   assert.equal(fixtureBucket.objects.size, 0);
   await page.getByRole('button', { name: 'Publish film' }).click();
   await view.locator('video:not([poster])').waitFor();
   assert.equal((await page.request.get(posterUrl)).status(), 404);
+  report.thumbnail = { oversizedFileRejected: true, firstPosterWidth: 480, reframedPosterWidth: 240,
+    preservedFramingAfterReload: true, publicPosterRemoved: true };
 }
 async function openWorkspace(page, name) {
   if (await page.getByRole('heading', { name, exact: true, level: 1 }).isVisible()) return;
   const menu = page.locator('.workspace-nav select');
   await menu.waitFor({ state: 'attached' });
-  if (await menu.isVisible()) await menu.selectOption(name === 'Dashboard' ? '/setup/dashboard' : '/setup');
+  if (await menu.isVisible()) await menu.selectOption({ Dashboard: '/setup/dashboard', Setup: '/setup', Settings: '/setup/settings' }[name]);
   else await page.getByRole('link', { name, exact: true }).click();
   await page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 }
@@ -256,10 +266,16 @@ async function resetAndReconnect(page, owner, otherOwner, previewPath) {
     preserved: ['live connection', 'other filmmaker', 'R2 connection', 'private film', 'draft'] };
 }
 
+async function confirmStorageAccess(form) {
+  assert.equal(await form.locator('[name="storageAccess"]').inputValue(), 'uploads');
+  await form.locator('[name="privateConfirmed"]').check();
+  await form.locator('[name="uploadConsent"]').check();
+}
+
 async function submitKeyPair(form, key, buttonLabel) {
   await form.locator('[name="accessKeyId"]').fill(access);
   await form.locator('[name="secretAccessKey"]').fill(key);
-  await form.locator('[name="privateConfirmed"]').check();
+  await confirmStorageAccess(form);
   await form.getByRole('button', { name: buttonLabel }).click();
 }
 
@@ -284,7 +300,7 @@ async function connectBucket(page, method, recover) {
       const form = page.locator('form').filter({ has: token });
       async function submitToken(value) {
         await token.fill(value);
-        await form.locator('[name="privateConfirmed"]').check();
+        await confirmStorageAccess(form);
         await form.getByRole('button', { name: 'Connect private bucket' }).click();
       }
       if (recover) {
@@ -302,14 +318,15 @@ async function connectBucket(page, method, recover) {
       }
       await card.locator('[name="accountId"]').fill(accountId);
       await card.locator('[name="bucket"]').fill(bucket);
-      await submitKeyPair(card, token, 'Connect private bucket');
+      const form = card.locator('form').filter({ has: page.locator('[name="accessKeyId"]') });
+      await submitKeyPair(form, token, 'Connect private bucket');
     }
     if (recover) {
       await card.getByText('Enter connection details manually', { exact: true }).click();
       await card.getByText('Choose a Cloudflare account and bucket', { exact: true }).click();
       assert.ok(await card.getByText('New bucket.', { exact: true }).isVisible());
       assert.ok(await card.getByText('Existing bucket.', { exact: true }).isVisible());
-      await card.getByText('Get a read-only key for this bucket', { exact: true }).click();
+      await card.getByText('Get an upload key for this bucket', { exact: true }).click();
       assert.ok(await card.getByRole('link', { name: 'Cloudflare’s R2 token guide' }).isVisible());
       await fill('intentionally-wrong-fixture-key');
       await page.getByRole('alert').waitFor();
@@ -329,14 +346,15 @@ async function registerFilm(page, shouldRecover, origin, owner) {
   await openWorkspace(page, 'Dashboard');
   await page.getByRole('link', { name: 'Add a film' }).click();
   const section = page.locator('#film');
-  assert.equal(await section.getByRole('link', { name: /Open your R2 bucket/ }).count(), 0);
+  assert.equal(await section.getByLabel('Video file').count(), 0);
   assert.equal(await section.locator('[name="objectKey"]').count(), 0);
   await section.locator('[name="rightsAccepted"]').check();
   await section.getByRole('button', { name: 'Confirm rights and continue' }).click();
-  await section.getByText('Upload a new film to Cloudflare', { exact: true }).click();
-  const dashboard = new URL(await section.getByRole('link', { name: /Open your R2 bucket/ }).getAttribute('href'));
-  assert.equal(dashboard.origin, 'https://dash.cloudflare.com');
-  assert.ok(dashboard.pathname.includes(bucket));
+  async function setObjectKey(key) {
+    const object = section.getByLabel('Object key');
+    if (!await object.isVisible()) await section.getByText('Use an existing file', { exact: true }).click();
+    await object.fill(key);
+  }
   await section.getByLabel('Film title').fill('Projection test <first cut>');
   if (shouldRecover) {
     await section.getByRole('button', { name: 'Save draft' }).click();
@@ -345,18 +363,82 @@ async function registerFilm(page, shouldRecover, origin, owner) {
     await openWorkspace(page, 'Dashboard');
     await page.getByRole('link', { name: 'Continue film draft' }).click();
     assert.equal(await section.getByLabel('Film title').inputValue(), 'Projection test <first cut>');
-    await section.getByLabel('Object key').fill('Incorrect/Short film.mp4');
+    await setObjectKey('Incorrect/Short film.mp4');
     await section.getByRole('button', { name: 'Check film and create preview' }).click();
     await page.getByRole('alert').waitFor();
     assert.equal(await section.getByLabel('Film title').inputValue(), 'Projection test <first cut>');
     assert.equal(await section.getByLabel('Object key').inputValue(), 'Incorrect/Short film.mp4');
   }
-  await section.getByLabel('Object key').fill(savedKey);
+  await setObjectKey(savedKey);
   await section.getByRole('button', { name: 'Check film and create preview' }).click();
   const preview = page.getByRole('link', { name: 'Watch private preview' });
   await preview.waitFor();
   assert.ok(await page.getByRole('heading', { name: 'Projection test <first cut>' }).isVisible());
   return preview.getAttribute('href');
+}
+
+async function checkFilmUpload(page, movies) {
+  await page.getByRole('link', { name: 'Add a film' }).click();
+  const section = page.locator('#film');
+  const video = section.getByLabel('Video file');
+  assert.equal(await video.count(), 0);
+  await section.locator('[name="rightsAccepted"]').check();
+  await section.getByRole('button', { name: 'Confirm rights and continue' }).click();
+  const title = 'Uploaded second screening';
+  await section.getByLabel('Film title').fill(title);
+  const clip = await readFile(fixture);
+  // A standard MP4 free-space box lets the tiny synthetic film exercise two
+  // upload parts without changing its tracks or generating a longer film.
+  const padding = Buffer.alloc(Math.max(8, 8 * 1024 ** 2 + 4096 - clip.length));
+  padding.writeUInt32BE(padding.length);
+  padding.write('free', 4);
+  const original = Buffer.concat([clip, padding]);
+  await video.setInputFiles({ name: 'second screening.mp4', mimeType: 'video/mp4', buffer: original });
+  await section.getByRole('button', { name: 'Check film and create preview' }).click();
+  const card = page.locator('.dashboard-film').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
+  await card.waitFor();
+  assert.equal(movies.objects.size, 1);
+  const [[key, object]] = movies.objects;
+  assert.match(key, /^stream-films\/[a-f\d-]{36}\.mp4$/);
+  assert.ok(original.equals(object.data), 'The private bucket contains the exact selected MP4');
+  assert.deepEqual(movies.calls.filter(call => call.method === 'PUT').map(call => call.query.get('partNumber')), ['1', '2']);
+  await card.getByRole('link', { name: 'Watch private preview' }).click();
+  await page.waitForFunction(() => document.querySelector('video')?.duration === 10);
+  await page.getByRole('link', { name: 'Back to film' }).click();
+  const editor = card.locator('.thumbnail-editor');
+  const otherCard = page.locator('.dashboard-film').filter({ has: page.getByRole('heading', { name: 'Projection test <first cut>' }) });
+  const other = otherCard.locator('.thumbnail-editor');
+  assert.equal(await page.locator('.thumbnail-editor').count(), 2);
+  const image = await sharp({ create: { width: 320, height: 180, channels: 3, background: '#896c50' } }).png().toBuffer();
+  await editor.getByLabel('Thumbnail image').setInputFiles({ name: 'second.png', mimeType: 'image/png', buffer: image });
+  await editor.locator('canvas').waitFor();
+  await editor.getByRole('button', { name: 'Save thumbnail' }).click();
+  await editor.getByText('Thumbnail saved.', { exact: true }).waitFor();
+  assert.ok(await other.getByRole('button', { name: 'Save thumbnail' }).isDisabled());
+  assert.ok(await otherCard.locator('.thumbnail-poster').isHidden());
+  assert.ok(await card.locator('.thumbnail-poster').isVisible());
+  assert.ok(original.equals(object.data), 'A poster edit leaves the uploaded film intact');
+  report.filmUpload = { parts: 2, bytes: object.data.length, privatePreviewSeconds: 10, thumbnailIsolated: true };
+}
+
+async function checkLegacyBucketUpgrade(page, owner) {
+  // Before uploads, a saved bucket configuration had no upload flag.
+  setup.store.saveBucket(owner, { accountId, bucket, jurisdiction: 'default',
+    accessKeyId: '5'.repeat(32), secretAccessKey: '6'.repeat(64) });
+  await openWorkspace(page, 'Dashboard');
+  const card = page.locator('.dashboard-film');
+  assert.equal(await card.locator('.thumbnail-editor').count(), 0);
+  await card.getByRole('link', { name: 'Enable uploads for this bucket' }).click();
+  const token = page.getByLabel('R2 token value');
+  const form = page.locator('form').filter({ has: token });
+  assert.equal(await form.locator('[name="bucketUrl"]').inputValue(), bucketUrl);
+  await token.fill(readToken);
+  await confirmStorageAccess(form);
+  await form.getByRole('button', { name: 'Connect private bucket' }).click();
+  await card.getByLabel('Thumbnail image').waitFor();
+  assert.equal(new URL(page.url()).hash, '#thumbnail-' + await card.getAttribute('id'));
+  assert.equal(await card.locator('input[type=password]').count(), 0);
+  report.legacyBucketUpgrade = true;
 }
 
 try {
@@ -372,11 +454,14 @@ try {
   assert.equal(generated.status, 0, 'Generate the synthetic clip using FFmpeg');
   const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' };
   const artwork = thumbnailBucket();
-  setup = await createSetup({ thumbnailFetch: artwork.fetcher,
+  const movies = filmUploadBucket();
+  setup = await createSetup({ thumbnailFetch: artwork.fetcher, uploadFetch: movies.fetcher,
     directory: path.join(temporary, 'state'), stripe, env,
-    async resolveBucket({ bucketUrl: location, privateConfirmed, tokenValue, accessKeyId, secretAccessKey }) {
+    async resolveBucket({ bucketUrl: location, privateConfirmed, tokenValue, accessKeyId, secretAccessKey, uploadConsent, storageAccess }) {
       assert.equal(location, bucketUrl);
       assert.equal(privateConfirmed, 'yes');
+      assert.equal(uploadConsent, 'yes');
+      assert.equal(storageAccess, 'uploads');
       const config = { accountId, bucket, jurisdiction: 'default' };
       if (tokenValue) {
         guidedTokenAttempts++;
@@ -391,6 +476,7 @@ try {
       if (settings.accessKeyId !== access || settings.secretAccessKey !== secret) throw Error('Test credential rejected');
     },
     sourceFor(settings) {
+      if (movies.objects.has(settings.objectKey)) return createR2Source(settings, movies.fetcher);
       if (settings.objectKey !== savedKey) throw Error('Unknown test object');
       return createFileSource(fixture);
     }
@@ -436,12 +522,30 @@ try {
       });
       page.on('console', event => { if (event.type() === 'error' && event.text().includes('Content Security Policy')) trace.push({ problem: 'Page reported a Content Security Policy error' }); });
       page.setDefaultTimeout(8000);
-      if (first) await checkAppearance(page, origin);
+      if (first) {
+        await checkAppearance(page, origin);
+        await page.goto(origin + '/setup/sign-in');
+        await page.getByRole('link', { name: 'Filmmaker FAQ' }).click();
+        await page.getByRole('heading', { name: 'What does it cost?' }).waitFor();
+        assert.ok(await page.getByRole('link', { name: 'Cloudflare R2 pricing' }).isVisible());
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      }
       await signIn(page, origin, owner);
       if (first) assert.equal(await page.getByRole('combobox', { name: 'Appearance' }).inputValue(), 'dark');
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       if (evidence && (first || mode === 'reuse')) {
         await page.screenshot({ path: path.join(evidence, first ? 'setup-mobile.png' : 'setup-desktop.png'), fullPage: true });
+      }
+      if (first) {
+        await openSection(page, 'payments');
+        assert.ok(await page.getByText('Stripe’s standard U.S. rate', { exact: false }).isVisible());
+        await openSection(page, 'storage');
+        assert.ok(await page.getByText('10 GB of storage free', { exact: false }).isVisible());
+        await openWorkspace(page, 'Settings');
+        assert.ok(await page.getByRole('link', { name: 'Stripe pricing', exact: true }).isVisible());
+        await page.getByRole('link', { name: 'Manage Stripe connection' }).click();
+        await page.locator('#payments[role=tabpanel]').waitFor();
+        report.pricing = { publicFaq: true, setup: true, settings: true };
       }
       if (storage === 'existing') await connectBucket(page, mode === 'reuse' ? 'selected keys' : 'manual', mode === 'existing');
       const previewWithoutPayments = mode === 'new' && storage === 'existing';
@@ -550,14 +654,18 @@ try {
         assert.equal(await page.getByLabel('Embed code').count(), 0);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         report.filmmakerDashboard = 'create film, private preview, publish, copy independent embed selections, update saved details, change prices, unpublish';
+        await checkFilmUpload(page, movies);
       }
+      if (mode === 'reuse') await checkLegacyBucketUpgrade(page, owner);
       report.scenarios.push({ stripe: mode, cloudflare: storage, savedPreviewSeconds: 10, resumed: true, previewWithoutPayments });
     } finally { await context.close(); }
   }
   assert.deepEqual(starts, ['new', 'resume', 'existing', 'new', 'new', 'existing', 'reuse']);
   assert.equal(outboundRequests, 0);
-  assert.equal(guidedTokenAttempts, 3, 'Two guided connections and one unsuccessful token attempt');
+  assert.equal(guidedTokenAttempts, 4, 'Two guided connections, one legacy upgrade, one unsuccessful attempt');
   assert.equal(guidedKeyAttempts, 1);
+  assert.equal(artwork.probes.size, 6, 'Every accepted setup or upgrade credential passed a write-and-delete check');
+  for (const key of artwork.probes) assert.ok(!artwork.objects.has(key));
   report.cloudflareSetup = { guidedTokenConnections: 2, selectedBucketWithKeyPair: 1, manualConnections: 2, handledWrongTokenAndKey: true };
   report.passed = true;
 } catch (error) {

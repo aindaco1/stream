@@ -99,9 +99,9 @@ test('guided setup carries an authenticated filmmaker from empty storage to priv
   assert.equal((await submit('r2', config)).status, 303);
   assert.equal((await submit('film', film)).status, 403);
   assert.equal(reads.length, 0);
-  assert.doesNotMatch(await (await get('/setup/dashboard/new')).text(), /Open your R2 bucket in Cloudflare/);
+  assert.doesNotMatch(await (await get('/setup/dashboard/new')).text(), /Use an existing file/);
   assert.equal((await submit('rights', { draftId: id, rightsAccepted: 'yes' })).status, 303);
-  assert.match(await (await get('/setup/dashboard/new')).text(), /Open your R2 bucket in Cloudflare/);
+  assert.match(await (await get('/setup/dashboard/new')).text(), /Use an existing file/);
   assert.equal((await submit('film', { draftId: id, title: 'Working title', intent: 'save' })).status, 200);
   assert.equal(setup.store.maker('Ada').draft.title, 'Working title');
   assert.equal(reads.length, 0);

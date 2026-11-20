@@ -15,7 +15,7 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   const head = { size: 8192, revision: '"original"' };
   let currentHead = head;
   const sourceFor = () => ({ head: async () => currentHead });
-  const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_fixture', STREAM_VIEWER_ORIGIN: 'https://viewer.example' };
+  const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_fixture', STREAM_VIEWER_ORIGIN: 'https://viewer.example', STREAM_LOCAL_PREVIEW_PORT: '8795' };
   const withdrawals = [];
   const setup = await createSetup({ directory, env, sourceFor, viewerCheckout:{
     async closeWithdrawnSessions(owner,id) { withdrawals.push([owner,id]); return 0; }
@@ -80,6 +80,10 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.ok(page.includes(env.STREAM_VIEWER_ORIGIN + '/embed/' + ada.id));
   assert.doesNotMatch(page, /private\.mp4|private-bucket|acct_Alice|r2\.cloudflarestorage/);
   assert.match(page, /Copy embed code/);
+  assert.ok(page.includes('<iframe src="http://127.0.0.1:8795/embed/' + ada.id));
+  assert.ok(page.includes('&lt;iframe src=&quot;https://viewer.example/embed/' + ada.id));
+  const policy = (await fetch(origin + '/setup/dashboard', { headers: { Cookie: ada.cookie } })).headers.get('content-security-policy');
+  assert.match(policy, /frame-src http:\/\/127\.0\.0\.1:8795/);
   assert.deepEqual(catalog.list(), [{ id: ada.id, title: 'My <film>' }]);
   const eventId = randomUUID();
   assert.equal(catalog.recordView(ada.id, 'preview', eventId), true);

@@ -73,7 +73,7 @@ async function verifiedId(token, accountId, fetchImpl) {
 }
 
 export async function guidedBucketForm(data, { fetchImpl = fetch } = {}) {
-  if (data?.privateConfirmed !== 'yes') throw new R2SetupError('Confirm the private bucket and its read-only token before connecting.');
+  if (data?.privateConfirmed !== 'yes') throw new R2SetupError('Confirm that the bucket is private and the token is limited to that bucket.');
   const location = parseR2BucketUrl(data.bucketUrl);
   const fields = [data.tokenValue ?? '', data.accessKeyId ?? '', data.secretAccessKey ?? ''];
   if (!fields.every(value => typeof value === 'string')) throw new R2SetupError(TOKEN_HELP);

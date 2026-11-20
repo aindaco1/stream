@@ -9,8 +9,10 @@ for (const builder of document.querySelectorAll('.film-sharing')) {
   const card = builder.closest('.dashboard-film');
   function update() {
     const selection = new FormData(form).getAll('include').join(',');
-    const layout = embedLayout(builder.dataset.player, selectedFields(selection), populated);
-    if (frame.src !== layout.src) frame.src = layout.src;
+    const fields = selectedFields(selection);
+    const layout = embedLayout(builder.dataset.player, fields, populated);
+    const preview = embedLayout(builder.dataset.preview, fields, populated);
+    if (frame.src !== preview.src) frame.src = preview.src;
     frame.height = layout.height;
     code.value = iframeCode(layout, frame.title);
     builder.querySelector('.public-player').href = layout.src;
