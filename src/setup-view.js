@@ -1,6 +1,6 @@
 import { filmPrices, previewSeconds, rentalHours, usdInput } from './prices.js';
 import { stripeBusinessCountries } from './setup-stripe.js';
-import { renderR2Card, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
+import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
 const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => entities[char]);
@@ -32,7 +32,7 @@ function stripeCard(stripe, csrf) {
     action_required: 'More information needed',
     restricted: 'Restricted by Stripe'
   };
-  let description = stripe.mode === 'test' ? 'Use your Stripe test account to set up rental payments.' : 'Connect Stripe to accept rental payments.';
+  let description = stripe.mode === 'test' ? 'Connect on Stripe to receive sandbox rental and purchase payments.' : 'Connect on Stripe to receive rental and purchase payments.';
   if (!stripe.configured) description = 'You can connect storage and preview a film while Dust Wave configures Stripe.';
   else if (ready) description = stripe.businessName ? `Payments account for ${stripe.businessName}.` : `Your Stripe account is ready for ${payments}.`;
   else if (stripe.status === 'pending') description = 'Stripe is reviewing your information. You can prepare your film while you wait.';
@@ -47,8 +47,25 @@ function stripeCard(stripe, csrf) {
     description, csrfToken: csrf, ready: ready || stripe.status === 'pending', existingOAuth: stripe.existingAvailable === true,
     resume: stripe.hasAccount === true || stripe.creating === true,
     action: stripe.configured ? '/setup/stripe/start' : undefined,
-    checkAction: stripe.configured && stripe.hasAccount ? '/setup/stripe/check' : undefined
+    checkAction: stripe.configured && stripe.hasAccount ? '/setup/stripe/check' : undefined,
+    resetHref: stripe.canReset ? '/setup/stripe/reset' : undefined
   });
+}
+
+export function renderStripeReset(csrf, mode, state, confirmation) {
+  const name = state.businessName || state.accountId;
+  const connection = name ? `<strong>${escapeHtml(name)}</strong>` : 'this unfinished connection';
+  return `<p>Reset ${connection} for ${mode === 'test' ? 'sandbox' : 'live'} payments in Stream?</p>
+    <p>New sales pause until you connect Stripe again. Earlier payments stay with their original account, and viewers keep access to paid rentals and purchases.</p>
+    <p>Your Stripe account stays open. Stream keeps the connection needed to verify earlier payments.</p>
+    <form method="post" action="/setup/stripe/reset">${hidden('csrf', csrf)}${hidden('confirmation', confirmation)}
+      <div class="film-actions"><button type="submit">Reset Stripe connection</button><a href="/setup#payments">Cancel</a></div></form>`;
+}
+
+export function renderBucketAccess(csrf, location, error) {
+  return (error ? `<p class="feedback error" role="alert">${escapeHtml(error)}</p>` : '') +
+    renderR2TokenForm({ ...location, csrfToken: csrf, action: '/setup/r2/access' }) +
+    '<p><a href="/setup#storage">Choose another bucket</a></p>';
 }
 
 function storageCard(r2, draft, csrf) {
@@ -59,7 +76,7 @@ function storageCard(r2, draft, csrf) {
     status: connected ? 'Connected' : r2.status === 'error' ? 'Check connection' : 'Not connected',
     description: connected ? `Stream verified read access to the bucket ${r2.bucket}.` :
       'Connect a private R2 bucket in your Cloudflare account. Your film stays in that bucket.',
-    action: '/setup/r2', csrfToken: csrf, connected,
+    action: '/setup/r2', guideAction: '/setup/r2/location', csrfToken: csrf, connected,
     values: {
       accountId: draft.accountId ?? r2.accountId,
       bucket: draft.bucket ?? r2.bucket,
@@ -214,7 +231,7 @@ export function renderDashboard({ csrf, owner, error, films, origin }) {
           ${film.published ? 'Unpublish film' : 'Publish film'}</button></form></article>`;
   }).join('');
   return workspacePage('Film dashboard', csrf, `<div class="workspace-intro"><h1>Film dashboard</h1><p class="account">Signed in as ${escapeHtml(owner)}</p>
-    <nav class="section-links" aria-label="Filmmaker workspace"><a href="/setup#film">Add a film</a><a href="/setup">Filmmaker setup</a></nav></div>
+    <nav class="section-links" aria-label="Filmmaker workspace"><a href="/setup#film">Add a film</a><a href="/setup#payments">Payment settings</a><a href="/setup">Filmmaker setup</a></nav></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
     ${films.length ? `<section class="film-card"><h2>All films</h2>${statsList(totals)}
       <p class="hint">Counts include repeat viewings. Sales are final. Test payments show settled viewer orders before fees and refunds. Refunds show amounts returned through Stripe.</p></section>${cards}` :

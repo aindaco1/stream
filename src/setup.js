@@ -5,10 +5,11 @@ import { openFilm } from './media.js';
 import { filmPrices, priceFromInput, previewSeconds, rentalHours } from './prices.js';
 import { createPublicFilms } from './public-films.js';
 import { checkR2Bucket, createR2Source } from './source.js';
+import { guidedBucketForm, parseR2BucketUrl, R2SetupError } from './setup-r2.js';
 import { openSetupStore } from './setup-store.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { escapeHtml, renderDashboard, renderSetupPage, renderStripeCountryForm } from './setup-view.js';
+import { escapeHtml, renderBucketAccess, renderDashboard, renderSetupPage, renderStripeCountryForm, renderStripeReset } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
@@ -86,7 +87,7 @@ function bucketForm(data) {
 
 export async function createSetup({
   directory = join(operatorDirectory(), 'filmmakers'), stripe, viewerCheckout, env = process.env,
-  sourceFor = createR2Source, checkBucket = checkR2Bucket
+  sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm
 } = {}) {
   const style = await readFile(new URL('../public/setup.css', import.meta.url));
   const dashboardScript = await readFile(new URL('../public/setup-dashboard.js', import.meta.url));
@@ -128,6 +129,7 @@ export async function createSetup({
       return html(status, renderSetupPage({
         filmmaker: { name: session.owner }, csrf: session.csrf,
         stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
+          canReset: Boolean(state.accountId || state.flow || state.createRequest),
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
         r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
         rights: { accepted: Boolean(draft.rights), statement: rightsStatement }, draft: { ...draft, ...store.storageDraft(session.owner) },
@@ -165,6 +167,16 @@ export async function createSetup({
         ...film, published: publications.isPublished(owner, film.id)
       })) }));
     if (get && path === '/setup/dashboard') return dashboard();
+    if (get && path === '/setup/stripe/reset') {
+      const { state, confirmation } = store.stripeContext(owner, mode);
+      if (!state.accountId && !state.flow && !state.createRequest) return redirect('/setup#payments');
+      return html(200, page('Reset Stripe connection', renderStripeReset(session.csrf, mode, state, confirmation)));
+    }
+    const bucketAccess = (status, location, error) => html(status, page('Connect your private bucket', renderBucketAccess(session.csrf, location, error)));
+    if (get && path === '/setup/r2/access') {
+      const location = store.storageDraft(owner);
+      return location ? bucketAccess(200, location) : redirect('/setup#storage');
+    }
     if (get && preview) {
       const film = store.film(owner, preview[1]);
       const seconds = film && previewSeconds(film.previewSeconds);
@@ -187,20 +199,40 @@ export async function createSetup({
       const data = callback ? {} : await readForm(req);
       if (!callback && data.csrf !== session.csrf) return reject(403, 'Reload setup before submitting this form.');
       if (path === '/setup/sign-out') { store.signOut(sessionId); return redirect('/setup/sign-in', { 'Set-Cookie': cookie('', 0) }); }
-      const { stripe: savedStripe, r2, draft } = store.maker(owner);
+      const { r2, draft } = store.maker(owner);
       if (callback || path === '/setup/stripe/start' || path === '/setup/stripe/check') {
-        const ctx = { creatorId: owner, state: stripeSetupStateForMode(savedStripe, mode), save: () => store.saveStripe(owner, savedStripe),
-          claimAccount: (accountId, mode) => store.claimAccount(owner, accountId, mode) };
+        const ctx = store.stripeContext(owner, mode);
         const result = callback ? await provider.callback(ctx, callback[1], searchParams) :
           path === '/setup/stripe/start' ? await provider.start(ctx, data.mode, data.country) : await provider.refresh(ctx);
         if (result?.countryRequired) return html(200, page('Choose your business country', renderStripeCountryForm(session.csrf, data.mode)));
         return redirect(result?.redirect || '/setup#payments');
       }
-      if (path === '/setup/r2') {
-        const config = bucketForm(data);
-        store.saveStorageDraft(owner, { accountId: config.accountId, bucket: config.bucket, jurisdiction: config.jurisdiction });
-        try { await checkBucket(config); }
-        catch { throw new SetupError('Cloudflare could not verify access. Check the account, bucket, jurisdiction and token, then try again.', 422); }
+      if (path === '/setup/stripe/reset') {
+        if (!store.resetStripe(owner, mode, data.confirmation)) {
+          throw new SetupError('The Stripe connection changed. Review the current connection before resetting it.', 409);
+        }
+        if (mode === 'test' && await checkout.closeWithdrawnSessions(owner)) {
+          return display(200, { notice: 'Stripe was reset. Stream is closing unfinished checkouts and will retry automatically.' });
+        }
+        return redirect('/setup#payments');
+      }
+      if (['/setup/r2', '/setup/r2/location', '/setup/r2/access'].includes(path)) {
+        const guided = path !== '/setup/r2';
+        const location = guided ? parseR2BucketUrl(data.bucketUrl) : bucketForm(data);
+        const { accountId, bucket, jurisdiction } = location;
+        store.saveStorageDraft(owner, { accountId, bucket, jurisdiction });
+        if (path === '/setup/r2/location') return redirect('/setup/r2/access');
+        let config;
+        try {
+          config = guided ? await resolveBucket(data) : location;
+          await checkBucket(config);
+        } catch (error) {
+          const message = error instanceof R2SetupError ? error.message :
+            'Cloudflare could not verify access. Check the selected bucket, jurisdiction and token, then try again.';
+          const code = error instanceof R2SetupError ? error.statusCode : 422;
+          if (guided) return bucketAccess(code, location, message);
+          throw new SetupError(message, code);
+        }
         store.saveBucket(owner, config);
         return redirect('/setup#storage');
       }
@@ -259,7 +291,7 @@ export async function createSetup({
     } catch (e) {
       if (path.startsWith('/setup/dashboard/')) return dashboard(e instanceof SetupError ? e.statusCode : 503,
         e instanceof SetupError ? e.message : 'This change could not finish. Try again.');
-      if (e instanceof SetupError || e instanceof StripeSetupError) return display(e.statusCode || 400, { error: e.message });
+      if (e instanceof SetupError || e instanceof StripeSetupError || e instanceof R2SetupError) return display(e.statusCode || 400, { error: e.message });
       return display(503, { error: 'This step could not finish. Your completed steps are saved. Try again.' });
     } finally { busy.delete(owner); }
   }

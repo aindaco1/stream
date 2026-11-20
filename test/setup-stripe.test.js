@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { openSetupStore } from '../src/setup-store.js';
 import { renderSetupPage } from '../src/setup-view.js';
 import assert from 'node:assert/strict';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from '../src/setup-stripe.js';
@@ -8,6 +12,49 @@ const origin = 'http://127.0.0.1:8787';
 const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_fixture', STRIPE_CONNECT_CLIENT_ID: 'ca_fixture' };
 const id = 'acct_test123';
 const oauthId = 'acct_existing123';
+
+test('a mode reset fences stale forms, setup callbacks and concurrent saves, while retaining historical claims', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'stream-stripe-reset-'));
+  const db = openSetupStore(root), second = openSetupStore(root);
+  t.after(async () => { db.close(); second.close(); await rm(root, {recursive:true,force:true}); });
+  const owner = 'First filmmaker';
+  db.invite(owner);
+  const f = fixture();
+  const ctx = () => db.stripeContext(owner, 'test');
+  async function reconnect() {
+    const url = new URL((await f.adapter.start(ctx(), 'existing')).redirect);
+    return f.adapter.callback(ctx(), 'oauth', new URLSearchParams({code:'ac_fixture',state:url.searchParams.get('state')}));
+  }
+  const live = db.stripeContext(owner, 'live');
+  Object.assign(live.state, {creatorId:owner, channel:'hosted', accountId:'acct_livefixture', status:'ready'});
+  live.save();
+  const oauth = new URL((await f.adapter.start(ctx(), 'existing')).redirect);
+  const obsolete = ctx();
+  const liveForm = db.stripeContext(owner, 'live').confirmation;
+  const calls = f.calls.length;
+  assert.equal(second.resetStripe(owner, 'test', liveForm), false);
+  assert.equal(second.resetStripe(owner, 'test', obsolete.confirmation), true);
+  assert.equal(f.calls.length, calls);
+  assert.throws(() => obsolete.claimAccount('acct_unclaimed', 'test'), /changed/);
+  assert.throws(() => obsolete.save(), /changed/);
+  assert.equal(db.ownsTestAccount(owner, 'acct_unclaimed'), false);
+  await assert.rejects(f.adapter.callback(ctx(), 'oauth', new URLSearchParams({code:'ac_fixture',state:oauth.searchParams.get('state')})), /expired/);
+  assert.equal(f.calls.length, calls);
+  assert.equal((await reconnect()).status, 'ready');
+  const ready = ctx();
+  assert.equal(db.resetStripe(owner, 'test', ready.confirmation), true);
+  assert.equal(db.claimAccount('Different filmmaker',oauthId,'test'),false);
+  assert.equal((await reconnect()).status, 'ready');
+  assert.equal(ctx().state.accountId, oauthId);
+  assert.equal(db.resetStripe(owner,'test',ready.confirmation),false);
+  assert.equal(db.stripeContext(owner,'live').confirmation, liveForm);
+  const latest = ctx();
+  // Saving another mode concurrently must survive a later checkpoint in this mode.
+  assert.equal(second.resetStripe(owner, 'live', liveForm),true);
+  latest.save();
+  assert.equal(ctx().state.accountId,oauthId);
+  assert.equal(db.stripeContext(owner,'live').state.status,'unconnected');
+});
 
 function fixture(options = {}) {
   let time = Date.now();

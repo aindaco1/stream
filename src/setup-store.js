@@ -1,9 +1,9 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { recoveryStore } from './viewer-recovery.js';
-import { stripeSetupStateForMode } from './setup-stripe.js';
+import { StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
 import { filmPrices, isPrice, rentalHours } from './prices.js';
 
 const token = () => randomBytes(32).toString('base64url');
@@ -36,9 +36,21 @@ export function openSetupStore(directory) {
   const path = join(directory, 'setup.sqlite');
   const db = new DatabaseSync(path);
   chmodSync(path, 0o600);
-  db.exec(`PRAGMA journal_mode=WAL;
-    PRAGMA busy_timeout=3000;
-    CREATE TABLE IF NOT EXISTS makers (
+  db.exec('PRAGMA busy_timeout=3000');
+  // The setup and viewer processes can open the same database together.
+  // SQLite can report BUSY immediately while enabling or recovering WAL.
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    try { db.exec('PRAGMA journal_mode=WAL'); break; }
+    catch (error) {
+      if ((error.errcode & 255) !== 5 || Date.now() >= deadline) {
+        db.close();
+        throw error;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS makers (
       id TEXT PRIMARY KEY, stripe TEXT NOT NULL DEFAULT '{}', bucket_id TEXT, draft TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS invitations (digest TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);
@@ -70,6 +82,14 @@ export function openSetupStore(directory) {
     );
     CREATE INDEX IF NOT EXISTS viewer_order_rate ON viewer_test_orders(filmId,createdAt);`);
   const sql = query => db.prepare(query);
+  function stripeSelection(owner, mode) {
+    const row = sql('SELECT stripe FROM makers WHERE id=?').get(owner);
+    if (!row) throw new StripeSetupError('Filmmaker workspace unavailable.', 404);
+    const document = JSON.parse(row.stripe);
+    const state = stripeSetupStateForMode(document, mode);
+    const confirmation = createHmac('sha256', key).update(JSON.stringify(['stripe-selection', owner, mode, state])).digest('base64url');
+    return { document, state, confirmation };
+  }
   function transaction(fn) {
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -138,6 +158,50 @@ export function openSetupStore(directory) {
       return { stripe: JSON.parse(row.stripe), draft: JSON.parse(row.draft), r2: bucket && JSON.parse(bucket.config) };
     },
     saveStripe(owner, state) { sql('UPDATE makers SET stripe=? WHERE id=?').run(JSON.stringify(state), owner); },
+    stripeContext(owner, mode) {
+      const selected = stripeSelection(owner, mode);
+      let expected = selected.confirmation;
+      function current() {
+        const latest = stripeSelection(owner, mode);
+        if (latest.confirmation !== expected) throw new StripeSetupError('Stripe setup changed. Reload the setup card to continue.', 409);
+        return latest.document;
+      }
+      return {
+        creatorId: owner, state: selected.state,
+        get confirmation() { return expected; },
+        assertCurrent() { current(); },
+        save() {
+          transaction(() => {
+            const document = current();
+            document.byMode[mode] = selected.state;
+            store.saveStripe(owner, document);
+            expected = stripeSelection(owner, mode).confirmation;
+          });
+        },
+        claimAccount(account, requestedMode) {
+          return transaction(() => {
+            current();
+            return requestedMode === mode && store.claimAccount(owner, account, mode);
+          });
+        }
+      };
+    },
+    resetStripe(owner, mode, confirmation) {
+      return transaction(() => {
+        const selected = stripeSelection(owner, mode);
+        if (confirmation !== selected.confirmation) return false;
+        const previous = selected.state.accountId;
+        selected.document.byMode[mode] = { mode, status: 'unconnected', generation: randomUUID() };
+        store.saveStripe(owner, selected.document);
+        // Preserve the claim and settled ledger. Only incomplete checkouts on
+        // the former selection are closed by the durable Stripe expiry worker.
+        if (mode === 'test' && previous) {
+          sql("UPDATE viewer_test_orders SET withdrawalState='requested' WHERE owner=? AND account=? AND status='pending' AND withdrawalState IS NULL")
+            .run(owner, previous);
+        }
+        return true;
+      });
+    },
     claimAccount(owner, account, mode) {
       sql('INSERT OR IGNORE INTO claims VALUES(?,?,?)').run(mode, account, owner);
       return sql('SELECT owner FROM claims WHERE mode=? AND account=?').get(mode, account).owner === owner;
@@ -203,12 +267,12 @@ export function openSetupStore(directory) {
       sql('INSERT OR IGNORE INTO viewer_payment_events VALUES(?,?,?,?)').run(account,id,orderId,Date.now());
     },
     legacyOrderForRenewal(offer, end) {
-      const rows = sql("SELECT * FROM viewer_test_orders WHERE filmId=? AND owner=? AND account=? AND scope=? AND revision=? AND kind='rent' AND rentalHours=48 AND paidAt=? LIMIT 2")
+      const rows = sql("SELECT * FROM viewer_claimed_orders WHERE filmId=? AND owner=? AND account=coalesce(?,account) AND scope=? AND revision=? AND kind='rent' AND rentalHours=48 AND paidAt=? LIMIT 2")
         .all(offer.id, offer.owner, offer.account, offer.scope, offer.revision, end - 48 * 3600);
       return rows.length === 1 && rows[0];
     },
     accessForLegacyRental(offer, end) {
-      const rows = sql("SELECT status,revocationReason FROM viewer_test_orders WHERE filmId=? AND owner=? AND account=? AND scope=? AND revision=? AND kind='rent' AND rentalHours=48 AND paidAt=?")
+      const rows = sql("SELECT status,revocationReason FROM viewer_claimed_orders WHERE filmId=? AND owner=? AND account=coalesce(?,account) AND scope=? AND revision=? AND kind='rent' AND rentalHours=48 AND paidAt=?")
         .all(offer.id,offer.owner,offer.account,offer.scope,offer.revision,end - 48 * 3600);
       return rows.length > 0 && rows.every(row => row.status === 'paid' && !row.revocationReason);
     },
@@ -219,11 +283,11 @@ export function openSetupStore(directory) {
     },
     requestedWithdrawals(owner = null, filmId = null) {
       return sql(`SELECT * FROM viewer_test_orders WHERE withdrawalState='requested' AND sessionId IS NOT NULL
-        AND withdrawalRetryAt<=? AND (? IS NULL OR (owner=? AND filmId=?)) ORDER BY withdrawalRetryAt,createdAt LIMIT 32`)
-        .all(Date.now(),owner,owner,filmId);
+        AND withdrawalRetryAt<=? AND (? IS NULL OR owner=?) AND (? IS NULL OR filmId=?) ORDER BY withdrawalRetryAt,createdAt LIMIT 32`)
+        .all(Date.now(),owner,owner,filmId,filmId);
     },
-    pendingWithdrawals(owner,filmId) {
-      return sql("SELECT COUNT(*) AS n FROM viewer_test_orders WHERE owner=? AND filmId=? AND withdrawalState='requested' AND sessionId IS NOT NULL").get(owner,filmId).n;
+    pendingWithdrawals(owner,filmId = null) {
+      return sql("SELECT COUNT(*) AS n FROM viewer_test_orders WHERE owner=? AND (? IS NULL OR filmId=?) AND withdrawalState='requested' AND sessionId IS NOT NULL").get(owner,filmId,filmId).n;
     },
     finishWithdrawal(orderId,sessionId) {
       sql("UPDATE viewer_test_orders SET withdrawalState='closed' WHERE orderId=? AND sessionId=? AND withdrawalState='requested'").run(orderId,sessionId);

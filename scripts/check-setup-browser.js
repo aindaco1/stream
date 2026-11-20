@@ -20,20 +20,25 @@ const accountId = 'a'.repeat(32);
 const bucket = 'screening-room-test';
 const access = 'setup-test-access-only';
 const secret = 'setup-test-secret-only';
+const bucketUrl = `https://dash.cloudflare.com/${accountId}/r2/default/buckets/${bucket}`;
+const readToken = 'syntheticbucketreadtoken'.repeat(2);
 let browser, server, setup;
 const trace = [];
 const starts = [];
 const callbacks = new Map();
+let providerCalls = 0;
+let guidedTokenAttempts = 0, guidedKeyAttempts = 0;
 const stripe = {
   configured: true, existingOAuth: true, mode: 'test',
   async start(ctx, intent, country) {
+    providerCalls++;
     assert.ok(['new', 'existing', 'reuse', 'resume'].includes(intent));
     if (['new', 'reuse'].includes(intent) && !ctx.state.accountId) {
       if (!country) return { countryRequired: true };
       assert.equal(country, 'US');
     }
     starts.push(intent);
-    ctx.state.accountId = 'acct_qa' + ctx.creatorId.replace(/[^a-z0-9]/gi, '');
+    ctx.state.accountId ||= 'acct_qa' + intent + ctx.creatorId.replace(/[^a-z0-9]/gi, '');
     ctx.state.creatorId = ctx.creatorId;
     ctx.state.channel = intent === 'existing' ? 'oauth' : 'hosted';
     assert.ok(ctx.claimAccount(ctx.state.accountId, 'test'));
@@ -42,6 +47,7 @@ const stripe = {
     return { redirect: '/fixture/provider' };
   },
   async callback(ctx) {
+    providerCalls++;
     const count = (callbacks.get(ctx.creatorId) || 0) + 1;
     callbacks.set(ctx.creatorId, count);
     ctx.state.status = ctx.creatorId === 'qa-new-new' && count === 1 ? 'action_required' : 'ready';
@@ -50,7 +56,10 @@ const stripe = {
     await ctx.save();
     return { status: ctx.state.status };
   },
-  async refresh(ctx) { return { status: ctx.state.status }; }
+  async refresh(ctx) {
+    providerCalls++;
+    return { status: ctx.state.status };
+  }
 };
 
 async function signIn(page, origin, owner) {
@@ -79,35 +88,140 @@ async function finishStripe(page, mode, shouldResume) {
   await card.getByRole('button', { name: 'Check Stripe status' }).click();
 }
 
-async function connectBucket(page, cloudflare, recover) {
+async function resetAndReconnect(page, owner, otherOwner, previewPath) {
+  const { store } = setup;
+  const { stripe: connected, r2, draft } = store.maker(owner);
+  // The app is running in test mode. Give this filmmaker a distinct live
+  // connection so a reset that accidentally clears both modes is observable.
+  const live = { mode: 'live', accountId: 'acct_qaliveonly', status: 'ready' };
+  assert.ok(store.claimAccount(owner, live.accountId, live.mode));
+  connected.byMode.live = live;
+  store.saveStripe(owner, connected);
+  const otherMaker = store.maker(otherOwner);
+  assert.equal(otherMaker.stripe.byMode.test.status, 'ready');
+  const previousCalls = providerCalls;
+  const card = page.locator('#payments');
+  const reset = card.getByRole('link', { name: 'Reset Stripe connection', exact: true });
+  const confirm = page.getByRole('button', { name: 'Reset Stripe connection', exact: true });
+
+  await reset.click();
+  assert.equal(new URL(page.url()).pathname, '/setup/stripe/reset');
+  assert.equal(await confirm.evaluate(button => button.form.method), 'post');
+  assert.equal(await confirm.evaluate(button => button.form.action), page.url());
+  assert.ok(await page.getByText(/for sandbox payments/).isVisible());
+  assert.ok(await page.getByText(/Your Stripe account stays open/).isVisible());
+  await page.reload();
+  assert.deepEqual(store.maker(owner).stripe, connected);
+  await page.getByRole('link', { name: 'Cancel', exact: true }).click();
+  await card.locator('.provider-status').filter({ hasText: /^Connected$/ }).waitFor();
+  assert.deepEqual(store.maker(owner).stripe, connected);
+
+  await reset.click();
+  const olderTab = await page.context().newPage();
+  await olderTab.goto(page.url());
+  await confirm.click();
+  await card.locator('.provider-status').filter({ hasText: /^Not connected$/ }).waitFor();
+  await page.reload();
+  for (const mode of ['new', 'existing']) {
+    assert.ok(await card.locator(`button[name="mode"][value="${mode}"]`).isVisible());
+  }
+  const afterReset = store.maker(owner);
+  assert.ok(!afterReset.stripe.byMode.test?.accountId);
+  assert.deepEqual(afterReset.stripe.byMode.live, live);
+  assert.deepEqual(afterReset.draft, draft);
+  assert.deepEqual(afterReset.r2, r2);
+  assert.deepEqual(store.maker(otherOwner), otherMaker);
+  assert.equal(providerCalls, previousCalls, 'Reset with no unfinished checkouts does not call the provider');
+  const savedPreview = page.getByRole('link', { name: 'Projection test <first cut>' });
+  assert.equal(await savedPreview.getAttribute('href'), previewPath);
+  assert.equal(await page.locator('#storage .provider-status').textContent(), 'Connected');
+  await savedPreview.click();
+  await page.waitForFunction(() => document.querySelector('video')?.duration === 10);
+  await page.getByRole('link', { name: 'Back to filmmaker setup' }).click();
+
+  await finishStripe(page, 'new', false);
+  const reconnected = store.maker(owner).stripe.byMode;
+  assert.equal(reconnected.test.status, 'ready');
+  assert.notEqual(reconnected.test.accountId, connected.byMode.test.accountId);
+  assert.deepEqual(reconnected.live, live);
+  const [staleResponse] = await Promise.all([
+    olderTab.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/setup/stripe/reset'),
+    olderTab.getByRole('button', { name: 'Reset Stripe connection' }).click()
+  ]);
+  assert.equal(staleResponse.status(), 409, 'An older confirmation cannot reset the replacement seller');
+  assert.deepEqual(store.maker(owner).stripe.byMode, reconnected);
+  await olderTab.close();
+  assert.deepEqual(store.maker(otherOwner), otherMaker);
+  report.stripeReset = { confirmedAfterCancel: true, resetProviderCalls: 0, reconnected: true, staleConfirmationBlocked: true,
+    preserved: ['live connection', 'other filmmaker', 'R2 connection', 'private film', 'draft'] };
+}
+
+async function submitKeyPair(form, key, buttonLabel) {
+  await form.locator('[name="accessKeyId"]').fill(access);
+  await form.locator('[name="secretAccessKey"]').fill(key);
+  await form.locator('[name="privateConfirmed"]').check();
+  await form.getByRole('button', { name: buttonLabel }).click();
+}
+
+async function connectBucket(page, method, recover) {
   const card = page.locator('#storage');
-  if (cloudflare === 'new') {
-    await card.getByText('Choose a Cloudflare account and bucket', { exact: true }).click();
-    assert.ok(await card.getByText('New bucket.', { exact: true }).isVisible());
-    assert.ok(await card.getByText('Existing bucket.', { exact: true }).isVisible());
-    await card.getByText('Get a read-only key for this bucket', { exact: true }).click();
-    assert.ok(await card.getByRole('link', { name: 'Cloudflare’s R2 token guide' }).isVisible());
+  if (method !== 'manual') {
+    const dashboard = await card.getByRole('link', { name: 'Open Cloudflare R2' }).getAttribute('href');
+    assert.equal(new URL(dashboard).origin, 'https://dash.cloudflare.com');
+    await card.getByLabel('Bucket dashboard URL').fill(bucketUrl);
+    await card.getByRole('button', { name: 'Continue with this bucket' }).click();
+    const token = page.getByLabel('R2 token value');
+    await token.waitFor();
+    assert.ok((await page.locator('main').innerText()).includes(bucket));
+    assert.equal(await token.getAttribute('type'), 'password');
+    if (method === 'selected keys') {
+      await page.getByText('Use an existing access key pair', { exact: true }).click();
+      const form = page.locator('form').filter({ has: page.locator('[name="accessKeyId"]') });
+      assert.equal(await form.locator('[name="bucketUrl"]').inputValue(), bucketUrl);
+      await submitKeyPair(form, secret, 'Connect with access keys');
+    } else {
+      const form = page.locator('form').filter({ has: token });
+      async function submitToken(value) {
+        await token.fill(value);
+        await form.locator('[name="privateConfirmed"]').check();
+        await form.getByRole('button', { name: 'Connect private bucket' }).click();
+      }
+      if (recover) {
+        await submitToken('invalidsyntheticbucketreadtoken'.repeat(2));
+        await page.getByRole('alert').waitFor();
+        assert.equal(await token.inputValue(), '');
+        assert.ok((await page.locator('main').innerText()).includes(bucket));
+      }
+      await submitToken(readToken);
+    }
+  } else {
+    async function fill(token) {
+      if (!await card.locator('[name="accessKeyId"]').isVisible()) {
+        await card.getByText('Enter connection details manually', { exact: true }).click();
+      }
+      await card.locator('[name="accountId"]').fill(accountId);
+      await card.locator('[name="bucket"]').fill(bucket);
+      await submitKeyPair(card, token, 'Connect private bucket');
+    }
+    if (recover) {
+      await card.getByText('Enter connection details manually', { exact: true }).click();
+      await card.getByText('Choose a Cloudflare account and bucket', { exact: true }).click();
+      assert.ok(await card.getByText('New bucket.', { exact: true }).isVisible());
+      assert.ok(await card.getByText('Existing bucket.', { exact: true }).isVisible());
+      await card.getByText('Get a read-only key for this bucket', { exact: true }).click();
+      assert.ok(await card.getByRole('link', { name: 'Cloudflare’s R2 token guide' }).isVisible());
+      await fill('intentionally-wrong-fixture-key');
+      await page.getByRole('alert').waitFor();
+      assert.equal(await card.locator('[name="secretAccessKey"]').inputValue(), '');
+      assert.equal(await card.locator('[name="accessKeyId"]').inputValue(), '');
+      assert.equal(await card.locator('[name="bucket"]').inputValue(), bucket);
+      assert.equal(await card.locator('[name="accountId"]').inputValue(), accountId);
+    }
+    await fill(secret);
   }
-  async function fill(token) {
-    await card.locator('[name="accountId"]').fill(accountId);
-    await card.locator('[name="bucket"]').fill(bucket);
-    await card.locator('[name="accessKeyId"]').fill(access);
-    await card.locator('[name="secretAccessKey"]').fill(token);
-    await card.locator('[name="privateConfirmed"]').check();
-    await card.getByRole('button', { name: 'Connect private bucket' }).click();
-  }
-  if (recover) {
-    await fill('intentionally-wrong-fixture-key');
-    await page.getByRole('alert').waitFor();
-    assert.equal(await card.locator('[name="secretAccessKey"]').inputValue(), '');
-    assert.equal(await card.locator('[name="accessKeyId"]').inputValue(), '');
-    assert.equal(await card.locator('[name="bucket"]').inputValue(), bucket);
-    assert.equal(await card.locator('[name="accountId"]').inputValue(), accountId);
-  }
-  await fill(secret);
   await card.locator('.provider-status').filter({ hasText: /^Connected$/ }).waitFor();
   const markup = await page.content();
-  assert.ok(!markup.includes(secret) && !markup.includes(access), 'Credentials stay out of rendered HTML');
+  assert.ok([secret, access, readToken].every(value => !markup.includes(value)), 'Credentials stay out of rendered HTML');
 }
 
 async function registerFilm(page, shouldRecover, origin, owner) {
@@ -141,12 +255,34 @@ async function registerFilm(page, shouldRecover, origin, owner) {
 }
 
 try {
+  // All provider behavior in this rehearsal is injected. Fail on any attempt
+  // to call a provider directly, including one whose failure the app handles.
+  let outboundRequests = 0;
+  globalThis.fetch = async () => {
+    outboundRequests++;
+    throw new Error('Outbound network calls are disabled in the setup rehearsal');
+  };
   if (evidence) await mkdir(evidence, { recursive: true, mode: 0o700 });
   const generated = spawnSync(process.execPath, ['scripts/fixture.js', fixture], { stdio: 'pipe' });
   assert.equal(generated.status, 0, 'Generate the synthetic clip using FFmpeg');
   setup = await createSetup({
     directory: path.join(temporary, 'state'), stripe, env: { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' },
-    async checkBucket(settings) { if (settings.secretAccessKey !== secret) throw Error('Test credential rejected'); },
+    async resolveBucket({ bucketUrl: location, privateConfirmed, tokenValue, accessKeyId, secretAccessKey }) {
+      assert.equal(location, bucketUrl);
+      assert.equal(privateConfirmed, 'yes');
+      const config = { accountId, bucket, jurisdiction: 'default' };
+      if (tokenValue) {
+        guidedTokenAttempts++;
+        return { ...config, accessKeyId: access, secretAccessKey: tokenValue === readToken ? secret : 'rejected-fixture-secret' };
+      }
+      guidedKeyAttempts++;
+      return { ...config, accessKeyId, secretAccessKey };
+    },
+    async checkBucket(settings) {
+      assert.equal(settings.bucket, bucket);
+      assert.equal(settings.accountId, accountId);
+      if (settings.accessKeyId !== access || settings.secretAccessKey !== secret) throw Error('Test credential rejected');
+    },
     sourceFor(settings) {
       if (settings.objectKey !== savedKey) throw Error('Unknown test object');
       return createFileSource(fixture);
@@ -189,10 +325,10 @@ try {
       if (evidence && (first || mode === 'reuse')) {
         await page.screenshot({ path: path.join(evidence, first ? 'setup-mobile.png' : 'setup-desktop.png'), fullPage: true });
       }
-      if (storage === 'existing') await connectBucket(page, storage, false);
+      if (storage === 'existing') await connectBucket(page, mode === 'reuse' ? 'selected keys' : 'manual', mode === 'existing');
       const previewWithoutPayments = mode === 'new' && storage === 'existing';
       if (!previewWithoutPayments) await finishStripe(page, mode, first);
-      if (storage === 'new') await connectBucket(page, storage, first);
+      if (storage === 'new') await connectBucket(page, 'token', first);
       const privatePath = await registerFilm(page, first, origin, owner);
       if (previewWithoutPayments) {
         assert.equal(await page.locator('#payments .provider-status').textContent(), 'Not connected');
@@ -210,6 +346,9 @@ try {
       assert.equal(await page.locator('video').count(), 0);
       await signIn(page, origin, owner);
       assert.ok(await page.getByRole('heading', { name: 'Saved films' }).isVisible());
+      if (mode === 'existing' && storage === 'existing') {
+        await resetAndReconnect(page, owner, 'qa-new-new', privatePath);
+      }
       if (first) {
         await page.getByRole('link', { name: 'Film dashboard' }).click();
         await page.getByRole('heading', { name: 'Film dashboard' }).waitFor();
@@ -248,7 +387,11 @@ try {
       report.scenarios.push({ stripe: mode, cloudflare: storage, savedPreviewSeconds: 10, resumed: true, previewWithoutPayments });
     } finally { await context.close(); }
   }
-  assert.deepEqual(starts, ['new', 'resume', 'existing', 'new', 'existing', 'reuse']);
+  assert.deepEqual(starts, ['new', 'resume', 'existing', 'new', 'new', 'existing', 'reuse']);
+  assert.equal(outboundRequests, 0);
+  assert.equal(guidedTokenAttempts, 3, 'Two guided connections and one unsuccessful token attempt');
+  assert.equal(guidedKeyAttempts, 1);
+  report.cloudflareSetup = { guidedTokenConnections: 2, selectedBucketWithKeyPair: 1, manualConnections: 2, handledWrongTokenAndKey: true };
   report.passed = true;
 } catch (error) {
   report.passed = false;
