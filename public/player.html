@@ -16,16 +16,17 @@
     </div>
     <section id="purchase" aria-label="Film offers" hidden>
       <p id="terms"></p>
+      <div id="tip-choice">
+        <label for="tip-percent">Optional tip</label>
+        <input type="range" id="tip-percent" min="0" max="15" step="1" value="10" aria-describedby="tip-note">
+        <span id="tip-value" aria-hidden="true"></span>
+        <p id="tip-note">Supports Stream. Choose 0% to skip.</p>
+      </div>
       <div class="actions">
         <button type="button" id="rent" hidden>Rent</button>
         <button type="button" id="buy" hidden>Buy</button>
         <button type="button" id="check-payment" class="secondary" hidden>Check payment</button>
       </div>
-      <details id="tip-choice"><summary>Optional Dust Wave tip · <span id="tip-value"></span></summary>
-        <label for="tip-percent">Tip percentage</label>
-        <input type="range" id="tip-percent" min="0" max="15" step="1" value="10" aria-describedby="tip-note">
-        <p id="tip-note">Tips help pay for hosting and development. Choose 0% to skip.</p>
-      </details>
     </section>
     <label id="subtitle-control" hidden>Subtitles <select id="subtitles"><option value="">Off</option></select></label>
     <section id="payment" aria-labelledby="checkout-heading" hidden>

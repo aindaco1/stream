@@ -29,10 +29,10 @@ body[data-checkout]:not(.paying) main > :not(video) { min-width: 0; margin-inlin
 #subtitle-status:empty { display: none; }
 #subtitle-control { display: inline-flex; align-items: center; gap: .4rem; font-size: .875rem; }
 #subtitles { max-width: 12rem; min-height: 2.75rem; font: inherit; }
-#tip-choice { font-size: .875rem; }
-#tip-choice summary { cursor: pointer; }
-#tip-choice label { display: block; margin-top: .5rem; }
-#tip-percent { display: block; width: min(100%, 16rem); min-height: 2.75rem; }
+#tip-choice { display: grid; justify-content: start; grid-template-columns: max-content minmax(3rem, 10rem) 3ch; align-items: center; gap: 0 .625rem; font-size: .875rem; }
+#tip-percent { width: 100%; margin: 0; min-height: 2.75rem; accent-color: #f2f2f2; }
+#tip-value { text-align: end; font-variant-numeric: tabular-nums; }
+#tip-note { grid-column: 1 / -1; }
 #order-tip { color: var(--pay-muted); font-size: .875rem; }
 body.paying :is(#tip-choice, #subtitle-control, #subtitle-status) { display: none; }
 #stripe-checkout { min-width: 0; }
@@ -66,6 +66,9 @@ body.paying :is(#access-tools, #restore-tools) { display: none; }
   #terms { font-size: .8125rem; line-height: 1.25; }
 }
 @media (max-height: 240px) {
+  #purchase { row-gap: .375rem; }
+  #purchase #terms { order: 1; }
+  #tip-note { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   main:has(#purchase:not([hidden])) video.preview-ended { display: none; }
   main:has(#purchase:not([hidden])) .details > div { flex: 1; min-width: 0; }
   main:has(#purchase:not([hidden])) h1 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
