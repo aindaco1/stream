@@ -96,6 +96,10 @@ function fixture(options = {}) {
           account: body.account, object: 'v2.core.account_link', livemode: false,
           url: 'https://' + provider.redirectHost + '/r/private-account-link'
         });
+      case '/v2/core/accounts/' + oauthId:
+        if (init.method === 'POST' && body.configuration.recipient) provider.snapshot.receives=true;
+        return Response.json({id:oauthId,object:'v2.core.account',livemode:false,configuration:{
+          recipient:provider.snapshot.receives ? {capabilities:{stripe_balance:{stripe_transfers:{requested:true,status:'active'}}}} : null}});
       case '/v2/core/accounts/' + id: {
         if (provider.denied) return new Response(null, { status: 403 });
         const { card, payouts, due, entries, cardDetails, payoutDetails } = provider.snapshot;
@@ -396,4 +400,18 @@ test('post-submit Stripe review overrides a stale past-due capability instructio
     f.provider.snapshot = { ...submitted, ...update };
     assert.equal((await f.adapter.refresh(ctx)).status, status);
   }
+});
+
+test('marketplace filmmakers can enable transfers during new setup and on a previously connected account',async () => {
+  const envWithTax={...env,STREAM_STRIPE_TAX_MODE:'marketplace'};
+  const fresh=fixture({env:envWithTax});
+  await fresh.adapter.start(fresh.context(),'new','US');
+  assert.equal(fresh.calls.find(call=>call.path==='/v2/core/accounts').body.configuration.recipient.capabilities.stripe_balance.stripe_transfers.requested,true);
+  const f=fixture({env:envWithTax}), ctx=f.context();
+  const auth=new URL((await f.adapter.start(ctx,'existing')).redirect);
+  assert.deepEqual(await f.adapter.callback(ctx,'oauth',new URLSearchParams({code:'ac_test',state:auth.searchParams.get('state')})),{status:'action_required'});
+  assert.equal(ctx.state.needsTransfers,true);
+  assert.deepEqual(await f.adapter.start(ctx,'resume'),{status:'ready'});
+  assert.equal(ctx.state.needsTransfers,false);
+  assert.equal(f.calls.filter(call=>call.body?.configuration?.recipient).length,1);
 });

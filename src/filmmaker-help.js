@@ -2,7 +2,7 @@ const pricing = {
   stripe: {
     heading: 'Stripe processing fees',
     summary: 'For a successful online payment with a U.S. domestic card, Stripe’s standard U.S. rate is 2.9% + 30¢. Your country, the card and any custom pricing can change the fee.',
-    example: 'On a $0.99 rental with no tip, that’s about $0.33 for Stripe and $0.66 for the filmmaker.',
+    example: 'On a $0.99 rental with no tax or tip, the estimated fee is $0.33 and the filmmaker receives $0.66.',
     url: 'https://stripe.com/us/pricing', link: 'Stripe pricing'
   },
   r2: {
@@ -16,13 +16,14 @@ const pricing = {
 
 function feeCopy(provider, expanded = false) {
   const { summary, example, details, url, link } = pricing[provider];
-  return `<p>${summary} <a href="${url}">${link}</a></p>${expanded ? `<p>${example}</p>` : ''}
+  const taxPricing = provider === 'stripe' ? '<p>When Stream uses Stripe Tax, Stripe lists a separate Tax Basic fee of 0.5% of the full checkout total where Dust Wave is registered to collect. Dust Wave covers that fee. Stream calculates tax itself for eligible New Mexico orders, which saves that fee. The card processing fee still applies. <a href="https://stripe.com/tax/pricing">Stripe Tax pricing</a></p>' : '';
+  return `<p>${summary} <a href="${url}">${link}</a></p>${taxPricing}${expanded ? `<p>${example}</p>` : ''}
     ${expanded && details ? `<details><summary>How does Cloudflare count requests?</summary><p>${details}</p></details>` : ''}`;
 }
 
 export function renderSetupCosts(provider) {
   if (!Object.hasOwn(pricing, provider)) throw new TypeError('Unknown setup cost provider.');
-  const pilot = provider === 'stripe' ? 'Payments in the pilot use test cards.' : 'Your bucket is billed normally during the pilot.';
+  const pilot = provider === 'stripe' ? 'Payments in the pilot use test cards. Payments and filmmaker transfers run in the Stripe sandbox.' : 'Your bucket is billed normally during the pilot.';
   return `<div class="provider-costs"><h3>${pricing[provider].heading}</h3>${feeCopy(provider)}<p>${pilot}</p></div>`;
 }
 
@@ -34,9 +35,13 @@ export function renderFilmmakerFaq() {
       <p>The pilot uses test cards, so no money changes hands at checkout. Your Cloudflare account still uses real storage.</p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
-      <p>Stream is free. You set the film price and it goes to your Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. Stripe calculates its processing fee on the total, including the tip.</p>
+      <p>Stream is free. You set the film price. For new marketplace orders, Dust Wave transfers the film price less the verified card processing fee to your connected Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. The processing fee applies to the full charge, including tax and tip.</p>
       <h3>${pricing.stripe.heading}</h3>${feeCopy('stripe', true)}
       <h3>${pricing.r2.heading}</h3>${feeCopy('r2', true)}
+    </section>
+    <section><h2>How does checkout calculate tax?</h2>
+      <p>For viewers watching in New Mexico, Stream can use their viewing address to look up the local gross receipts tax rate. Other locations use Stripe Tax at checkout. Applicable film tax is added to your price. Any tax on an optional tip is included in the tip amount the viewer chose. The viewer sees the total and pays once.</p>
+      <p>The pilot tests Dust Wave as the marketplace responsible for collection. A test charge can show zero tax, for example when the product is exempt or the sandbox has no registration for the viewer’s location. Before live sales, Dust Wave needs to confirm its obligations, configure live registrations where required, and arrange filing and remittance. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for platforms and marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
     </section>
     <section><h2>What can I upload?</h2>
       <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
@@ -59,7 +64,7 @@ export function renderFilmmakerFaq() {
       <p>Save the private access link after checkout. Open it on your other device and keep it private. If email recovery is available, choose <strong>Restore access</strong> in the player and enter the email you used to pay. A rental ends at the same time on every device.</p>
     </section>
     <section><h2>What do the numbers in my dashboard mean?</h2>
-      <p>See how often people started a preview or a paid viewing, and how many rented or bought each film. Repeat plays count. Revenue is the film price collected. Net revenue deducts processing fees and any refunds recorded by Stripe. Platform tips are separate. When Stripe hasn’t reported a fee, Stream uses the estimate shown in the dashboard.</p>
+      <p>See preview starts, paid plays, rentals and purchases for each film. Repeat plays count. Revenue shows film prices before refunds. Tax and optional tips are tracked separately. Net revenue deducts processing fees and recorded refunds up to the film price. When Stripe hasn’t reported a fee, Stream estimates it on the full charge.</p>
     </section>
     <section><h2>What if I take my film offline?</h2>
       <p>Unpublishing stops free previews and new sales. People who bought the film or have time left on a rental can still watch. Keep the original in your bucket so their access keeps working.</p>

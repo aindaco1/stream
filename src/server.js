@@ -75,6 +75,22 @@ async function body(req, limit) {
   return Buffer.concat(chunks);
 }
 
+function viewingOrder(text) {
+  let request;
+  try { request = JSON.parse(text); } catch { return null; }
+  const address = request?.viewingAddress;
+  if (!request || Object.keys(request).some(key => !['token','tipPercent','viewingAddress'].includes(key)) ||
+      typeof request.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(request.token) ||
+      !Number.isInteger(request.tipPercent) || request.tipPercent < 0 || request.tipPercent > 15 ||
+      address?.country !== 'US' || address.state !== 'NM' ||
+      Object.keys(address).some(key => !['country','state','city','line1','postalCode'].includes(key)) ||
+      typeof address.postalCode !== 'string' || !/^\d{5}(-\d{4})?$/.test(address.postalCode)) return null;
+  for (const [field, limit] of [['line1',200],['city',100]]) {
+    if (typeof address[field] !== 'string' || !address[field].trim() || address[field].length > limit || /\p{Cc}/u.test(address[field])) return null;
+  }
+  return { token:request.token, tipPercent:request.tipPercent, viewingAddress:address };
+}
+
 // Only published player pages load Stripe. Each filmmaker's payment UI mounts
 // inside that film's frame. Card details are collected by Stripe.
 const stripePlayerHeaders = {
@@ -193,9 +209,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         return send(200, 'text/html; charset=utf-8', screening.replace('{{faqLink}}', faqLink()).replace('{{footer}}', siteFooter('/screening')).replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
           { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
       }
-      if (checkout && path === '/checkout/webhook') {
+      if (checkout && (path === '/checkout/webhook' || path === '/checkout/platform-webhook')) {
         if (req.method !== 'POST') return fail(405);
-        const result = await checkout.webhook(await body(req, 256 * 1024), req.headers['stripe-signature']);
+        const result = await checkout.webhook(await body(req, 256 * 1024), req.headers['stripe-signature'], path === '/checkout/platform-webhook');
         return send(200, 'application/json', JSON.stringify(result));
       }
       if (checkout && read && (path === '/checkout/return' || path === '/checkout/cancel')) {
@@ -227,6 +243,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const fields = selectedFields(new URL(req.url, origin).searchParams.get('show') || '');
         const text = { title: escapeHtml(published?.title || 'Private screening'), poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '', filmInfo: renderFilmInfo(published?.info, fields) };
         const html = template.replaceAll('{{checkout}}', String(payable))
+          .replaceAll('{{manualNm}}', String(payable && checkout.manualNmEnabled === true))
           .replaceAll('{{preview}}', String(published ? spec.previewSeconds ?? 10 : 0))
           .replaceAll('{{emailRecovery}}', String(Boolean(recovery && payable)))
           .replaceAll('{{published}}', String(Boolean(published)))
@@ -322,14 +339,21 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       if (['checkout', 'buy', 'abandon', 'order', 'session'].includes(action)) {
         if (action !== 'session' && (!checkout || !spec.id)) return fail(404);
         if (req.method !== 'POST') return fail(405);
-        if (req.headers.origin !== origin || req.headers['content-type'] !== 'text/plain') return fail(403);
-        const token = (await body(req, action === 'session' ? 4096 : 64)).toString('utf8');
+        if (req.headers.origin !== origin) return fail(403);
+        const opening = action === 'buy' || action === 'checkout';
+        const type = req.headers['content-type'];
+        const withAddress = opening && type === 'application/json';
+        if (type !== 'text/plain' && !withAddress) return fail(403);
+        const token = (await body(req, withAddress ? 2048 : action === 'session' ? 4096 : 64)).toString('utf8');
         if (action !== 'session') {
-          const opening = action === 'buy' || action === 'checkout';
-          const match = /^([A-Za-z0-9_-]{43})(?: (0|[1-9]|1[0-5]))?$/.exec(token);
-          if (!match || (!opening && match[2] !== undefined)) return fail(400);
-          const result = opening ? await checkout.start({ offer: await catalog.verify(id), kind: action === 'buy' ? 'buy' : 'rent',
-            token: match[1], tipPercent: Number(match[2] || 0), origin }) :
+          let input;
+          if (withAddress) input = viewingOrder(token);
+          else {
+            const match = /^([A-Za-z0-9_-]{43})(?: (0|[1-9]|1[0-5]))?$/.exec(token);
+            if (match && (opening || match[2] === undefined)) input = { token:match[1], tipPercent:Number(match[2] || 0) };
+          }
+          if (!input) return fail(400);
+          const result = opening ? await checkout.start({ ...input, offer: await catalog.verify(id), kind: action === 'buy' ? 'buy' : 'rent', origin }) :
             await checkout[action === 'abandon' ? 'abandon' : 'status']({ offer: spec, token });
           return send(200, 'application/json', JSON.stringify(result), checkoutHeaders);
         }

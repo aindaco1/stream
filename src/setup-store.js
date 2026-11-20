@@ -69,6 +69,10 @@ export function openSetupStore(directory) {
       filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, published INTEGER NOT NULL CHECK (published IN (0,1))
     );
     CREATE TABLE IF NOT EXISTS film_counts (filmId TEXT PRIMARY KEY, previews INTEGER NOT NULL, plays INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS viewer_nm_tax_rates (
+      platform TEXT NOT NULL, location TEXT NOT NULL, ppm INTEGER NOT NULL, inclusive INTEGER NOT NULL,
+      stripeId TEXT NOT NULL, PRIMARY KEY(platform,location,ppm,inclusive)
+    );
     CREATE TABLE IF NOT EXISTS film_view_receipts (
       filmId TEXT NOT NULL, kind TEXT NOT NULL, digest TEXT NOT NULL, createdAt INTEGER NOT NULL,
       PRIMARY KEY(filmId,kind,digest)
@@ -119,6 +123,15 @@ export function openSetupStore(directory) {
     if (!columns.has('tipPercent')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipPercent INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('tipAmount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipAmount INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('stripeFeeCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN stripeFeeCents INTEGER');
+    if (!columns.has('taxPolicy')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN taxPolicy TEXT NOT NULL DEFAULT 'none' CHECK(taxPolicy IN ('none','marketplace-v1'))");
+    if (!columns.has('nmQuote')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN nmQuote TEXT');
+    if (!columns.has('viewingAddressTag')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN viewingAddressTag TEXT');
+    if (!columns.has('taxCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN taxCents INTEGER');
+    if (!columns.has('tipTaxCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipTaxCents INTEGER');
+    if (!columns.has('chargedTotalCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN chargedTotalCents INTEGER');
+    if (!columns.has('transferId')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN transferId TEXT');
+    if (!columns.has('transferAttempt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN transferAttempt INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('transferRetryAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN transferRetryAt INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('uiMode')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN uiMode TEXT NOT NULL DEFAULT 'hosted'");
     if (!columns.has('cardOnly')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN cardOnly INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('rentalHours')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN rentalHours INTEGER NOT NULL DEFAULT 48');
@@ -130,6 +143,9 @@ export function openSetupStore(directory) {
     if (!columns.has('withdrawalState')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN withdrawalState TEXT');
     if (!columns.has('withdrawalRetryAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN withdrawalRetryAt INTEGER NOT NULL DEFAULT 0');
     db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS viewer_order_charge ON viewer_test_orders(chargeId);
+      CREATE UNIQUE INDEX IF NOT EXISTS viewer_transfer_id ON viewer_test_orders(transferId) WHERE transferId IS NOT NULL AND transferId!='no_proceeds';
+      CREATE INDEX IF NOT EXISTS viewer_transfer_due ON viewer_test_orders(transferRetryAt,createdAt)
+        WHERE taxPolicy='marketplace-v1' AND paidAt IS NOT NULL AND transferId IS NULL;
       CREATE INDEX IF NOT EXISTS viewer_withdrawal_due ON viewer_test_orders(withdrawalRetryAt) WHERE withdrawalState='requested' AND sessionId IS NOT NULL;
       CREATE INDEX IF NOT EXISTS viewer_order_legacy_receipt ON viewer_test_orders(filmId,paidAt);
       CREATE TABLE IF NOT EXISTS viewer_payment_events(
@@ -258,10 +274,25 @@ export function openSetupStore(directory) {
         .run(intentId, orderId, intentId);
       if (result.changes !== 1) throw new Error('The test order has a conflicting Stripe payment.');
     },
-    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount, tipPercent = 0, rentalHours: hours = 48 }) {
+    viewingAddressTag(address) {
+      const fields = ['country','state','line1','line2','city','postalCode'].map(field =>
+        String(address[field] ?? '').trim().replace(/\s+/gu, ' ').toUpperCase());
+      return createHmac('sha256',key).update(JSON.stringify(['viewing-location',...fields])).digest('base64url');
+    },
+    nmRateId(platform, quote, inclusive) {
+      return sql('SELECT stripeId FROM viewer_nm_tax_rates WHERE platform=? AND location=? AND ppm=? AND inclusive=?')
+        .get(platform,quote.code,quote.ratePartsPerMillion,Number(inclusive))?.stripeId;
+    },
+    rememberNmRate(platform, quote, inclusive, stripeId) {
+      sql('INSERT OR IGNORE INTO viewer_nm_tax_rates VALUES(?,?,?,?,?)')
+        .run(platform,quote.code,quote.ratePartsPerMillion,Number(inclusive),stripeId);
+      return store.nmRateId(platform,quote,inclusive);
+    },
+    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount, tipPercent = 0, rentalHours: hours = 48, taxPolicy = 'none', nmQuote = null, viewingAddressTag = null }) {
       return transaction(() => {
         const existing = store.viewerOrderForToken(tokenHash);
         if (existing) return existing;
+        if (!['none', 'marketplace-v1'].includes(taxPolicy)) throw new Error('Unsupported order tax policy.');
         const maker = store.maker(owner);
         const seller = maker && stripeSetupStateForMode(maker.stripe, 'test');
         const film = store.film(owner, id);
@@ -280,8 +311,8 @@ export function openSetupStore(directory) {
           error.code = 'viewer_rate_limit';
           throw error;
         }
-        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?)")
-          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, kind === 'rent' ? hours : 48);
+        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours,taxPolicy,nmQuote,viewingAddressTag) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?,?,?,?)")
+          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, kind === 'rent' ? hours : 48, taxPolicy, nmQuote && JSON.stringify(nmQuote), viewingAddressTag);
         return store.viewerOrderForToken(tokenHash);
       });
     },
@@ -290,7 +321,39 @@ export function openSetupStore(directory) {
     viewerAccessById(id) { return accessOrder.get(id); },
     viewerOrderBySession(id) { return sql('SELECT * FROM viewer_test_orders WHERE sessionId=?').get(id); },
     viewerOrderByPayment(account, intentId, chargeId) {
-      return sql('SELECT * FROM viewer_test_orders WHERE account=? AND (intentId=? OR chargeId=?)').get(account, intentId ?? null, chargeId);
+      return sql("SELECT * FROM viewer_test_orders WHERE taxPolicy='none' AND account=? AND (intentId=? OR chargeId=?)").get(account, intentId ?? null, chargeId ?? null);
+    },
+    viewerOrderByPlatformPayment(platform, intentId, chargeId) {
+      return sql(`SELECT * FROM viewer_test_orders WHERE taxPolicy='marketplace-v1' AND platform=:platform
+        AND (intentId=:intent OR chargeId=:charge) AND (:intent IS NULL OR intentId=:intent) AND (:charge IS NULL OR chargeId=:charge)`)
+        .get({ platform, intent: intentId ?? null, charge: chargeId ?? null });
+    },
+    pendingViewerTransfers(platform = null) {
+      // Rental access can expire independently of a filmmaker's payment. Only financial adjustments hold a transfer.
+      return sql(`SELECT * FROM viewer_test_orders WHERE taxPolicy='marketplace-v1' AND paidAt IS NOT NULL
+        AND transferId IS NULL AND transferRetryAt<=? AND (? IS NULL OR platform=?)
+        AND intentId IS NOT NULL AND chargeId IS NOT NULL AND chargedTotalCents IS NOT NULL
+        AND refundedAmount=0 AND revocationReason IS NULL AND (disputeStatus IS NULL OR disputeStatus IN ('won','prevented','warning_closed'))
+        ORDER BY transferRetryAt,createdAt,orderId LIMIT 20`).all(Date.now(), platform, platform);
+    },
+    retryViewerTransfer(orderId) {
+      sql("UPDATE viewer_test_orders SET transferRetryAt=? WHERE orderId=? AND taxPolicy='marketplace-v1' AND transferId IS NULL")
+        .run(Date.now() + 30000, orderId);
+    },
+    advanceRejectedTransfer(order) {
+      return sql(`UPDATE viewer_test_orders SET transferAttempt=transferAttempt+1
+        WHERE orderId=? AND taxPolicy='marketplace-v1' AND transferId IS NULL AND transferAttempt=? AND chargeId=?`)
+        .run(order.orderId,order.transferAttempt,order.chargeId).changes === 1;
+    },
+    setViewerTransfer(orderId, transferId) {
+      if (typeof transferId !== 'string' || (transferId !== 'no_proceeds' && !/^tr_[A-Za-z0-9]{1,128}$/.test(transferId))) return false;
+      return sql(`UPDATE viewer_test_orders SET transferId=:transfer,transferRetryAt=0 WHERE orderId=:id AND taxPolicy='marketplace-v1'
+        AND paidAt IS NOT NULL AND chargeId IS NOT NULL AND chargedTotalCents IS NOT NULL AND stripeFeeCents IS NOT NULL
+        AND (transferId IS NULL OR transferId=:transfer) AND (
+          (:transfer='no_proceeds' AND stripeFeeCents>=amount) OR
+          (:transfer!='no_proceeds' AND stripeFeeCents<amount AND NOT EXISTS(
+            SELECT 1 FROM viewer_test_orders WHERE transferId=:transfer AND orderId!=:id))
+        )`).run({ transfer: transferId, id: orderId }).changes === 1;
     },
     hasViewerSellerAccount(account) { return Boolean(sql("SELECT 1 FROM claims WHERE mode='test' AND account=?").get(account)); },
     paymentEventSeen(account, id) { return Boolean(sql('SELECT 1 FROM viewer_payment_events WHERE account=? AND eventId=?').get(account,id)); },
@@ -336,15 +399,34 @@ export function openSetupStore(directory) {
     expireViewerOrder(orderId) {
       sql("UPDATE viewer_test_orders SET status='expired',ledgerVersion=ledgerVersion+1 WHERE orderId=? AND status='pending' AND intentId IS NULL").run(orderId);
     },
-    reconcileViewerPayment(order, { intentId, chargeId, paidAt, refundedAmount, disputeStatus, revocationReason, stripeFeeCents = null }) {
+    reconcileViewerPayment(order, { intentId, chargeId, paidAt, refundedAmount, disputeStatus, revocationReason, stripeFeeCents = null,
+      taxCents, tipTaxCents, chargedTotalCents }) {
+      if (order.taxPolicy === 'none') {
+        taxCents ??= 0;
+        tipTaxCents ??= 0;
+        chargedTotalCents ??= order.amount + order.tipAmount;
+      }
+      const cents = value => Number.isSafeInteger(value) && value >= 0;
+      if (![taxCents, tipTaxCents, chargedTotalCents, refundedAmount].every(cents) ||
+          tipTaxCents > taxCents || tipTaxCents > order.tipAmount || refundedAmount > chargedTotalCents ||
+          chargedTotalCents !== order.amount + order.tipAmount + taxCents - tipTaxCents ||
+          (order.taxPolicy === 'none' && taxCents !== 0) || (stripeFeeCents !== null && !cents(stripeFeeCents))) {
+        throw new Error('Invalid verified checkout totals.');
+      }
+      if ((order.chargedTotalCents !== null && (order.chargedTotalCents !== chargedTotalCents || order.taxCents !== taxCents || order.tipTaxCents !== tipTaxCents)) ||
+          (order.stripeFeeCents !== null && stripeFeeCents !== null && order.stripeFeeCents !== stripeFeeCents)) {
+        throw new Error('The verified payment amounts changed.');
+      }
       // A slower provider read cannot overwrite a newer reconciliation from another process.
       return sql(`UPDATE viewer_test_orders SET status=CASE WHEN ? IS NOT NULL OR
           (kind='rent' AND COALESCE(paidAt,?)+rentalHours*3600<=?) THEN 'expired' ELSE 'paid' END,
           intentId=?, chargeId=?, paidAt=COALESCE(paidAt,?), refundedAmount=?, disputeStatus=?, revocationReason=?,
-          stripeFeeCents=COALESCE(?,stripeFeeCents), verifiedAt=unixepoch(), ledgerVersion=ledgerVersion+1 WHERE orderId=? AND sessionId=? AND ledgerVersion=?
+          taxCents=?, tipTaxCents=?, chargedTotalCents=?, stripeFeeCents=COALESCE(stripeFeeCents,?),
+          verifiedAt=unixepoch(), ledgerVersion=ledgerVersion+1 WHERE orderId=? AND sessionId=? AND ledgerVersion=?
           AND (intentId IS NULL OR intentId=?) AND (chargeId IS NULL OR chargeId=?) RETURNING *`)
         .get(revocationReason, paidAt, Math.floor(Date.now()/1000), intentId, chargeId, paidAt, refundedAmount,
-          disputeStatus, revocationReason, stripeFeeCents, order.orderId, order.sessionId, order.ledgerVersion, intentId, chargeId);
+          disputeStatus, revocationReason, taxCents, tipTaxCents, chargedTotalCents, stripeFeeCents,
+          order.orderId, order.sessionId, order.ledgerVersion, intentId, chargeId);
     },
     noteViewerWebhook(orderId, eventId) {
       sql('UPDATE viewer_test_orders SET webhookEventId=COALESCE(webhookEventId,?),webhookAt=COALESCE(webhookAt,?) WHERE orderId=?')

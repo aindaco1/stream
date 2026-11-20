@@ -18,7 +18,7 @@ const secret = 'whsec_fixture';
 const viewerToken = () => randomBytes(32).toString('base64url');
 const sourceHead = {revision:'"test-cut-one"', size:4};
 
-async function context(t, { legacy = false } = {}) {
+async function context(t, { legacy = false, marketplace = false } = {}) {
   const folder = await mkdtemp(join(tmpdir(), 'stream-viewer-test-'));
   const owner = 'Buyer rehearsal filmmaker', account = 'acct_seller';
   const id = 'f-' + randomUUID();
@@ -49,7 +49,8 @@ async function context(t, { legacy = false } = {}) {
   store.saveFilm(owner, bucket, { id: offer.id, title: offer.title, revision: offer.revision, prices: offer.prices,
     duration:136, objectKey:'film.mp4', rights:{version:'v1', statement:'I have the rights', acceptedAt:new Date().toISOString()} });
   const calls = [], sessions = new Map(), intents = new Map(), requests = new Map();
-  const refunds = [], disputes = [];
+  const refunds = [], disputes = [], transfers = [];
+  const lineItems = new Map();
   const behavior = { available: true, platform: 'acct_platform', sellers:new Set([account]), origin, lose: false, missingSecret: false };
   const purchased = Math.floor(Date.now() / 1000) - 300;
   function addSession(suffix, amount, markers, uiMode, allowedMethods = null) {
@@ -74,10 +75,37 @@ async function context(t, { legacy = false } = {}) {
     assert.equal(init.redirect, 'error');
     calls.push({ method, path: url.pathname, recipient });
     if (url.pathname === '/v1/account') return Response.json({ id: behavior.platform, object: 'account' });
+    if (marketplace && url.pathname === '/v2/core/accounts/' + account) {
+      return Response.json({id:account,object:'v2.core.account',livemode:false,configuration:{recipient:{capabilities:{
+        stripe_balance:{stripe_transfers:behavior.transferCapability === false ? null : {status:'active',requested:true}}
+      }}}});
+    }
     const seller = url.pathname.startsWith('/v1/accounts/') && url.pathname.split('/').at(-1);
     if (behavior.sellers.has(seller)) return Response.json({ id: seller, object: 'account', type: 'standard',
       charges_enabled: behavior.available, payouts_enabled: behavior.available });
-    assert.ok(behavior.sellers.has(recipient));
+    if (marketplace) assert.equal(recipient,null);
+    else assert.ok(behavior.sellers.has(recipient));
+    if (url.pathname === '/v1/tax_rates') {
+      const inclusive = form.get('inclusive') === 'true';
+      assert.equal(form.get('percentage'),'7.6250');
+      return Response.json({object:'tax_rate',active:true,livemode:false,id:inclusive ? 'txr_tip' : 'txr_film',
+        inclusive,percentage:7.625,country:'US',state:'NM',jurisdiction:form.get('jurisdiction')});
+    }
+    if (url.pathname.endsWith('/line_items')) {
+      return Response.json({object:'list',has_more:false,data:lineItems.get(url.pathname.split('/').at(-2))});
+    }
+    if (url.pathname === '/v1/transfers') {
+      if (method === 'GET') return Response.json({object:'list',has_more:false,data:transfers});
+      assert.equal(form.get('destination'),account);
+      if (behavior.denyFirstTransfer && !headers.get('Idempotency-Key').endsWith('-transfer-1')) {
+        return Response.json({error:{code:'insufficient_capabilities_for_transfer'}},{status:400});
+      }
+      const transfer = {object:'transfer',livemode:false,id:'tr_fixture',amount:Number(form.get('amount')),currency:'usd',
+        destination:account,source_transaction:form.get('source_transaction'),transfer_group:form.get('transfer_group'),metadata:{order:form.get('metadata[order]')}};
+      transfers.push(transfer);
+      if (behavior.loseTransfer) throw Error('Transfer response interrupted');
+      return Response.json(transfer);
+    }
     if (method === 'POST' && url.pathname.endsWith('/expire')) {
       const session = sessions.get(url.pathname.split('/').at(-2));
       assert.ok(session);
@@ -107,7 +135,7 @@ async function context(t, { legacy = false } = {}) {
       const filmAmount = Number(form.get('line_items[0][price_data][unit_amount]'));
       const tipAmount = Number(form.get('line_items[1][price_data][unit_amount]'));
       const amount = filmAmount + tipAmount;
-      assert.equal(form.get('payment_intent_data[application_fee_amount]'), tipAmount ? String(tipAmount) : null);
+      assert.equal(form.get('payment_intent_data[application_fee_amount]'), !marketplace && tipAmount ? String(tipAmount) : null);
       if (tipAmount) assert.equal(form.get('line_items[1][price_data][product_data][name]'),'Optional tip to Dust Wave');
       assert.equal(headers.get('Stripe-Version'), '2026-10-28.endive');
       const uiMode = form.get('ui_mode');
@@ -131,11 +159,58 @@ async function context(t, { legacy = false } = {}) {
         const order = form.get('client_reference_id');
         const markers = Object.fromEntries(['order','flow','product','scope','kind','amount'].map(k => [k,form.get('metadata[' + k + ']')]));
         for (const k of ['film_amount','tip_amount','tip_percent']) if (tipAmount) markers[k] = form.get('metadata['+k+']');
+        if (marketplace) {
+          markers.tax_policy = form.get('metadata[tax_policy]');
+          markers.filmmaker = form.get('metadata[filmmaker]');
+          assert.equal(markers.filmmaker,account);
+          if (form.get('metadata[grt_policy]')) {
+            markers.grt_policy = form.get('metadata[grt_policy]');
+            markers.grt_location = form.get('metadata[grt_location]');
+            assert.equal(form.get('automatic_tax[enabled]'),'false');
+            assert.equal(form.get('line_items[0][tax_rates][0]'),'txr_film');
+            assert.equal(form.get('line_items[1][tax_rates][0]'),'txr_tip');
+          } else {
+            assert.equal(form.get('automatic_tax[liability][type]'),'self');
+            assert.equal(form.get('automatic_tax[enabled]'),'true');
+            if (form.has('shipping_address_collection[allowed_countries][0]')) {
+              assert.equal(form.get('shipping_address_collection[allowed_countries][0]'),'US');
+              assert.equal(form.get('billing_address_collection'),null);
+            } else assert.equal(form.get('billing_address_collection'),'required');
+          }
+        }
         assert.equal(markers.order,order);
         assert.equal(markers.amount,String(amount));
         for (const [k,v] of Object.entries(markers)) assert.equal(v,form.get('payment_intent_data[metadata][' + k + ']'));
         id = addSession(suffix, amount, markers, uiMode, methods.length ? methods : null);
-        if (tipAmount) {
+        if (marketplace) {
+          Object.assign(sessions.get(id),{automatic_tax:{enabled:true,liability:{type:'self'},status:'requires_location_inputs'},
+            total_details:{amount_discount:0,amount_shipping:0,amount_tax:0}});
+          if (form.has('shipping_address_collection[allowed_countries][0]')) {
+            sessions.get(id).shipping_address_collection = {allowed_countries:['US']};
+          }
+          intents.get(sessions.get(id).payment_intent).transfer_group = form.get('payment_intent_data[transfer_group]');
+          const lines = [filmAmount,...(tipAmount ? [tipAmount] : [])].map((unit_amount,index) => {
+            const prefix = 'line_items[' + index + '][price_data]';
+            const price = {unit_amount,currency:'usd',product:{tax_code:form.get(prefix+'[product_data][tax_code]')},
+              tax_behavior:form.get(prefix+'[tax_behavior]')};
+            return {price,quantity:1,currency:'usd',amount_tax:0,amount_discount:0,amount_total:unit_amount};
+          });
+          lineItems.set(id,lines);
+          if (markers.grt_policy) {
+            assert.deepEqual([filmAmount,tipAmount],[99,10]);
+            for (const [i,line] of lines.entries()) {
+              line.amount_tax = i ? 1 : 8;
+              line.amount_total = i ? 10 : 107;
+              line.taxes = [{amount:line.amount_tax,rate:{id:i ? 'txr_tip' : 'txr_film'}}];
+            }
+            const session = sessions.get(id);
+            session.automatic_tax = {enabled:false};
+            session.total_details.amount_tax = 9;
+            session.amount_total = 117;
+            const intent = intents.get(session.payment_intent);
+            intent.amount = intent.amount_received = intent.latest_charge.amount = intent.latest_charge.amount_captured = 117;
+          }
+        } else if (tipAmount) {
           const intent = intents.get(sessions.get(id).payment_intent);
           intent.application_fee_amount = tipAmount;
           intent.latest_charge.application_fee_amount = tipAmount;
@@ -152,17 +227,17 @@ async function context(t, { legacy = false } = {}) {
     assert.ok(['latest_charge','latest_charge.balance_transaction'].includes(url.searchParams.get('expand[0]')));
     return Response.json(intents.get(id));
   }
-  const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_fixture', STRIPE_CONNECT_PUBLISHABLE_KEY:'pk_test_fixture', STRIPE_CONNECT_WEBHOOK_SECRET: secret };
+  const env = { STREAM_STRIPE_TAX_MODE:marketplace ? 'marketplace' : 'off', STRIPE_PLATFORM_WEBHOOK_SECRET:'whsec_platform', STRIPE_CONNECT_SECRET_KEY: 'sk_test_fixture', STRIPE_CONNECT_PUBLISHABLE_KEY:'pk_test_fixture', STRIPE_CONNECT_WEBHOOK_SECRET: secret };
   const checkout = createViewerCheckout({ store, env, fetchImpl });
   const first = () => sessions.values().next().value;
-  const sign = (event, time = Math.floor(Date.now()/1000)) => {
+  const sign = (event, time = Math.floor(Date.now()/1000), signingSecret = secret) => {
     const payload = JSON.stringify(event);
-    const digest = createHmac('sha256',secret).update(time + '.' + payload).digest('hex');
+    const digest = createHmac('sha256',signingSecret).update(time + '.' + payload).digest('hex');
     return [Buffer.from(payload), 't=' + time + ',v1=' + digest];
   };
   const event = () => ({object:'event',id:'evt_fixture',type:'checkout.session.completed',account,livemode:false,data:{object:first()}});
   const pay = () => { Object.assign(first(), { status:'complete', payment_status:'paid' }); };
-  return { folder, store, env, fetchImpl, offer, token, checkout, calls, first, sessions, intents, refunds, disputes, behavior, purchased, sign, event, pay,
+  return { folder, store, env, fetchImpl, offer, token, checkout, calls, first, sessions, intents, refunds, disputes, transfers, lineItems, behavior, purchased, sign, event, pay,
     start: (kind = 'rent') => checkout.start({ offer,token,origin,kind }), status: () => checkout.status({offer,token}) };
 }
 
@@ -969,4 +1044,124 @@ test('grant renewal recovers a missed external refund while routine media checks
   db.close();
   assert.equal(await c.checkout.verifyPlayback(request), false);
   assert.equal(c.checkout.accessAllowed(request), false);
+});
+
+function completeTaxedPurchase(c) {
+  const session = c.first(), intent = c.intents.get(session.payment_intent), charge = intent.latest_charge;
+  const [film, tip] = c.lineItems.get(session.id);
+  assert.deepEqual([film.price.product.tax_code,film.price.tax_behavior],['txcd_10804003','exclusive']);
+  assert.deepEqual([tip.price.product.tax_code,tip.price.tax_behavior],['txcd_20030000','inclusive']);
+  Object.assign(film,{amount_tax:40,amount_total:539});
+  Object.assign(tip,{amount_tax:4,amount_total:50});
+  session.automatic_tax.status='complete';
+  session.total_details.amount_tax=44;
+  session.amount_total=589;
+  intent.amount=intent.amount_received=charge.amount=charge.amount_captured=589;
+  charge.balance_transaction={object:'balance_transaction',id:'txn_test',source:charge.id,type:'charge',currency:'usd',
+    amount:589, fee:47, net:542, status:'pending',fee_details:[{type:'stripe_fee',amount:47,currency:'usd'}]};
+  c.pay();
+  return {session,charge,tip};
+}
+
+test('one marketplace charge binds exclusive film tax, inclusive tip tax and net filmmaker transfer across a lost response', async t => {
+  const c = await context(t, {marketplace:true});
+  const opened = await c.checkout.start({offer:c.offer,token:c.token,origin,kind:'buy',tipPercent:10});
+  assert.equal(opened.account,null);
+  assert.equal(opened.amount,549);
+  const {charge,tip}=completeTaxedPurchase(c);
+  const event = c.event();
+  delete event.account;
+  const platformHook = () => c.checkout.webhook(...c.sign(event,undefined,'whsec_platform'),true);
+  await assert.rejects(c.checkout.webhook(...c.sign(event),true),{statusCode:400});
+  await c.checkout.webhook(...c.sign(c.event())); // A connected-account event cannot settle a platform charge.
+  assert.equal(c.store.viewerOrderById(opened.orderId).paidAt,null);
+  tip.price.product.tax_code='txcd_00000000';
+  await assert.rejects(platformHook(),{statusCode:503});
+  assert.equal(c.transfers.length,0);
+  tip.price.product.tax_code='txcd_20030000';
+  c.behavior.loseTransfer=true;
+  await platformHook();
+  const settled=c.store.viewerOrderById(opened.orderId);
+  assert.deepEqual([settled.taxCents,settled.tipTaxCents,settled.chargedTotalCents,settled.stripeFeeCents],[44,4,589,47]);
+  assert.equal(settled.transferId,null);
+  assert.equal(c.transfers.length,1);
+  assert.equal(c.transfers[0].amount,452);
+  assert.equal(c.transfers[0].source_transaction,charge.id);
+  await platformHook();
+  assert.equal(c.transfers.length,1);
+  assert.equal(c.store.viewerOrderById(opened.orderId).transferId,c.transfers[0].id);
+  assert.ok((await c.status()).receipt);
+  assert.deepEqual(await c.checkout.status({offer:{...c.offer,id:'another-film'},token:c.token}),{status:'pending'});
+});
+
+test('a merchant-only filmmaker cannot sell a marketplace rental before transfers are active',async t => {
+  const c = await context(t,{marketplace:true});
+  c.behavior.transferCapability=false;
+  await assert.rejects(c.start(),{statusCode:503});
+  assert.equal(c.sessions.size,0);
+});
+
+test('a manual order keeps its district across retries and verifies the actual line rates before granting access', async t => {
+  const c = await context(t,{marketplace:true});
+  const address = {country:'US',state:'NM',line1:'1 Civic Plaza NW',city:'Albuquerque',postalCode:'87102'};
+  const request = {offer:c.offer,token:c.token,origin,kind:'rent',tipPercent:10};
+  const nmQuote = {code:'02-701',ratePartsPerMillion:76250,validFrom:'2026-07-01',validThrough:'2027-06-30',source:'EDAC NM E911 / NM TRD'};
+  // Resume a previously located order, even after the operator disables new manual quotes.
+  c.store.reserveViewerOrder({...c.offer,tokenHash:await sha256Hex(c.token),platform:'acct_platform',origin,
+    kind:'rent',amount:99,tipPercent:10,taxPolicy:'marketplace-v1',nmQuote,viewingAddressTag:c.store.viewingAddressTag(address)});
+  const restarted = createViewerCheckout({store:c.store,env:{...c.env,STREAM_NM_MANUAL_TAX:'0'},fetchImpl:c.fetchImpl});
+  c.behavior.lose = true;
+  await assert.rejects(restarted.start(request),{statusCode:503});
+  const order = await restarted.start({...request,viewingAddress:address});
+  assert.deepEqual([order.manualTax,order.taxCents,order.tipTaxCents,order.chargedTotalCents],[true,9,1,117]);
+  assert.equal(c.sessions.size,1);
+  assert.equal(c.calls.filter(call => call.path === '/v1/tax_rates').length,2);
+  await assert.rejects(restarted.start({...request,viewingAddress:{...address,postalCode:'87120'}}),{statusCode:409});
+  const [film,tip] = c.lineItems.get(c.first().id);
+  c.pay();
+  const event = c.event();
+  delete event.account;
+  const notify = () => restarted.webhook(...c.sign(event,undefined,'whsec_platform'),true);
+  // A neighboring district can return exactly the same cents.
+  film.taxes[0].rate.id = 'txr_otherdistrict';
+  await assert.rejects(notify(),{statusCode:503});
+  assert.equal(c.store.viewerOrderById(order.orderId).paidAt,null);
+  film.taxes[0].rate.id = 'txr_film';
+  tip.amount_tax = 0;
+  await assert.rejects(notify(),{statusCode:503});
+  tip.amount_tax = 1;
+  await notify();
+  assert.ok((await c.status()).receipt);
+  assert.equal(c.store.viewerOrderById(order.orderId).taxCents,9);
+});
+
+test('an unresolved NM viewing address uses Stripe automatic tax on the viewing address', async t => {
+  const c = await context(t,{marketplace:true});
+  const request = {offer:c.offer,token:c.token,origin,kind:'rent',tipPercent:10,
+    viewingAddress:{country:'US',state:'NM',line1:'PO Box 123',city:'Albuquerque',postalCode:'87102'}};
+  const opened = await c.checkout.start(request);
+  assert.equal(opened.useViewingAddress,true);
+  assert.equal(opened.manualTax,undefined);
+  assert.equal(c.first().automatic_tax.enabled,true);
+  assert.equal(c.store.viewerOrderById(opened.orderId).nmQuote,null);
+  c.first().shipping_address_collection = null;
+  await assert.rejects(c.checkout.start(request),{statusCode:409});
+});
+
+test('an explicitly rejected transfer can retry after the recipient becomes active without repeating the charge', async t => {
+  const c = await context(t,{marketplace:true});
+  const order = await c.checkout.start({offer:c.offer,token:c.token,origin,kind:'buy',tipPercent:10});
+  completeTaxedPurchase(c);
+  c.behavior.denyFirstTransfer=true;
+  c.behavior.transferCapability=false;
+  assert.ok((await c.status()).receipt);
+  assert.equal(c.store.viewerOrderById(order.orderId).transferAttempt,0);
+  c.behavior.transferCapability=true;
+  assert.ok((await c.status()).receipt);
+  assert.equal(c.store.viewerOrderById(order.orderId).transferAttempt,1);
+  assert.equal(c.transfers.length,0);
+  assert.ok((await c.status()).receipt);
+  assert.equal(c.store.viewerOrderById(order.orderId).transferId,'tr_fixture');
+  assert.equal(c.transfers.length,1);
+  assert.equal(c.sessions.size,1);
 });

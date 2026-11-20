@@ -209,10 +209,10 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
 
 const statsLabels = {
   previews: 'Preview starts', plays: 'Paid plays', rentals: 'Rentals', purchases: 'Purchases',
-  revenue: 'Revenue', netRevenue: 'Net Revenue', estimatedFees: 'Estimated Stripe fees'
+  revenue: 'Revenue', netRevenue: 'Net Revenue', estimatedFees: 'Estimated Stripe fees', taxCollected: 'Tax charged'
 };
-const platformLabels = { ...statsLabels, platformTips: 'Platform tips' };
-const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'platformTips']);
+const platformLabels = { ...statsLabels, platformTips: 'Platform tips after tax', transfersToReview: 'Transfers to review' };
+const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'platformTips', 'taxCollected']);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const displayStat = (stats, key) => moneyFields.has(key) ? usd.format(stats[key] / 100) : String(stats[key]);
 function statsList(stats, labels = statsLabels) {
@@ -221,8 +221,10 @@ function statsList(stats, labels = statsLabels) {
   ).join('') + '</dl>';
 }
 function revenueNote(stats) {
-  const fees = stats.estimatedOrders ? 'For charges with no reported fee yet, net revenue uses the estimate.' : '';
-  return `<p class="hint">Sandbox amounts in USD. Revenue counts film sales. Net revenue deducts Stripe processing fees and recorded refunds. Tips go to Dust Wave. The fee estimate uses the standard U.S. domestic card rate on the full payment. See Stripe for payouts and dispute adjustments. ${fees}</p>`;
+  const reported = stats.rentals + stats.purchases - stats.estimatedOrders;
+  const fees = reported ? `Stripe has reported ${usd.format(stats.reportedFees / 100)} in processing fees on ${reported} ${reported === 1 ? 'payment' : 'payments'}. ` : '';
+  const estimated = stats.estimatedOrders ? 'Net revenue uses the estimate while Stripe confirms the remaining fees. ' : '';
+  return `<p class="hint">Sandbox amounts in USD. Revenue counts film prices before refunds. Net revenue deducts processing fees and recorded refunds up to the film price. Tax charged includes any tax within the tip and is shown at purchase. The fee estimate uses the standard U.S. domestic card rate on the full charge. ${fees}${estimated}See Stripe for payouts and dispute adjustments.</p>`;
 }
 
 export function renderPlatformDashboard(csrf, report) {
@@ -247,7 +249,8 @@ export function renderPlatformDashboard(csrf, report) {
     <div class="workspace-intro">${platform ? '' : '<a href="/setup/admin">All filmmakers</a>'}
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
       <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films</p></div>
-    <section class="film-card"><h2>Overview</h2>${statsList(total, platformLabels)}${revenueNote(total)}</section>
+    <section class="film-card"><h2>Overview</h2>${statsList(total, platformLabels)}${revenueNote(total)}
+      ${total.transfersToReview ? '<p class="hint">Review refunded or disputed marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
     <section class="film-list"><h2>${platform ? 'Filmmakers' : 'Films'}</h2>
       ${tableRows ? `<div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
         <th scope="col">${platform ? 'Filmmaker' : 'Film'}</th>${platform ? '<th scope="col">Films</th>' : ''}${headers}</tr></thead><tbody>${tableRows}</tbody></table></div>` : '<p>No results yet.</p>'}

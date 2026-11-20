@@ -3,7 +3,8 @@ function estimateStripeFee(chargedCents) {
   return Math.round(chargedCents * 29 / 1000) + 30;
 }
 
-const metrics = ['previews', 'plays', 'rentals', 'purchases', 'revenue', 'netRevenue', 'estimatedFees', 'platformTips', 'estimatedOrders'];
+const metrics = ['previews', 'plays', 'rentals', 'purchases', 'revenue', 'netRevenue', 'estimatedFees', 'reportedFees',
+  'platformTips', 'taxCollected', 'estimatedOrders', 'transfersToReview'];
 
 export function sumFilmStats(films) {
   return Object.fromEntries(metrics.map(key => [key, films.reduce((sum, film) => sum + film.stats[key], 0)]));
@@ -12,14 +13,17 @@ export function sumFilmStats(films) {
 // Start from the selected films. A filmmaker dashboard and a single directory
 // page should only read the settled ledger entries for the films being shown.
 function filmStats(filter = '') {
-  const estimated = 'stream_fee_estimate(o.amount + o.tipAmount)';
+  const estimated = 'stream_fee_estimate(COALESCE(o.chargedTotalCents,o.amount + o.tipAmount))';
   return `SELECT f.owner, f.id, json_extract(f.metadata, '$.title') AS title,
     COALESCE(c.previews,0) AS previews, COALESCE(c.plays,0) AS plays,
     COUNT(*) FILTER (WHERE o.kind='rent') AS rentals, COUNT(*) FILTER (WHERE o.kind='buy') AS purchases,
-    COALESCE(SUM(o.amount),0) AS revenue, COALESCE(SUM(o.tipAmount),0) AS platformTips,
+    COALESCE(SUM(o.amount),0) AS revenue, COALESCE(SUM(o.tipAmount - COALESCE(o.tipTaxCents,0)),0) AS platformTips,
+    COALESCE(SUM(o.taxCents),0) AS taxCollected, COALESCE(SUM(o.stripeFeeCents),0) AS reportedFees,
     COALESCE(SUM(${estimated}) FILTER (WHERE o.intentId IS NOT NULL),0) AS estimatedFees,
     COUNT(*) FILTER (WHERE o.intentId IS NOT NULL AND o.stripeFeeCents IS NULL) AS estimatedOrders,
-    COALESCE(SUM(o.amount - o.refundedAmount - COALESCE(o.stripeFeeCents, ${estimated})),0) AS netRevenue
+    COUNT(*) FILTER (WHERE o.taxPolicy='marketplace-v1' AND COALESCE(o.transferId,'')!='no_proceeds' AND
+      (o.refundedAmount>0 OR o.revocationReason IS NOT NULL OR o.disputeStatus NOT IN ('won','prevented','warning_closed'))) AS transfersToReview,
+    COALESCE(SUM(o.amount - MIN(o.amount,o.refundedAmount) - COALESCE(o.stripeFeeCents, ${estimated})),0) AS netRevenue
     FROM films f LEFT JOIN film_counts c ON c.filmId=f.id
     LEFT JOIN viewer_test_orders o ON o.filmId=f.id AND o.owner=f.owner AND o.paidAt IS NOT NULL AND o.intentId IS NOT NULL
     ${filter} GROUP BY f.id`;
