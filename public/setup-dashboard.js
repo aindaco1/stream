@@ -1,6 +1,7 @@
 import { embedLayout, iframeCode, selectedFields } from './film-embed.js';
 
 for (const builder of document.querySelectorAll('.film-sharing')) {
+  const populated = builder.dataset.populated.split(',');
   const form = builder.querySelector('form');
   const frame = builder.querySelector('iframe');
   const code = builder.querySelector('.embed-code');
@@ -8,7 +9,7 @@ for (const builder of document.querySelectorAll('.film-sharing')) {
   const card = builder.closest('.dashboard-film');
   function update() {
     const selection = new FormData(form).getAll('include').join(',');
-    const layout = embedLayout(builder.dataset.player, selectedFields(selection));
+    const layout = embedLayout(builder.dataset.player, selectedFields(selection), populated);
     if (frame.src !== layout.src) frame.src = layout.src;
     frame.height = layout.height;
     code.value = iframeCode(layout, frame.title);

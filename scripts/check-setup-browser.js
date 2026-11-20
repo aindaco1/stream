@@ -443,7 +443,12 @@ try {
         const publicUrl = env.STREAM_VIEWER_ORIGIN + '/embed/' + privatePath.split('/').pop();
         assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl);
         assert.equal(await frame.locator('.film-info').count(), 0);
+        const blankField = sharing.getByRole('checkbox', { name: 'Filmmaker message' });
+        await blankField.check();
+        assert.equal(await sharing.locator('iframe').getAttribute('height'), '480');
+        await blankField.uncheck();
         await sharing.getByRole('checkbox', { name: 'Credits' }).check();
+        assert.equal(await sharing.locator('iframe').getAttribute('height'), '576');
         await frame.getByText('Directed by <Ada>', { exact: true }).waitFor();
         assert.equal(await frame.getByText('A short film.').count(), 0);
         const embedUrl = await sharing.locator('iframe').getAttribute('src');

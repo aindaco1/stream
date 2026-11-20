@@ -230,11 +230,12 @@ function filmInfoEditor(film, csrf, selection, saved) {
 
 function embedBuilder(film, url, selection) {
   const fields = selectedFields(selection);
-  const layout = embedLayout(url, fields);
+  const populated = infoFields.filter(({ name }) => film.info?.[name]).map(field => field.name);
+  const layout = embedLayout(url, fields, populated);
   const code = iframeCode(layout, film.title);
   const options = infoFields.map(field =>
     `<label><input type="checkbox" name="include" value="${field.name}"${fields.includes(field) ? ' checked' : ''}> ${field.label}</label>`).join('');
-  return `<section class="film-sharing" id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}">
+  return `<section class="film-sharing" id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}" data-populated="${populated.join(',')}">
     <h4>Embed this film</h4>
     <form method="get" action="/setup/dashboard#embed-${escapeHtml(film.id)}">${hidden('film', film.id)}
       <fieldset class="embed-options"><legend>Include in this embed</legend><p class="hint">Only fields with saved text will appear.</p><div class="film-actions">${options}</div></fieldset>
