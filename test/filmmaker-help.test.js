@@ -5,7 +5,8 @@ import { renderFilmmakerFaq, renderSetupCosts } from '../src/filmmaker-help.js';
 test('provider settings and public FAQ disclose the same provider rates and link to official terms', () => {
   const stripe = renderSetupCosts('stripe'), r2 = renderSetupCosts('r2');
   for (const view of [stripe,renderFilmmakerFaq()]) {
-    for (const text of ['U.S.', 'domestic card','2.9% + 30¢','0.5% of the full checkout total','custom pricing','https://stripe.com/us/pricing']) assert.ok(view.includes(text),text);
+    for (const text of ['U.S.', 'domestic card','2.9% + 30¢','0.5% of the full checkout total','custom pricing',
+      'You cover the share for the film', 'Dust Wave covers the share for the tip', 'once the actual fees are confirmed', 'https://stripe.com/us/pricing']) assert.ok(view.includes(text),text);
   }
   for (const view of [r2,renderFilmmakerFaq()]) {
     for (const text of ['10 GB of storage free','$0.015 per GB-month','bandwidth charge',
@@ -38,6 +39,6 @@ test('the FAQ explains marketplace tax and separates sandbox testing from live o
   assert.match(faq, /finish verification/);
   assert.match(faq, /picture-in-picture button on the video/);
   assert.match(faq, /test charge can show zero tax/);
-  assert.match(faq, /Before live sales.*live registrations.*filing and remittance/);
+  assert.match(faq, /registering and filing wherever it handles marketplace tax/);
   assert.match(faq, /https:\/\/docs\.stripe\.com\/tax\/testing/);
 });

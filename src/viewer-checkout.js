@@ -331,7 +331,9 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const confirmed = datedEvent ? paidEvent.created : now;
     const paidAt = order.paidAt ?? (useConfirmation ? confirmed : charge.created);
     if (paidAt < charge.created || paidAt > now || (!useConfirmation && paidAt !== charge.created)) throw mismatch();
-    const saved = store.reconcileViewerPayment(order,{intentId:intent.id,paidAt,stripeFeeCents:processingFee(order,charge,session.amount_total,applicationFee),...totals,...paymentState});
+    const stripeFeeCents = processingFee(order,charge,session.amount_total,applicationFee);
+    const saved = store.reconcileViewerPayment(order,{intentId:intent.id,paidAt,stripeFeeCents,
+      chargeBalanceId: stripeFeeCents === null ? null : charge.balance_transaction.id, ...totals,...paymentState});
     if (!saved) return;
     if (marketplace && !saved.transferId && !saved.revocationReason && !saved.refundedAmount) {
       try { await settleFilmmaker(key,saved,store,fetchImpl); }

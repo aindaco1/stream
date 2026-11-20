@@ -102,9 +102,9 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
       paidAt: Math.floor(Date.now() / 1000), refundedAmount: refund, disputeStatus: null, revocationReason: null, stripeFeeCents: kind === 'buy' ? 60 : null });
   }
   assert.deepEqual(store.dashboardFilms('Alice')[0].stats, { previews: 1, plays: 1, rentals: 1, purchases: 1, revenue: 600,
-    estimatedFees: 79, reportedFees: 60, netRevenue: 329, estimatedOrders: 1, platformTips: 40, taxCollected: 0, transfersToReview: 0 });
+    filmTaxFees: 0, tipTaxFees: 0, pendingTaxFees: 0, estimatedFees: 79, reportedFees: 60, netRevenue: 329, estimatedOrders: 1, platformTips: 40, taxCollected: 0, transfersToReview: 0 });
   assert.deepEqual(store.dashboardFilms('Benny')[0].stats, { previews: 0, plays: 0, rentals: 0, purchases: 0, revenue: 0,
-    estimatedFees: 0, reportedFees: 0, netRevenue: 0, estimatedOrders: 0, platformTips: 0, taxCollected: 0, transfersToReview: 0 });
+    filmTaxFees: 0, tipTaxFees: 0, pendingTaxFees: 0, estimatedFees: 0, reportedFees: 0, netRevenue: 0, estimatedOrders: 0, platformTips: 0, taxCollected: 0, transfersToReview: 0 });
   const platform = store.platformReport(null);
   assert.equal(platform.total.films, 2);
   assert.equal(platform.total.platformTips, 40);

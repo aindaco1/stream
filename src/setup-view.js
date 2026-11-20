@@ -210,10 +210,10 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
 
 const statsLabels = {
   previews: 'Preview starts', plays: 'Paid plays', rentals: 'Rentals', purchases: 'Purchases',
-  revenue: 'Revenue', netRevenue: 'Net Revenue', estimatedFees: 'Estimated Stripe fees', taxCollected: 'Tax charged'
+  revenue: 'Revenue', netRevenue: 'Net Revenue', estimatedFees: 'Estimated card fees', filmTaxFees: 'Film share of Stripe Tax fees', taxCollected: 'Tax charged'
 };
-const platformLabels = { ...statsLabels, platformTips: 'Platform tips after tax', transfersToReview: 'Transfers to review' };
-const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'platformTips', 'taxCollected']);
+const platformLabels = { ...statsLabels, platformTips: 'Platform tips after tax and fees', tipTaxFees: 'Tip share of Stripe Tax fees', transfersToReview: 'Transfers to review' };
+const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'filmTaxFees', 'tipTaxFees', 'platformTips', 'taxCollected']);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const displayStat = (stats, key) => moneyFields.has(key) ? usd.format(stats[key] / 100) : String(stats[key]);
 function statsList(stats, labels = statsLabels) {
@@ -225,7 +225,8 @@ function revenueNote(stats) {
   const reported = stats.rentals + stats.purchases - stats.estimatedOrders;
   const fees = reported ? `Stripe has reported ${usd.format(stats.reportedFees / 100)} in processing fees on ${reported} ${reported === 1 ? 'payment' : 'payments'}. ` : '';
   const estimated = stats.estimatedOrders ? 'Net revenue uses the estimate while Stripe confirms the remaining fees. ' : '';
-  return `<p class="hint">Sandbox amounts in USD. Revenue counts film prices before refunds. Net revenue deducts processing fees and recorded refunds up to the film price. Tax charged includes any tax within the tip and is shown at purchase. The fee estimate uses the standard U.S. domestic card rate on the full charge. ${fees}${estimated}See Stripe for payouts and dispute adjustments.</p>`;
+  const pending = stats.pendingTaxFees ? `Net revenue is provisional for ${stats.pendingTaxFees} ${stats.pendingTaxFees === 1 ? 'payment' : 'payments'} awaiting the Stripe Tax fee. ` : '';
+  return `<p class="hint">Sandbox amounts in USD. Revenue counts film prices before refunds. Net revenue deducts card fees, the film’s confirmed share of Stripe Tax fees and recorded refunds up to the film price. Tax charged includes any tax within the tip and is shown at purchase. The fee estimate uses the standard U.S. domestic card rate on the full charge. ${fees}${estimated}${pending}See Stripe for payouts and dispute adjustments.</p>`;
 }
 
 export function renderPlatformDashboard(csrf, report) {

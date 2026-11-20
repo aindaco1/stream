@@ -14,6 +14,7 @@
     "test": "node --test test/*.test.js",
     "inspect": "node --env-file-if-exists=.env scripts/inspect.js",
     "check:browser": "node scripts/check-browser.js",
+    "tax:fees": "node --env-file-if-exists=.env scripts/tax-fees.js",
     "invite": "node --env-file-if-exists=.env scripts/invite.js",
     "check:setup": "node scripts/check-setup-browser.js",
     "viewers": "node --env-file-if-exists=.env src/viewer-server.js",
@@ -24,6 +25,7 @@
     "@dustwave/tax-core": "file:shared/dust-wave-platform/packages/tax-core",
     "@dustwave/worker-core": "file:shared/dust-wave-platform/packages/worker-core",
     "aws4fetch": "1.0.20",
+    "csv-parse": "7.0.3",
     "hls.js": "1.7.4",
     "mediabunny": "1.66.2",
     "sharp": "0.35.5"

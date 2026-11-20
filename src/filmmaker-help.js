@@ -18,7 +18,7 @@ const pricing = {
 
 function feeCopy(provider, expanded = false) {
   const { summary, example, details, url, link } = pricing[provider];
-  const taxPricing = provider === 'stripe' ? '<p>When Stream uses Stripe Tax, Stripe lists a separate Tax Basic fee of 0.5% of the full checkout total where Dust Wave is registered to collect. Dust Wave covers that fee. Stream calculates tax itself for eligible New Mexico orders, which saves that fee. The card processing fee still applies. <a href="https://stripe.com/tax/pricing">Stripe Tax pricing</a></p>' : '';
+  const taxPricing = provider === 'stripe' ? '<p>When Stream uses Stripe Tax, Stripe lists a separate Tax Basic fee of 0.5% of the full checkout total where Dust Wave is registered to collect. You cover the share for the film, and Dust Wave covers the share for the tip. We use each line’s total including tax. Your viewer gets access as soon as payment clears. We send your transfer once the actual fees are confirmed, which can take several days. Stream calculates tax itself for eligible New Mexico orders, which saves that fee. The card processing fee still applies. <a href="https://stripe.com/tax/pricing">Stripe Tax pricing</a></p>' : '';
   return `<p>${summary} <a href="${url}">${link}</a></p>${taxPricing}${expanded ? `<p>${example}</p>` : ''}
     ${expanded && details ? `<details><summary>How does Cloudflare count requests?</summary><p>${details}</p></details>` : ''}`;
 }
@@ -40,7 +40,7 @@ export function renderFilmmakerFaq() {
       <p>${firstSale} Viewers can pay as soon as you publish.</p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
-      <p>Stream is free. You set the film price. For new marketplace orders, Dust Wave transfers the film price less the verified card processing fee to your connected Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. The processing fee applies to the full charge, including tax and tip.</p>
+      <p>Stream is free. You set the film price. For new marketplace orders, Dust Wave transfers the film price less the card fee and your share of any Stripe Tax fee to your connected Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. The processing fee applies to the full charge, including tax and tip.</p>
       <h3>${pricing.stripe.heading}</h3>${feeCopy('stripe', true)}
       <h3>${pricing.r2.heading}</h3>${feeCopy('r2', true)}
     </section>
@@ -48,7 +48,7 @@ export function renderFilmmakerFaq() {
       <p>Viewers see the total before they pay. Any film tax is added to your price. Any tax on an optional tip is included in the tip amount the viewer selects. It all goes through as one payment.</p>
       <p>In New Mexico, Stream looks up the local gross receipts tax rate using the address where the viewer will watch. If Stream can’t match the address, Stripe asks the viewer to confirm or correct it. Elsewhere, Stripe Tax uses the viewer’s billing address.</p>
       <p>For example, in our downtown Albuquerque test, a 99¢ rental with a 10¢ tip came to $1.17. The viewer paid 8¢ in tax on the film, and 1¢ of the tip went toward tax. Dust Wave’s pilot treats the tip as taxable at the film’s rate.</p>
-      <p>Dust Wave handles checkout tax as the marketplace in the pilot. A test charge can show zero tax where no sandbox registration applies. Before live sales, Dust Wave needs to set up any required live registrations and arrange filing and remittance. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for platforms and marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
+      <p>Dust Wave handles checkout tax as the marketplace in the pilot. A test charge can show zero tax where no sandbox registration applies. Dust Wave is responsible for registering and filing wherever it handles marketplace tax. This includes taxable New Mexico film sales even when the viewer leaves no tip. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for platforms and marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
     </section>
     <section><h2>What can I upload?</h2>
       <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
@@ -74,7 +74,7 @@ export function renderFilmmakerFaq() {
       <p>Save the private access link after checkout. Open it on your other device and keep it private. If email recovery is available, choose <strong>Restore access</strong> in the player and enter the email you used to pay. A rental ends at the same time on every device.</p>
     </section>
     <section><h2>What do the numbers in my dashboard mean?</h2>
-      <p>See preview starts, paid plays, rentals and purchases for each film. Repeat plays count. Revenue shows film prices before refunds. Tax and optional tips are tracked separately. Net revenue deducts processing fees and recorded refunds up to the film price. When Stripe hasn’t reported a fee, Stream estimates it on the full charge.</p>
+      <p>See preview starts, paid plays, rentals and purchases for each film. Repeat plays count. Revenue shows film prices before refunds. Tax and optional tips are tracked separately. Net revenue deducts card fees, your share of confirmed Stripe Tax fees, and recorded refunds up to the film price. The Dashboard marks payments awaiting a tax fee.</p>
     </section>
     <section><h2>What if I take my film offline?</h2>
       <p>Unpublishing stops free previews and new sales. People who bought the film or have time left on a rental can still watch. Keep the original in your bucket so their access keeps working.</p>

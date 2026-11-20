@@ -4,7 +4,7 @@ function estimateStripeFee(chargedCents) {
 }
 
 const metrics = ['previews', 'plays', 'rentals', 'purchases', 'revenue', 'netRevenue', 'estimatedFees', 'reportedFees',
-  'platformTips', 'taxCollected', 'estimatedOrders', 'transfersToReview'];
+  'filmTaxFees', 'tipTaxFees', 'pendingTaxFees', 'platformTips', 'taxCollected', 'estimatedOrders', 'transfersToReview'];
 
 export function sumFilmStats(films) {
   return Object.fromEntries(metrics.map(key => [key, films.reduce((sum, film) => sum + film.stats[key], 0)]));
@@ -17,13 +17,16 @@ function filmStats(filter = '') {
   return `SELECT f.owner, f.id, json_extract(f.metadata, '$.title') AS title,
     COALESCE(c.previews,0) AS previews, COALESCE(c.plays,0) AS plays,
     COUNT(*) FILTER (WHERE o.kind='rent') AS rentals, COUNT(*) FILTER (WHERE o.kind='buy') AS purchases,
-    COALESCE(SUM(o.amount),0) AS revenue, COALESCE(SUM(o.tipAmount - COALESCE(o.tipTaxCents,0)),0) AS platformTips,
-    COALESCE(SUM(o.taxCents),0) AS taxCollected, COALESCE(SUM(o.stripeFeeCents),0) AS reportedFees,
+    COALESCE(SUM(o.amount),0) AS revenue, COALESCE(SUM(o.tipAmount - COALESCE(o.tipTaxCents,0) - (COALESCE(o.taxBasicFeeCents,0) - o.filmTaxFeeCents)),0) AS platformTips,
+    COALESCE(SUM(o.filmTaxFeeCents),0) AS filmTaxFees,
+    COALESCE(SUM(o.taxBasicFeeCents - o.filmTaxFeeCents),0) AS tipTaxFees,
+    COUNT(*) FILTER (WHERE o.paidAt IS NOT NULL AND o.taxBasicFeeCents IS NULL) AS pendingTaxFees,
+    COALESCE(SUM(o.taxCents),0) AS taxCollected, COALESCE(SUM(o.cardProcessingCents),0) AS reportedFees,
     COALESCE(SUM(${estimated}) FILTER (WHERE o.intentId IS NOT NULL),0) AS estimatedFees,
     COUNT(*) FILTER (WHERE o.intentId IS NOT NULL AND o.stripeFeeCents IS NULL) AS estimatedOrders,
     COUNT(*) FILTER (WHERE o.taxPolicy='marketplace-v1' AND COALESCE(o.transferId,'')!='no_proceeds' AND
       (o.refundedAmount>0 OR o.revocationReason IS NOT NULL OR o.disputeStatus NOT IN ('won','prevented','warning_closed'))) AS transfersToReview,
-    COALESCE(SUM(o.amount - MIN(o.amount,o.refundedAmount) - COALESCE(o.stripeFeeCents, ${estimated})),0) AS netRevenue
+    COALESCE(SUM(o.amount - MIN(o.amount,o.refundedAmount) - COALESCE(o.cardProcessingCents, ${estimated}) - o.filmTaxFeeCents),0) AS netRevenue
     FROM films f LEFT JOIN film_counts c ON c.filmId=f.id
     LEFT JOIN viewer_test_orders o ON o.filmId=f.id AND o.owner=f.owner AND o.paidAt IS NOT NULL AND o.intentId IS NOT NULL
     ${filter} GROUP BY f.id`;
