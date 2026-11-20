@@ -1,0 +1,17 @@
+:root {
+  color-scheme: dark;
+  --ink: #f0f0f0;
+  --muted: #bcbcbc;
+  --line: #484848;
+  --paper: #101010;
+  --accent: #f5f5f5;
+  --on-accent: #111;
+  --accent-hover: #d6d6d6;
+  --surface: #1b1b1b;
+  --subtle: #292929;
+  --field-border: #828282;
+  --focus: #9bc9ff;
+  --error-text: #ffd3cb;
+  --error-border: #f29d8e;
+  --error-surface: #351e1c;
+}
