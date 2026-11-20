@@ -69,7 +69,9 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.deepEqual(catalog.list(), []);
   currentHead = head;
   const settings = { rentPrice: '2.00', buyPrice: '4.00', rentalHours: '24', previewSeconds: '5' };
-  assert.equal((await ada.post('settings', { ...settings, previewSeconds: '12' })).status, 422);
+  const invalidPreview = await ada.post('settings', { ...settings, previewSeconds: '12' });
+  assert.equal(invalidPreview.status, 422);
+  assert.ok((await invalidPreview.text()).includes('id="' + ada.id + '" open>'), 'Show the film whose settings need correction');
   assert.equal((await ada.post('settings', { ...settings, rentalHours: '721' })).status, 422);
   assert.equal((await ada.post('settings', settings)).status, 303);
   assert.equal((await ada.post('publication', { visibility: 'public' })).status, 303);

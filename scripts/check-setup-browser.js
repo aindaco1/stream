@@ -532,6 +532,10 @@ try {
         await page.goto(origin + '/setup/sign-in');
         await page.locator('header').getByRole('link', { name: 'FAQ', exact: true }).click();
         await page.getByRole('heading', { name: 'What does it cost?' }).waitFor();
+        const footer = page.getByRole('contentinfo');
+        assert.equal(await footer.getByRole('link').count(), 1);
+        assert.ok(await footer.getByText(/DUST WAVE/).isVisible());
+        await footer.locator('img').evaluate(image => image.decode());
         assert.ok(await page.getByRole('link', { name: 'Cloudflare R2 pricing' }).isVisible());
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       }
