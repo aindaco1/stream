@@ -9,7 +9,16 @@
 </head>
 <body data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
   <main aria-labelledby="film-title">
-    <video controls playsinline preload="none"{{poster}} aria-label="{{title}}"></video>
+    <div class="video-stage">
+      <video controls playsinline preload="none"{{poster}} aria-label="{{title}}"></video>
+      <div class="video-tools" role="group" aria-label="Video options">
+        <label id="subtitle-control" class="video-tool" title="Subtitles" hidden>
+          <span class="caption-icon" aria-hidden="true">CC</span>
+          <select id="subtitles" aria-label="Subtitles"><option value="">Off</option></select>
+        </label>
+        <button id="picture-in-picture" class="video-tool" type="button" aria-label="Picture-in-picture" aria-pressed="false" title="Picture-in-picture" hidden><span class="pip-icon" aria-hidden="true"></span></button>
+      </div>
+    </div>
     <div class="details">
       <div><h1 id="film-title">{{title}}</h1></div>
       <button type="button" id="play">Play {{preview}}-second preview</button>
@@ -28,7 +37,6 @@
         <button type="button" id="check-payment" class="secondary" hidden>Check payment</button>
       </div>
     </section>
-    <label id="subtitle-control" hidden>Subtitles <select id="subtitles"><option value="">Off</option></select></label>
     <section id="payment" aria-labelledby="checkout-heading" hidden>
       <div id="checkout-scroll">
         <header class="payment-header">

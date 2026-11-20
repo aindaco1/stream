@@ -13,6 +13,8 @@ import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
+  ['/video-controls.js', ['../public/video-controls.js', 'text/javascript']],
+  ['/select-focus.js', ['../public/select-focus.js', 'text/javascript']],
   ['/subtitles.js', ['../public/subtitles.js', 'text/javascript']],
   ['/checkout.js', ['../public/checkout.js', 'text/javascript']],
   ['/payment.js', ['../public/payment.js', 'text/javascript']],
@@ -205,7 +207,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       if (catalog && read && (path === '/screening' || path === '/')) {
         const embeds = catalog.list().map(({ id, title }) =>
           '<iframe src="/embed/' + encodeURIComponent(id) + '" title="' + escapeHtml(title) +
-          '" loading="lazy" allow="autoplay; fullscreen; encrypted-media; payment" allowfullscreen></iframe>').join('\n');
+          '" loading="lazy" allow="autoplay; fullscreen; encrypted-media; payment; picture-in-picture" allowfullscreen></iframe>').join('\n');
         return send(200, 'text/html; charset=utf-8', screening.replace('{{faqLink}}', faqLink()).replace('{{footer}}', siteFooter('/screening')).replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
           { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
       }

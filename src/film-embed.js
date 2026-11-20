@@ -15,18 +15,22 @@ export function embedLayout(base, fields, populated) {
   const selection = fields.map(field => field.name).join(',');
   if (selection) url.searchParams.set('show', selection);
   else url.searchParams.delete('show');
-  return { src: url.href, height: 480 + fields.filter(field => populated.includes(field.name)).length * 48 };
+  const populatedCount = fields.filter(field => populated.includes(field.name)).length;
+  return { src: url.href, height: 480 + populatedCount * 48, populatedCount };
 }
 
 const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => entities[char]);
 
 export function iframeCode({ src, height }, title, responsive = true) {
-  return `<iframe src="${escapeHtml(src)}" title="${escapeHtml(title)}" width="640" height="${height}" ${responsive ? 'style="width:100%;border:0" ' : ''}loading="lazy" allow="autoplay; payment; fullscreen" allowfullscreen></iframe>`;
+  return `<iframe src="${escapeHtml(src)}" title="${escapeHtml(title)}" width="640" height="${height}" ${responsive ? 'style="width:100%;border:0" ' : ''}loading="lazy" allow="autoplay; payment; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
 }
 
 export function renderFilmInfo(info, fields) {
-  const rows = fields.filter(({ name }) => info?.[name]).map(({ name, label }) =>
-    `<div><dt>${label}</dt><dd>${escapeHtml(info[name])}</dd></div>`);
-  return rows.length ? '<dl class="film-info">' + rows.join('') + '</dl>' : '';
+  const visible = ['synopsis', 'message', 'credits'].filter(name =>
+    info?.[name] && fields.some(field => field.name === name));
+  if (!visible.length) return '';
+  const paragraphs = visible.map(name =>
+    `<p class="film-${name}">${escapeHtml(info[name])}</p>`);
+  return '<section class="film-info" aria-label="About the film">' + paragraphs.join('') + '</section>';
 }

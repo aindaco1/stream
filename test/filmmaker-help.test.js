@@ -32,6 +32,11 @@ test('the FAQ explains marketplace tax and separates sandbox testing from live o
   const faq = renderFilmmakerFaq();
   assert.match(faq, /film tax is added to your price/);
   assert.match(faq, /tax on an optional tip is included in the tip amount/);
+  assert.match(faq, /99¢ rental with a 10¢ tip came to \$1\.17/);
+  assert.match(faq, /Stripe asks the viewer to confirm or correct it/);
+  assert.match(faq, /the viewer’s billing address/);
+  assert.match(faq, /finish verification/);
+  assert.match(faq, /picture-in-picture button on the video/);
   assert.match(faq, /test charge can show zero tax/);
   assert.match(faq, /Before live sales.*live registrations.*filing and remittance/);
   assert.match(faq, /https:\/\/docs\.stripe\.com\/tax\/testing/);
