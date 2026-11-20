@@ -34,7 +34,7 @@ export function renderFilmmakerFaq() {
       <p>The pilot uses test cards, so no money changes hands at checkout. Your Cloudflare account still uses real storage.</p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
-      <p>Stream is free. You set the film price and it goes to your Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at zero. Stripe calculates its processing fee on the total, including the tip.</p>
+      <p>Stream is free. You set the film price and it goes to your Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. Stripe calculates its processing fee on the total, including the tip.</p>
       <h3>${pricing.stripe.heading}</h3>${feeCopy('stripe', true)}
       <h3>${pricing.r2.heading}</h3>${feeCopy('r2', true)}
     </section>

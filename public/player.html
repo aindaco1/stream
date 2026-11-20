@@ -21,10 +21,10 @@
         <button type="button" id="buy" hidden>Buy</button>
         <button type="button" id="check-payment" class="secondary" hidden>Check payment</button>
       </div>
-      <details id="tip-choice"><summary>Support Stream (optional)</summary>
-        <label for="tip-percent">Tip for Dust Wave <output id="tip-value" for="tip-percent">0%</output></label>
-        <input type="range" id="tip-percent" min="0" max="15" step="1" value="0" aria-describedby="tip-note">
-        <p id="tip-note">Helps pay for hosting and development.</p>
+      <details id="tip-choice"><summary>Optional Dust Wave tip · <span id="tip-value"></span></summary>
+        <label for="tip-percent">Tip percentage</label>
+        <input type="range" id="tip-percent" min="0" max="15" step="1" value="10" aria-describedby="tip-note">
+        <p id="tip-note">Tips help pay for hosting and development. Choose 0% to skip.</p>
       </details>
     </section>
     <label id="subtitle-control" hidden>Subtitles <select id="subtitles"><option value="">Off</option></select></label>

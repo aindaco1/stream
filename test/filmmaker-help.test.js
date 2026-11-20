@@ -20,7 +20,7 @@ test('provider settings and public FAQ disclose the same provider rates and link
 test('the public FAQ explains costs, the pilot and how to sell films', () => {
   const faq = renderFilmmakerFaq();
   assert.equal(faq.match(/<h1>/g)?.length, 1);
-  for (const text of ['<h1>FAQ</h1>', '$0.99','$0.33','$0.66','20 GB','$0.15','test cards','real storage','Sales are final','optional tip']) {
+  for (const text of ['<h1>FAQ</h1>', '$0.99','$0.33','$0.66','20 GB','$0.15','test cards','real storage','Sales are final','optional tip','10% of the film price','0% to skip it']) {
     assert.ok(faq.includes(text), text);
   }
   assert.doesNotMatch(faq, /<form\b|<script\b/);
