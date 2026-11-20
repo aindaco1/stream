@@ -40,11 +40,22 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
     store.saveFilm(name, bucket, { id, title, objectKey: 'private.mp4', revision: revisionFor(head), duration: 12,
       rights: { acceptedAt: new Date().toISOString(), version: 'v1', statement: 'Confirmed' } });
     const cookie = 'stream_setup=' + token;
-    return { id, account, get: () => fetch(origin + '/setup/dashboard', { headers: { Cookie: cookie } }).then(r => r.text()),
+    return { id, account, cookie, csrf: session.csrf, get: () => fetch(origin + '/setup/dashboard', { headers: { Cookie: cookie } }).then(r => r.text()),
       post(route, data) { return fetch(origin + '/setup/dashboard/' + route, { redirect: 'manual', method: 'POST',
         headers: { Origin: origin, Cookie: cookie }, body: new URLSearchParams({ csrf: session.csrf, filmId: id, ...data }) }); } };
   }
   const ada = owner('Alice', 'My <film>'), ben = owner('Benny', 'Other private title');
+  const thumb = origin + '/setup/thumbnail/' + ada.id;
+  for (const resource of ['', '/source.jpg', '/poster.jpg']) {
+    assert.equal((await fetch(thumb + resource)).status, 401);
+    assert.equal((await fetch(thumb + resource, { headers: { Cookie: ben.cookie } })).status, 404);
+  }
+  const thumbPost = { Cookie: ada.cookie, Origin: origin, 'X-Stream-CSRF': ada.csrf,
+    'Content-Type': 'application/octet-stream', 'X-Thumbnail-Action': 'save' };
+  for (const headers of [{ ...thumbPost, Origin: 'https://unrelated.example' }, { ...thumbPost, 'X-Stream-CSRF': 'old' }]) {
+    assert.equal((await fetch(thumb, { method: 'POST', headers })).status, 403);
+  }
+  assert.equal((await fetch(thumb, { method: 'POST', headers: { ...thumbPost, Cookie: ben.cookie, 'X-Stream-CSRF': ben.csrf } })).status, 404);
   const unsigned = await fetch(origin + '/setup/dashboard', { redirect: 'manual' });
   assert.equal(unsigned.status, 303);
   assert.equal(catalog.get(ada.id), undefined);

@@ -48,16 +48,16 @@ export function createFileSource(path) {
   };
 }
 
-function r2Request({ accountId, bucket, jurisdiction = 'default', accessKeyId, secretAccessKey }, suffix, fetcher) {
+export function r2Request({ accountId, bucket, jurisdiction = 'default', accessKeyId, secretAccessKey, sessionToken }, suffix, fetcher) {
   if (!/^[a-f0-9]{32}$/.test(accountId) || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket) ||
       !['default', 'eu', 'us', 'fedramp'].includes(jurisdiction) || !accessKeyId || !secretAccessKey) {
     throw new Error('Invalid private R2 configuration.');
   }
   const region = jurisdiction === 'default' ? '' : '.' + jurisdiction;
   const url = 'https://' + accountId + region + '.r2.cloudflarestorage.com/' + bucket + suffix;
-  const client = new AwsClient({ accessKeyId, secretAccessKey, service: 's3', region: 'auto' });
-  return async (method, headers, signal = AbortSignal.timeout(15000)) => fetcher(await client.sign(url, {
-    method, headers, redirect: 'error', signal, aws: { allHeaders: true }
+  const client = new AwsClient({ accessKeyId, secretAccessKey, sessionToken, service: 's3', region: 'auto' });
+  return async (method, headers, signal = AbortSignal.timeout(15000), body) => fetcher(await client.sign(url, {
+    method, headers, body, redirect: 'error', signal, aws: { allHeaders: true }
   }));
 }
 

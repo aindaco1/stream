@@ -15,7 +15,7 @@ export function embedLayout(base, fields, populated) {
   const selection = fields.map(field => field.name).join(',');
   if (selection) url.searchParams.set('show', selection);
   else url.searchParams.delete('show');
-  return { src: url.href, height: 480 + fields.filter(field => populated.includes(field.name)).length * 96 };
+  return { src: url.href, height: 480 + fields.filter(field => populated.includes(field.name)).length * 48 };
 }
 
 const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };

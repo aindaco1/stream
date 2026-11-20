@@ -1,4 +1,5 @@
 import { openFilm, revisionFor } from './media.js';
+import { createThumbnails } from './thumbnails.js';
 import { savedFilmScope } from './rental.js';
 import { BLOCK_SIZE, createR2Source } from './source.js';
 import { filmPrices, previewSeconds, rentalHours } from './prices.js';
@@ -29,7 +30,7 @@ function parseList(raw) {
 // Only list() produces public metadata. get() and verify() return internal,
 // server-side bindings for playback and connected-account checkout.
 export function createPublicFilms({ store, env = process.env, authority, platformAccount,
-  sourceFor = createR2Source, openMedia = openFilm }) {
+  sourceFor = createR2Source, openMedia = openFilm, thumbnails = createThumbnails(store) }) {
   let raw = env.STREAM_PUBLIC_FILMS;
   let configured = parseList(raw);
   function publications() {
@@ -68,7 +69,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     if (!ready && !(entitled && store.priorOrderOwner(id) === owner)) return;
     // A null recipient is an existing-order lookup only. Use the claimed
     // seller recorded on that order, even while this filmmaker reconnects.
-    const spec = Object.freeze({ id, title: film.title, info: film.info, owner, account: entitled ? null : account, scope: savedFilmScope(owner, id),
+    const spec = Object.freeze({ id, title: film.title, info: film.info, thumbnail: film.thumbnail, owner, account: entitled ? null : account, scope: savedFilmScope(owner, id),
       revision: film.revision, authority, prices, duration: film.duration, previewSeconds: seconds, rentalHours: hours });
     return { spec, bucket: film.bucket, objectKey: film.objectKey };
   }
@@ -143,6 +144,12 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
         if (entry) films.push({ id, title: entry.spec.title });
       }
       return films;
+    },
+    async poster(id) {
+      const entry = record(id);
+      if (!entry?.spec.thumbnail) return;
+      const bytes = await thumbnails.poster(entry.spec.owner, { ...entry.spec, bucket: entry.bucket, objectKey: entry.objectKey });
+      if (record(id)?.spec.thumbnail === entry.spec.thumbnail) return bytes;
     },
     async verify(id, options) {
       try {

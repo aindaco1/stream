@@ -59,6 +59,7 @@ export function openSetupStore(directory) {
     CREATE TABLE IF NOT EXISTS claims (mode TEXT NOT NULL, account TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(mode, account));
     CREATE TABLE IF NOT EXISTS buckets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, config TEXT NOT NULL, sealed BLOB NOT NULL);
     CREATE TABLE IF NOT EXISTS films (id TEXT PRIMARY KEY, owner TEXT NOT NULL, bucket_id TEXT NOT NULL, metadata TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS thumbnail_edits (filmId TEXT PRIMARY KEY, lock TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS film_publication (
       filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, published INTEGER NOT NULL CHECK (published IN (0,1))
     );
@@ -366,6 +367,29 @@ export function openSetupStore(directory) {
       return sql("UPDATE films SET metadata=json_set(metadata,'$.info',json(?)) WHERE owner=? AND id=?")
         .run(JSON.stringify(info), owner, id).changes === 1;
     },
+    beginThumbnailEdit(owner, id) {
+      const lock = randomUUID(), now = Date.now();
+      const acquired = sql(`INSERT INTO thumbnail_edits SELECT id,?,? FROM films WHERE owner=? AND id=?
+        ON CONFLICT(filmId) DO UPDATE SET lock=excluded.lock, expires=excluded.expires WHERE expires < ?`)
+        .run(lock, now + 120000, owner, id, now).changes;
+      return acquired ? lock : null;
+    },
+    markThumbnailPending(owner, id) {
+      sql("UPDATE films SET metadata=json_set(metadata,'$.thumbnail','pending') WHERE owner=? AND id=?").run(owner, id);
+    },
+    reconcileThumbnail(owner, id, version) {
+      sql(`UPDATE films SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?
+        AND json_extract(metadata,'$.thumbnail')='pending'
+        AND NOT EXISTS (SELECT 1 FROM thumbnail_edits WHERE filmId=? AND expires>=?)`)
+        .run(version, owner, id, id, Date.now());
+    },
+    finishThumbnailEdit(owner, id, lock, version) {
+      transaction(() => {
+        if (sql('DELETE FROM thumbnail_edits WHERE filmId=? AND lock=?').run(id, lock).changes && version !== undefined) {
+          sql("UPDATE films SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?").run(version, owner, id);
+        }
+      });
+    },
     setFilmPublication(owner, id, published) {
       return transaction(() => {
         const changed = sql(`INSERT INTO film_publication (filmId,owner,published) SELECT id,owner,? FROM films WHERE id=? AND owner=?
@@ -409,8 +433,8 @@ export function openSetupStore(directory) {
           WHERE owner=? AND intentId IS NOT NULL AND paidAt IS NOT NULL GROUP BY filmId) p ON p.filmId=f.id
         WHERE f.owner=? ORDER BY f.rowid DESC`).all(owner, owner);
       return rows.map(({ metadata, ...stats }) => {
-        const { id, title, prices, previewSeconds, rentalHours, duration, info } = JSON.parse(metadata);
-        return { id, title, prices, previewSeconds, rentalHours, duration, info, stats };
+        const { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail } = JSON.parse(metadata);
+        return { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail, stats };
       });
     },
     films(owner) {

@@ -8,6 +8,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createPublicFilms } from '../src/public-films.js';
+import sharp from 'sharp';
+import { createThumbnails } from '../src/thumbnails.js';
+import { thumbnailBucket, testWriterId, testWriterSecret } from '../test/fixtures/thumbnail-r2.js';
 import { createRentalAuthority } from '../src/rental.js';
 import { chromium } from 'playwright';
 import { makeServer } from '../src/server.js';
@@ -101,6 +104,48 @@ async function signIn(page, origin, owner) {
   await page.getByRole('heading', { name: 'Setup', exact: true }).waitFor();
 }
 
+async function checkThumbnails(page, publicUrl, fixtureBucket) {
+  const image = await sharp({ create: { width: 480, height: 480, channels: 3, background: '#526582' } }).png().toBuffer();
+  const posterUrl = publicUrl.replace('/embed/', '/film/') + '/thumbnail.jpg';
+  const privateRoute = '/setup/thumbnail/' + publicUrl.split('/').pop();
+  const edit = page.getByRole('link', { name: 'Edit thumbnail' });
+  await page.getByRole('link', { name: 'Add thumbnail' }).click();
+  await page.locator('input[type=file]').setInputFiles({ name: 'poster.png', mimeType: 'image/png', buffer: image });
+  await page.getByLabel('Access Key ID').fill(testWriterId);
+  await page.getByLabel('Secret Access Key').fill(testWriterSecret);
+  await page.waitForFunction(() => !document.querySelector('.thumbnail-editor [type=submit]').disabled || document.querySelector('.thumbnail-editor [role=status]').textContent);
+  assert.equal(await page.locator('.thumbnail-editor [role=status]').textContent(), '');
+  await page.getByRole('button', { name: 'Save thumbnail' }).click();
+  await edit.waitFor();
+  const view = page.locator('.film-sharing iframe').contentFrame();
+  await view.locator('video[poster]').waitFor();
+  assert.ok(!(await view.locator('video').getAttribute('poster')).includes('cloudflare'));
+  const first = await page.request.get(posterUrl);
+  assert.equal(first.status(), 200);
+  assert.equal((await sharp(await first.body()).metadata()).width, 480);
+  await edit.click();
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.locator('canvas').waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.equal(await page.locator('.thumbnail-auth').evaluate(el => el.open), false);
+  await page.getByLabel('Zoom').fill('200');
+  await page.getByRole('button', { name: 'Save thumbnail' }).click();
+  await edit.waitFor();
+  const cropped = await page.request.get(posterUrl);
+  assert.equal((await sharp(await cropped.body()).metadata()).width, 240);
+  await page.getByRole('button', { name: 'Unpublish film' }).click();
+  await page.getByRole('button', { name: 'Publish film' }).waitFor();
+  assert.equal((await page.request.get(posterUrl)).status(), 404);
+  assert.equal((await page.request.get(new URL(privateRoute + '/source.jpg', page.url()).href)).status(), 200);
+  await edit.click();
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Delete thumbnail' }).click();
+  await page.getByRole('link', { name: 'Add thumbnail' }).waitFor();
+  assert.equal(fixtureBucket.objects.size, 0);
+  await page.getByRole('button', { name: 'Publish film' }).click();
+  await view.locator('video:not([poster])').waitFor();
+  assert.equal((await page.request.get(posterUrl)).status(), 404);
+}
 async function openWorkspace(page, name) {
   if (await page.getByRole('heading', { name, exact: true, level: 1 }).isVisible()) return;
   const menu = page.locator('.workspace-nav select');
@@ -326,7 +371,8 @@ try {
   const generated = spawnSync(process.execPath, ['scripts/fixture.js', fixture], { stdio: 'pipe' });
   assert.equal(generated.status, 0, 'Generate the synthetic clip using FFmpeg');
   const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' };
-  setup = await createSetup({
+  const artwork = thumbnailBucket();
+  setup = await createSetup({ thumbnailFetch: artwork.fetcher,
     directory: path.join(temporary, 'state'), stripe, env,
     async resolveBucket({ bucketUrl: location, privateConfirmed, tokenValue, accessKeyId, secretAccessKey }) {
       assert.equal(location, bucketUrl);
@@ -349,7 +395,7 @@ try {
       return createFileSource(fixture);
     }
   });
-  const catalog = createPublicFilms({ store: setup.store, env, authority: createRentalAuthority(randomBytes(32)) });
+  const catalog = createPublicFilms({ store: setup.store, env, thumbnails: createThumbnails(setup.store, artwork.fetcher), authority: createRentalAuthority(randomBytes(32)) });
   viewer = await makeServer(null, { catalog });
   await new Promise(resolve => viewer.listen(0, '127.0.0.1', resolve));
   env.STREAM_VIEWER_ORIGIN = 'http://127.0.0.1:' + viewer.address().port;
@@ -381,6 +427,7 @@ try {
         return route.abort();
       });
       const page = await context.newPage();
+      page.on('pageerror', e => trace.push({ problem: e.message }));
       page.on('response', response => {
         if (response.request().isNavigationRequest()) {
           const url = new URL(response.url());
@@ -441,6 +488,7 @@ try {
         const sharing = page.locator('.film-sharing');
         const frame = sharing.frameLocator('iframe');
         const publicUrl = env.STREAM_VIEWER_ORIGIN + '/embed/' + privatePath.split('/').pop();
+        await checkThumbnails(page, publicUrl, artwork);
         assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl);
         assert.equal(await frame.locator('.film-info').count(), 0);
         const blankField = sharing.getByRole('checkbox', { name: 'Filmmaker message' });
@@ -448,7 +496,7 @@ try {
         assert.equal(await sharing.locator('iframe').getAttribute('height'), '480');
         await blankField.uncheck();
         await sharing.getByRole('checkbox', { name: 'Credits' }).check();
-        assert.equal(await sharing.locator('iframe').getAttribute('height'), '576');
+        assert.equal(await sharing.locator('iframe').getAttribute('height'), '528');
         await frame.getByText('Directed by <Ada>', { exact: true }).waitFor();
         assert.equal(await frame.getByText('A short film.').count(), 0);
         const embedUrl = await sharing.locator('iframe').getAttribute('src');

@@ -24,7 +24,8 @@
     "@dustwave/worker-core": "file:shared/dust-wave-platform/packages/worker-core",
     "aws4fetch": "1.0.20",
     "hls.js": "1.7.4",
-    "mediabunny": "1.66.2"
+    "mediabunny": "1.66.2",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "playwright": "1.63.0"

@@ -21,7 +21,7 @@ const headers = {
   'Cache-Control': 'private, no-store',
   'Referrer-Policy': 'no-referrer',
   'X-Content-Type-Options': 'nosniff',
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'none'; frame-ancestors *; base-uri 'none'; form-action 'none'"
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; media-src 'self' blob:; worker-src 'none'; frame-ancestors *; base-uri 'none'; form-action 'none'"
 };
 
 function reply(req, res, status, type, body, extra = {}) {
@@ -193,6 +193,12 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (!offer) return fail(404);
         return send(200, 'text/html; charset=utf-8', payPage.replaceAll('{{title}}', () => escapeHtml(offer.title)), checkoutHeaders);
       }
+      const poster = /^\/film\/(f-[a-f0-9-]{36})\/thumbnail\.jpg$/.exec(path);
+      if (poster && catalog) {
+        if (!read) return fail(405);
+        const bytes = await catalog.poster(poster[1]);
+        return bytes ? send(200, 'image/jpeg', bytes) : fail(404);
+      }
       const embed = /^\/embed\/([a-z0-9-]+)$/.exec(path);
       if (read && (embed || path === '/')) {
         const id = embed?.[1] || 'clock';
@@ -201,7 +207,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (!spec) return fail(404);
         const payable = Boolean(checkout && spec.id);
         const fields = selectedFields(new URL(req.url, origin).searchParams.get('show') || '');
-        const text = { title: escapeHtml(published?.title || 'Private screening'), filmInfo: renderFilmInfo(published?.info, fields) };
+        const text = { title: escapeHtml(published?.title || 'Private screening'), poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '', filmInfo: renderFilmInfo(published?.info, fields) };
         const html = template.replaceAll('{{checkout}}', String(payable))
           .replaceAll('{{preview}}', String(published ? spec.previewSeconds ?? 10 : 0))
           .replaceAll('{{emailRecovery}}', String(Boolean(recovery && payable)))
@@ -209,7 +215,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           .replaceAll('{{rent}}', String(published?.prices?.rent ?? ''))
           .replaceAll('{{rentalHours}}', String(published?.rentalHours ?? 48))
           .replaceAll('{{buy}}', String(published?.prices?.buy ?? ''))
-          .replace(/\{\{(title|filmInfo)\}\}/g, (_, key) => text[key]);
+          .replace(/\{\{(title|filmInfo|poster)\}\}/g, (_, key) => text[key]);
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
       const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|order|session|download|restore|redeem|position|view|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
