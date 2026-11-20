@@ -47,9 +47,10 @@ body.paying :is(#access-tools, #restore-tools) { display: none; }
   .details p { display: none; }
   h1 { font-size: 1rem; }
   button { font-size: .875rem; padding: .5rem .75rem; }
-  body[data-checkout]:not(.paying) main:has(#purchase:not([hidden]), #ownership:not([hidden]), details[open]) {
+  body[data-checkout]:not(.paying) main:has(#purchase:not([hidden]), #ownership:not([hidden]), details[open], .film-info) {
     height: auto; grid-template-rows: auto;
   }
+  main:has(.film-info) video { height: auto; aspect-ratio: 16 / 9; max-height: 65dvh; }
   main:has(#purchase:not([hidden])) video { height: 35dvh; }
   main:has(#ownership:not([hidden]), details[open]) video { height: 65dvh; }
   body[data-access] main:has(:is(#purchase, #ownership):not([hidden])) video { height: max(60dvh, calc(100dvh - 3.25rem)); }
@@ -136,3 +137,7 @@ body.paying #status { color: var(--pay-muted); padding: 0 0 .75rem; margin: 0; }
   .payment-header { margin-bottom: .75rem; padding-bottom: .5rem; }
   #card-form { gap: .75rem; }
 }
+.film-info { display: grid; gap: .75rem; margin-block: 0; padding-top: .75rem; border-top: 1px solid #444; }
+.film-info dt { font-weight: 600; }
+.film-info dd { margin: .25rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #ccc; }
+body.paying .film-info { display: none; }

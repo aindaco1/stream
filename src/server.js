@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
 import { openFilm } from './media.js';
 import { createSetup } from './setup.js';
-import { escapeHtml } from './setup-view.js';
+import { escapeHtml, renderFilmInfo, selectedFields } from './film-embed.js';
 import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
@@ -200,6 +200,8 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const spec = published || lookup(id, true);
         if (!spec) return fail(404);
         const payable = Boolean(checkout && spec.id);
+        const fields = selectedFields(new URL(req.url, origin).searchParams.get('show') || '');
+        const text = { title: escapeHtml(published?.title || 'Private screening'), filmInfo: renderFilmInfo(published?.info, fields) };
         const html = template.replaceAll('{{checkout}}', String(payable))
           .replaceAll('{{preview}}', String(published ? spec.previewSeconds ?? 10 : 0))
           .replaceAll('{{emailRecovery}}', String(Boolean(recovery && payable)))
@@ -207,7 +209,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           .replaceAll('{{rent}}', String(published?.prices?.rent ?? ''))
           .replaceAll('{{rentalHours}}', String(published?.rentalHours ?? 48))
           .replaceAll('{{buy}}', String(published?.prices?.buy ?? ''))
-          .replaceAll('{{title}}', () => escapeHtml(published?.title || 'Private screening'));
+          .replace(/\{\{(title|filmInfo)\}\}/g, (_, key) => text[key]);
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
       const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|order|session|download|restore|redeem|position|view|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
@@ -369,5 +371,5 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     return { film: await openFilm(sourceFromEnv(env, maker)), authority };
   }, { setup: await createSetup(), publicOrigin: process.env.STREAM_PUBLIC_ORIGIN });
   server.listen(Number(process.env.PORT || 8787), '127.0.0.1', () =>
-    console.log('Filmmaker setup: ' + (process.env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + server.address().port) + '/setup'));
+    console.log('Setup: ' + (process.env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + server.address().port) + '/setup'));
 }

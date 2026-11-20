@@ -68,7 +68,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     if (!ready && !(entitled && store.priorOrderOwner(id) === owner)) return;
     // A null recipient is an existing-order lookup only. Use the claimed
     // seller recorded on that order, even while this filmmaker reconnects.
-    const spec = Object.freeze({ id, title: film.title, owner, account: entitled ? null : account, scope: savedFilmScope(owner, id),
+    const spec = Object.freeze({ id, title: film.title, info: film.info, owner, account: entitled ? null : account, scope: savedFilmScope(owner, id),
       revision: film.revision, authority, prices, duration: film.duration, previewSeconds: seconds, rentalHours: hours });
     return { spec, bucket: film.bucket, objectKey: film.objectKey };
   }

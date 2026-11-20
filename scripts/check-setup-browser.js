@@ -6,6 +6,9 @@ import { createServer } from 'node:http';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { createPublicFilms } from '../src/public-films.js';
+import { createRentalAuthority } from '../src/rental.js';
 import { chromium } from 'playwright';
 import { makeServer } from '../src/server.js';
 import { createSetup } from '../src/setup.js';
@@ -22,7 +25,8 @@ const access = 'setup-test-access-only';
 const secret = 'setup-test-secret-only';
 const bucketUrl = `https://dash.cloudflare.com/${accountId}/r2/default/buckets/${bucket}`;
 const readToken = 'syntheticbucketreadtoken'.repeat(2);
-let browser, server, setup;
+let browser, server, viewer, setup;
+let publishedEmbeds = '';
 const trace = [];
 const starts = [];
 const callbacks = new Map();
@@ -93,11 +97,21 @@ async function checkAppearance(page, origin) {
 async function signIn(page, origin, owner) {
   await page.goto(origin + '/setup/sign-in');
   await page.getByLabel('Invitation code').fill(setup.store.invite(owner));
-  await page.getByRole('button', { name: 'Open filmmaker setup' }).click();
-  await page.getByRole('heading', { name: 'Filmmaker setup', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Open setup' }).click();
+  await page.getByRole('heading', { name: 'Setup', exact: true }).waitFor();
+}
+
+async function openWorkspace(page, name) {
+  if (await page.getByRole('heading', { name, exact: true, level: 1 }).isVisible()) return;
+  const menu = page.locator('.workspace-nav select');
+  await menu.waitFor({ state: 'attached' });
+  if (await menu.isVisible()) await menu.selectOption(name === 'Dashboard' ? '/setup/dashboard' : '/setup');
+  else await page.getByRole('link', { name, exact: true }).click();
+  await page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 }
 
 async function openSection(page, id) {
+  await openWorkspace(page, 'Setup');
   const panel = page.locator('#' + id + '[role=tabpanel]');
   await panel.waitFor({ state: 'attached' });
   if (await panel.isVisible()) return;
@@ -172,13 +186,13 @@ async function resetAndReconnect(page, owner, otherOwner, previewPath) {
   assert.deepEqual(afterReset.r2, r2);
   assert.deepEqual(store.maker(otherOwner), otherMaker);
   assert.equal(providerCalls, previousCalls, 'Reset with no unfinished checkouts does not call the provider');
-  await openSection(page, 'film');
-  const savedPreview = page.getByRole('link', { name: 'Projection test <first cut>' });
-  assert.equal(await savedPreview.getAttribute('href'), previewPath);
   assert.equal(await page.locator('#storage .provider-status').textContent(), 'Connected');
+  await openWorkspace(page, 'Dashboard');
+  const savedPreview = page.getByRole('link', { name: 'Watch private preview' });
+  assert.equal(await savedPreview.getAttribute('href'), previewPath);
   await savedPreview.click();
   await page.waitForFunction(() => document.querySelector('video')?.duration === 10);
-  await page.getByRole('link', { name: 'Back to filmmaker setup' }).click();
+  await page.getByRole('link', { name: 'Back to film' }).click();
 
   await finishStripe(page, 'new', false);
   const reconnected = store.maker(owner).stripe.byMode;
@@ -267,7 +281,8 @@ async function connectBucket(page, method, recover) {
 }
 
 async function registerFilm(page, shouldRecover, origin, owner) {
-  await openSection(page, 'film');
+  await openWorkspace(page, 'Dashboard');
+  await page.getByRole('link', { name: 'Add a film' }).click();
   const section = page.locator('#film');
   assert.equal(await section.getByRole('link', { name: /Open your R2 bucket/ }).count(), 0);
   assert.equal(await section.locator('[name="objectKey"]').count(), 0);
@@ -282,6 +297,8 @@ async function registerFilm(page, shouldRecover, origin, owner) {
     await section.getByRole('button', { name: 'Save draft' }).click();
     await page.getByRole('button', { name: 'Sign out' }).click();
     await signIn(page, origin, owner);
+    await openWorkspace(page, 'Dashboard');
+    await page.getByRole('link', { name: 'Continue film draft' }).click();
     assert.equal(await section.getByLabel('Film title').inputValue(), 'Projection test <first cut>');
     await section.getByLabel('Object key').fill('Incorrect/Short film.mp4');
     await section.getByRole('button', { name: 'Check film and create preview' }).click();
@@ -291,9 +308,9 @@ async function registerFilm(page, shouldRecover, origin, owner) {
   }
   await section.getByLabel('Object key').fill(savedKey);
   await section.getByRole('button', { name: 'Check film and create preview' }).click();
-  const preview = section.getByRole('link', { name: 'Watch private preview' });
+  const preview = page.getByRole('link', { name: 'Watch private preview' });
   await preview.waitFor();
-  assert.ok(await section.getByRole('heading', { name: 'Projection test <first cut>' }).isVisible());
+  assert.ok(await page.getByRole('heading', { name: 'Projection test <first cut>' }).isVisible());
   return preview.getAttribute('href');
 }
 
@@ -308,8 +325,9 @@ try {
   if (evidence) await mkdir(evidence, { recursive: true, mode: 0o700 });
   const generated = spawnSync(process.execPath, ['scripts/fixture.js', fixture], { stdio: 'pipe' });
   assert.equal(generated.status, 0, 'Generate the synthetic clip using FFmpeg');
+  const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' };
   setup = await createSetup({
-    directory: path.join(temporary, 'state'), stripe, env: { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' },
+    directory: path.join(temporary, 'state'), stripe, env,
     async resolveBucket({ bucketUrl: location, privateConfirmed, tokenValue, accessKeyId, secretAccessKey }) {
       assert.equal(location, bucketUrl);
       assert.equal(privateConfirmed, 'yes');
@@ -331,8 +349,16 @@ try {
       return createFileSource(fixture);
     }
   });
+  const catalog = createPublicFilms({ store: setup.store, env, authority: createRentalAuthority(randomBytes(32)) });
+  viewer = await makeServer(null, { catalog });
+  await new Promise(resolve => viewer.listen(0, '127.0.0.1', resolve));
+  env.STREAM_VIEWER_ORIGIN = 'http://127.0.0.1:' + viewer.address().port;
   const app = await makeServer(() => { throw Error('Setup fixture is private'); }, { setup });
   server = createServer((req, res) => {
+    if (req.url === '/fixture/embed-host' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end('<!doctype html><title>Two screenings</title>' + publishedEmbeds);
+    }
     if (req.url === '/fixture/provider' && req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end('<!doctype html><a href="/setup/stripe/return">Return to Stream</a>');
@@ -351,7 +377,7 @@ try {
     try {
       await context.route('**/*', route => {
         const url = new URL(route.request().url());
-        if (url.origin === origin) return route.continue();
+        if (url.origin === origin || url.origin === env.STREAM_VIEWER_ORIGIN) return route.continue();
         return route.abort();
       });
       const page = await context.newPage();
@@ -376,59 +402,74 @@ try {
       if (storage === 'new') await connectBucket(page, 'token', first);
       const privatePath = await registerFilm(page, first, origin, owner);
       if (previewWithoutPayments) {
+        await openSection(page, 'payments');
         assert.equal(await page.locator('#payments .provider-status').textContent(), 'Not connected');
         await finishStripe(page, mode, false);
       }
-      await openSection(page, 'film');
+      await openWorkspace(page, 'Dashboard');
       await page.getByRole('link', { name: 'Watch private preview' }).click();
       await page.waitForFunction(() => document.querySelector('video')?.duration === 10);
-      await page.getByRole('link', { name: 'Back to filmmaker setup' }).click();
-      await page.getByRole('button', { name: 'Add another film' }).click();
-      await page.getByRole('heading', { name: 'Saved films' }).waitFor();
-      assert.equal(await page.getByRole('link', { name: 'Projection test <first cut>' }).getAttribute('href'), privatePath);
+      await page.getByRole('link', { name: 'Back to film' }).click();
+      assert.equal(await page.getByRole('link', { name: 'Watch private preview' }).getAttribute('href'), privatePath);
+      await page.getByRole('button', { name: 'Add a film' }).click();
+      await page.getByRole('heading', { name: 'Add a film' }).waitFor();
       assert.equal(await page.locator('#film [name="rightsAccepted"]').isChecked(), false);
       await page.getByRole('button', { name: 'Sign out' }).click();
       await page.goto(origin + privatePath);
       assert.equal(await page.locator('video').count(), 0);
       await signIn(page, origin, owner);
-      assert.ok(await page.getByRole('heading', { name: 'Saved films' }).isVisible());
+      assert.equal(await page.getByRole('tab', { name: 'Film', exact: true }).count(), 0);
       if (mode === 'existing' && storage === 'existing') {
         await resetAndReconnect(page, owner, 'qa-new-new', privatePath);
       }
       if (first) {
-        const workspace = page.getByRole('combobox', { name: 'Filmmaker workspace' });
-        assert.ok((await workspace.boundingBox()).height >= 44);
-        await workspace.selectOption('/setup/dashboard');
-        await page.getByRole('heading', { name: 'Film dashboard' }).waitFor();
+        await openWorkspace(page, 'Dashboard');
         assert.equal(await page.getByRole('combobox', { name: 'Appearance' }).inputValue(), 'dark');
-        const sections = page.getByRole('combobox', { name: 'Dashboard sections' });
-        assert.ok((await sections.boundingBox()).height >= 44);
-        await sections.selectOption('overview');
-        await page.getByRole('heading', { name: 'All films' }).waitFor();
-        assert.equal(await page.locator('#films').isVisible(), false);
-        await page.goBack();
-        await page.locator('#films').waitFor();
-        assert.equal(await sections.inputValue(), 'films');
-        await page.goForward();
-        await page.reload();
-        await page.locator('#overview').waitFor();
-        assert.equal(await sections.inputValue(), 'overview');
-        await page.setViewportSize({ width: 1024, height: 844 });
-        const activeTab = page.getByRole('tab', { selected: true });
-        await activeTab.press('Home');
-        assert.equal(await activeTab.textContent(), 'Films');
-        await activeTab.press('ArrowLeft');
-        assert.equal(await activeTab.textContent(), 'Overview');
-        await activeTab.press('ArrowRight');
-        assert.equal(await activeTab.textContent(), 'Films');
-        assert.equal(await page.getByRole('tabpanel').count(), 1);
+        assert.equal(await page.getByRole('tab').count(), 0);
+        for (const width of [390, 1024]) {
+          await page.setViewportSize({ width, height: 844 });
+          const overview = await page.getByRole('heading', { name: 'Overview' }).boundingBox();
+          const films = await page.getByRole('heading', { name: 'Films' }).boundingBox();
+          assert.ok(overview && films && overview.y < films.y);
+        }
+        await page.getByRole('textbox', { name: 'Credits', exact: true }).fill('Directed by <Ada>');
+        await page.getByRole('textbox', { name: 'Synopsis', exact: true }).fill('A short film.');
+        await page.getByRole('button', { name: 'Save film details' }).click();
         await page.getByRole('button', { name: 'Publish film' }).click();
         const code = page.getByLabel('Embed code');
         await code.waitFor();
-        assert.match(await code.inputValue(), /<iframe src="http:\/\/127\.0\.0\.1:8793\/embed\/f-/);
+        const sharing = page.locator('.film-sharing');
+        const frame = sharing.frameLocator('iframe');
+        const publicUrl = env.STREAM_VIEWER_ORIGIN + '/embed/' + privatePath.split('/').pop();
+        assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl);
+        assert.equal(await frame.locator('.film-info').count(), 0);
+        await sharing.getByRole('checkbox', { name: 'Credits' }).check();
+        await frame.getByText('Directed by <Ada>', { exact: true }).waitFor();
+        assert.equal(await frame.getByText('A short film.').count(), 0);
+        const embedUrl = await sharing.locator('iframe').getAttribute('src');
+        const creditsCode = await code.inputValue();
+        assert.equal(embedUrl, publicUrl + '?show=credits');
+        assert.ok((await code.inputValue()).includes(embedUrl));
         assert.ok(!(await code.inputValue()).includes(savedKey));
         await page.getByRole('button', { name: 'Copy embed code' }).click();
         await page.locator('.copy-status').filter({ hasText: /copied|selected/ }).waitFor();
+        await page.getByRole('textbox', { name: 'Credits', exact: true }).fill('Camera and sound by Bea');
+        await page.getByRole('button', { name: 'Save film details' }).click();
+        await frame.getByText('Camera and sound by Bea', { exact: true }).waitFor();
+        assert.equal(await sharing.locator('iframe').getAttribute('src'), embedUrl);
+        if (evidence) await sharing.screenshot({ path: path.join(evidence, 'film-embed-builder.png') });
+        await sharing.getByRole('checkbox', { name: 'Credits' }).uncheck();
+        await frame.getByText('Camera and sound by Bea').waitFor({state:'detached'});
+        assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl);
+        const host = await context.newPage();
+        try {
+          publishedEmbeds = creditsCode + (await code.inputValue());
+          await host.goto(origin + '/fixture/embed-host');
+          const copies = host.locator('iframe');
+          await copies.nth(0).contentFrame().getByText('Camera and sound by Bea', { exact: true }).waitFor();
+          await copies.nth(1).contentFrame().getByRole('heading', { name: 'Projection test <first cut>' }).waitFor();
+          assert.equal(await copies.nth(1).contentFrame().locator('.film-info').count(), 0);
+        } finally { await host.close(); }
         const editor = page.getByRole('form', { name: 'Edit prices and playback for Projection test <first cut>' });
         for (const [width, columns] of [[320, 2], [390, 2], [1024, 4]]) {
           await page.setViewportSize({ width, height: 844 });
@@ -455,7 +496,7 @@ try {
         await page.getByRole('button', { name: 'Publish film' }).waitFor();
         assert.equal(await page.getByLabel('Embed code').count(), 0);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-        report.filmmakerDashboard = 'publish, copy embed, change settings, unpublish';
+        report.filmmakerDashboard = 'create film, private preview, publish, copy independent embed selections, update saved details, change prices, unpublish';
       }
       report.scenarios.push({ stripe: mode, cloudflare: storage, savedPreviewSeconds: 10, resumed: true, previewWithoutPayments });
     } finally { await context.close(); }
@@ -473,6 +514,7 @@ try {
   process.exitCode = 1;
 } finally {
   await browser?.close();
+  if (viewer?.listening) await new Promise(resolve => viewer.close(resolve));
   if (server?.listening) await new Promise(resolve => server.close(resolve));
   setup?.close();
   await rm(temporary, { recursive: true, force: true });
