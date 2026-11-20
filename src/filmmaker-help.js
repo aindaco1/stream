@@ -8,7 +8,7 @@ const pricing = {
   },
   r2: {
     heading: 'Cloudflare R2 storage fees',
-    summary: 'Cloudflare’s Standard tier includes 10 GB of storage free for a full month, shared across your account. Additional storage costs $0.015 per GB-month. Cloudflare charges for reads and writes above its monthly allowances. Sending video to viewers is free of bandwidth charges.',
+    summary: 'Cloudflare’s Standard tier includes 10 GB of storage free each month across your Cloudflare account. Additional storage costs $0.015 per GB-month. Cloudflare charges for reads and writes above its monthly allowances. Sending video to viewers is free of bandwidth charges.',
     example: 'For example, storing 20 GB for a full month costs about $0.15 for storage if your account has the full allowance available.',
     operations: 'The monthly allowance also includes 1 million Class A operations (such as writes) and 10 million Class B operations (such as reads). Additional operations cost $4.50 and $0.36 per million respectively, rounded up to whole billing units. One viewing can involve several reads. The free tier applies only to Standard storage.',
     url: 'https://developers.cloudflare.com/r2/pricing/',
