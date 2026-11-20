@@ -471,6 +471,15 @@ try {
   await preview(legacy);
   assert.equal(requests.some(r => r.url === library), false, 'Preview must not contact Stripe');
   assert.equal(await neighbor.locator('#buy').evaluate(button => button.getBoundingClientRect().bottom <= innerHeight), true);
+  for (const frame of [renter, buyer]) {
+    assert.equal(await frame.locator('#tip-choice summary').textContent(), 'Optional Dust Wave tip · 10%');
+    assert.equal(await frame.locator('#rent').textContent(), 'Rent · $1.09');
+    assert.equal(await frame.locator('#buy').textContent(), 'Buy · $3.29');
+  }
+  await renter.locator('#tip-choice summary').click();
+  await renter.getByRole('slider').fill('0');
+  assert.equal(await renter.locator('#rent').textContent(), 'Rent · $0.99');
+  assert.equal(await buyer.locator('#tip-value').textContent(), '10%');
   interruptNext = true;
   await renter.locator('#rent').click();
   await renter.getByText('Checkout could not open.', { exact: false }).waitFor();
@@ -520,10 +529,11 @@ try {
     })), { cause }); });
   await subtitleMenu.selectOption('');
   assert.equal(await renter.locator('#ownership').isHidden(), true);
+  await buyer.locator('#tip-choice summary').click();
+  await buyer.getByRole('slider').fill('5');
   interruptNext = true;
   await buyer.locator('#buy').click();
   await buyer.getByText('Checkout could not open.', { exact: false }).waitFor();
-  await buyer.getByText('Support Stream (optional)', { exact: true }).click();
   await buyer.getByRole('slider').fill('10');
   assert.match(await buyer.locator('#buy').textContent(), /3\.29/);
   await complete(buyer, 'buy', { sizes: [[375, 211]], async beforeEntry(order) {
@@ -537,7 +547,7 @@ try {
   await legacy.locator('#rent').click();
   await legacy.frameLocator('iframe[title="Legacy test card form"]').getByRole('button', { name: 'Submit legacy payment' }).waitFor();
   await legacy.getByRole('button', { name: 'Back to film' }).click();
-  await legacy.getByText('Support Stream (optional)', { exact: true }).click();
+  await legacy.locator('#tip-choice summary').click();
   await legacy.getByRole('slider').fill('15');
   await complete(legacy, 'rent');
   assert.equal(await legacy.locator('#ownership').isHidden(), true);
@@ -564,6 +574,8 @@ try {
   await buyer.getByRole('button', { name: 'Download film' }).waitFor();
   await renter.getByRole('button', { name: 'Play rental' }).waitFor();
   assert.equal(await neighbor.locator('#purchase').isHidden(), true);
+  assert.equal(await renter.locator('#tip-percent').inputValue(), '0', 'Reload retains the viewer’s opt-out');
+  assert.equal(await buyer.locator('#tip-percent').inputValue(), '10');
 
   const [legacyToken] = [...orders].find(([, order]) => order.offer.id === 'legacy' && order.status === 'paid');
   const bookmark = await context.newPage();

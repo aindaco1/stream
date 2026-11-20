@@ -92,7 +92,9 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   const knownRental = slot && read('localStorage', slot + ':rent');
   const activeKind = kinds.includes(attempts.active) ? attempts.active : 'rent';
   const tip = byId('tip-percent');
-  tip.value = String(Number(attempts[activeKind + 'Tip']) || 0);
+  // Orders opened before tips were available have a token and a zero tip.
+  const priorTip = validToken(attempts[activeKind]) ? (attempts[activeKind + 'Tip'] ?? 0) : tip.defaultValue;
+  tip.value = String(attempts.selectedTip ?? priorTip);
   const starts = new Map();
   const address = new URL(location.href);
   const returnId = address.searchParams.get('order');
@@ -335,7 +337,11 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   }
 
   for (const kind of kinds) byId(kind).addEventListener('click', () => open(kind));
-  tip.addEventListener('input', showOffer);
+  tip.addEventListener('input', () => {
+    attempts.selectedTip = Number(tip.value);
+    persist();
+    showOffer();
+  });
   check.addEventListener('click', () => inspect(true, true));
   byId('close-checkout').addEventListener('click', () => {
     const button = byId(attempts.active);
