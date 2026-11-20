@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { recoveryStore } from './viewer-recovery.js';
 import { StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
 import { filmPrices, rentalHours } from './prices.js';
-import { tipFor } from './checkout-tips.js';
+import { filmTaxFeeShare, tipFor } from './checkout-tips.js';
 
 const token = () => randomBytes(32).toString('base64url');
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -115,7 +115,7 @@ export function openSetupStore(directory) {
         db.exec("ALTER TABLE " + table + " ADD COLUMN audience TEXT NOT NULL DEFAULT 'filmmaker'");
       }
     }
-    const columns = new Set(sql('PRAGMA table_info(viewer_test_orders)').all().map(row => row.name));
+    const columns = new Set(sql('PRAGMA table_xinfo(viewer_test_orders)').all().map(row => row.name));
     if (!columns.has('verifiedAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN verifiedAt INTEGER');
     if (!columns.has('position')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('kind')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'rent'");
@@ -129,6 +129,13 @@ export function openSetupStore(directory) {
     if (!columns.has('taxCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN taxCents INTEGER');
     if (!columns.has('tipTaxCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipTaxCents INTEGER');
     if (!columns.has('chargedTotalCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN chargedTotalCents INTEGER');
+    // Existing orders keep their original payout terms. Only new automatic-tax orders start with a pending fee.
+    if (!columns.has('taxBasicFeeCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN taxBasicFeeCents INTEGER DEFAULT 0');
+    if (!columns.has('filmTaxFeeCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN filmTaxFeeCents INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('taxFeeReference')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN taxFeeReference TEXT');
+    if (!columns.has('chargeBalanceId')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN chargeBalanceId TEXT');
+    if (!columns.has('cardProcessingCents')) db.exec(`ALTER TABLE viewer_test_orders ADD COLUMN cardProcessingCents INTEGER
+      GENERATED ALWAYS AS (stripeFeeCents - CASE WHEN chargeBalanceId=taxFeeReference THEN taxBasicFeeCents ELSE 0 END) VIRTUAL`);
     if (!columns.has('transferId')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN transferId TEXT');
     if (!columns.has('transferAttempt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN transferAttempt INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('transferRetryAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN transferRetryAt INTEGER NOT NULL DEFAULT 0');
@@ -311,8 +318,8 @@ export function openSetupStore(directory) {
           error.code = 'viewer_rate_limit';
           throw error;
         }
-        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours,taxPolicy,nmQuote,viewingAddressTag) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?,?,?,?)")
-          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, kind === 'rent' ? hours : 48, taxPolicy, nmQuote && JSON.stringify(nmQuote), viewingAddressTag);
+        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours,taxPolicy,nmQuote,viewingAddressTag,taxBasicFeeCents) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?,?,?,?,?)")
+          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, kind === 'rent' ? hours : 48, taxPolicy, nmQuote && JSON.stringify(nmQuote), viewingAddressTag, taxPolicy === 'marketplace-v1' && !nmQuote ? null : 0);
         return store.viewerOrderForToken(tokenHash);
       });
     },
@@ -328,10 +335,35 @@ export function openSetupStore(directory) {
         AND (intentId=:intent OR chargeId=:charge) AND (:intent IS NULL OR intentId=:intent) AND (:charge IS NULL OR chargeId=:charge)`)
         .get({ platform, intent: intentId ?? null, charge: chargeId ?? null });
     },
+    pendingTaxFees(platform) {
+      return sql(`SELECT chargeId, sessionId, paidAt, chargedTotalCents FROM viewer_test_orders
+        WHERE platform=? AND paidAt IS NOT NULL AND taxBasicFeeCents IS NULL ORDER BY paidAt,orderId`).all(platform);
+    },
+    recordTaxFees(platform, fees) {
+      return transaction(() => {
+        let recorded = 0;
+        for (const { chargeId, feeCents, reference } of fees) {
+          const order = store.viewerOrderByPlatformPayment(platform, null, chargeId);
+          if (!order?.paidAt || !/^ch_[a-zA-Z0-9]+$/.test(chargeId) || !/^(txn|frr)_[a-zA-Z0-9]+$/.test(reference) ||
+              (feeCents > 0 && !reference.startsWith('txn_'))) throw Error('Expected a paid platform charge and its Stripe fee reference.');
+          if (order.taxBasicFeeCents !== null) {
+            if (order.taxFeeReference === reference && order.taxBasicFeeCents === feeCents) continue;
+            throw Error('This order already has a fee decision. Review the report before retrying.');
+          }
+          const filmFee = filmTaxFeeShare(feeCents, order.chargedTotalCents, order.tipAmount);
+          if (order.stripeFeeCents === null || !order.chargeBalanceId ||
+              (order.chargeBalanceId === reference && feeCents > order.stripeFeeCents)) throw Error('The charge fee breakdown is not ready or does not match.');
+          sql(`UPDATE viewer_test_orders SET taxBasicFeeCents=?,filmTaxFeeCents=?,taxFeeReference=?,
+            transferRetryAt=0,ledgerVersion=ledgerVersion+1 WHERE orderId=?`).run(feeCents, filmFee, reference, order.orderId);
+          recorded++;
+        }
+        return recorded;
+      });
+    },
     pendingViewerTransfers(platform = null) {
       // Rental access can expire independently of a filmmaker's payment. Only financial adjustments hold a transfer.
       return sql(`SELECT * FROM viewer_test_orders WHERE taxPolicy='marketplace-v1' AND paidAt IS NOT NULL
-        AND transferId IS NULL AND transferRetryAt<=? AND (? IS NULL OR platform=?)
+        AND (taxBasicFeeCents IS NOT NULL OR stripeFeeCents IS NULL) AND transferId IS NULL AND transferRetryAt<=? AND (? IS NULL OR platform=?)
         AND intentId IS NOT NULL AND chargeId IS NOT NULL AND chargedTotalCents IS NOT NULL
         AND refundedAmount=0 AND revocationReason IS NULL AND (disputeStatus IS NULL OR disputeStatus IN ('won','prevented','warning_closed'))
         ORDER BY transferRetryAt,createdAt,orderId LIMIT 20`).all(Date.now(), platform, platform);
@@ -348,10 +380,10 @@ export function openSetupStore(directory) {
     setViewerTransfer(orderId, transferId) {
       if (typeof transferId !== 'string' || (transferId !== 'no_proceeds' && !/^tr_[A-Za-z0-9]{1,128}$/.test(transferId))) return false;
       return sql(`UPDATE viewer_test_orders SET transferId=:transfer,transferRetryAt=0 WHERE orderId=:id AND taxPolicy='marketplace-v1'
-        AND paidAt IS NOT NULL AND chargeId IS NOT NULL AND chargedTotalCents IS NOT NULL AND stripeFeeCents IS NOT NULL
+        AND paidAt IS NOT NULL AND chargeId IS NOT NULL AND chargedTotalCents IS NOT NULL AND cardProcessingCents IS NOT NULL AND taxBasicFeeCents IS NOT NULL
         AND (transferId IS NULL OR transferId=:transfer) AND (
-          (:transfer='no_proceeds' AND stripeFeeCents>=amount) OR
-          (:transfer!='no_proceeds' AND stripeFeeCents<amount AND NOT EXISTS(
+          (:transfer='no_proceeds' AND cardProcessingCents+filmTaxFeeCents>=amount) OR
+          (:transfer!='no_proceeds' AND cardProcessingCents+filmTaxFeeCents<amount AND NOT EXISTS(
             SELECT 1 FROM viewer_test_orders WHERE transferId=:transfer AND orderId!=:id))
         )`).run({ transfer: transferId, id: orderId }).changes === 1;
     },
@@ -399,7 +431,7 @@ export function openSetupStore(directory) {
     expireViewerOrder(orderId) {
       sql("UPDATE viewer_test_orders SET status='expired',ledgerVersion=ledgerVersion+1 WHERE orderId=? AND status='pending' AND intentId IS NULL").run(orderId);
     },
-    reconcileViewerPayment(order, { intentId, chargeId, paidAt, refundedAmount, disputeStatus, revocationReason, stripeFeeCents = null,
+    reconcileViewerPayment(order, { intentId, chargeId, paidAt, refundedAmount, disputeStatus, revocationReason, stripeFeeCents = null, chargeBalanceId = null,
       taxCents, tipTaxCents, chargedTotalCents }) {
       if (order.taxPolicy === 'none') {
         taxCents ??= 0;
@@ -413,7 +445,8 @@ export function openSetupStore(directory) {
           (order.taxPolicy === 'none' && taxCents !== 0) || (stripeFeeCents !== null && !cents(stripeFeeCents))) {
         throw new Error('Invalid verified checkout totals.');
       }
-      if ((order.chargedTotalCents !== null && (order.chargedTotalCents !== chargedTotalCents || order.taxCents !== taxCents || order.tipTaxCents !== tipTaxCents)) ||
+      if ((chargeBalanceId !== null && (!/^txn_[a-zA-Z0-9]+$/.test(chargeBalanceId) || (order.chargeBalanceId && order.chargeBalanceId !== chargeBalanceId))) ||
+          (order.chargedTotalCents !== null && (order.chargedTotalCents !== chargedTotalCents || order.taxCents !== taxCents || order.tipTaxCents !== tipTaxCents)) ||
           (order.stripeFeeCents !== null && stripeFeeCents !== null && order.stripeFeeCents !== stripeFeeCents)) {
         throw new Error('The verified payment amounts changed.');
       }
@@ -421,11 +454,11 @@ export function openSetupStore(directory) {
       return sql(`UPDATE viewer_test_orders SET status=CASE WHEN ? IS NOT NULL OR
           (kind='rent' AND COALESCE(paidAt,?)+rentalHours*3600<=?) THEN 'expired' ELSE 'paid' END,
           intentId=?, chargeId=?, paidAt=COALESCE(paidAt,?), refundedAmount=?, disputeStatus=?, revocationReason=?,
-          taxCents=?, tipTaxCents=?, chargedTotalCents=?, stripeFeeCents=COALESCE(stripeFeeCents,?),
+          taxCents=?, tipTaxCents=?, chargedTotalCents=?, stripeFeeCents=COALESCE(stripeFeeCents,?),chargeBalanceId=COALESCE(chargeBalanceId,?),
           verifiedAt=unixepoch(), ledgerVersion=ledgerVersion+1 WHERE orderId=? AND sessionId=? AND ledgerVersion=?
           AND (intentId IS NULL OR intentId=?) AND (chargeId IS NULL OR chargeId=?) RETURNING *`)
         .get(revocationReason, paidAt, Math.floor(Date.now()/1000), intentId, chargeId, paidAt, refundedAmount,
-          disputeStatus, revocationReason, taxCents, tipTaxCents, chargedTotalCents, stripeFeeCents,
+          disputeStatus, revocationReason, taxCents, tipTaxCents, chargedTotalCents, stripeFeeCents, chargeBalanceId,
           order.orderId, order.sessionId, order.ledgerVersion, intentId, chargeId);
     },
     noteViewerWebhook(orderId, eventId) {

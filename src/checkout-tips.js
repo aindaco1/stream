@@ -34,3 +34,12 @@ export function processingFee(order, charge, total = orderTotal(order), applicat
   }
   return application === applicationFee && processing + application === tx.fee ? processing : null;
 }
+
+// The tip already includes its tax. The rest of the viewer's charge belongs to
+// the film line. Round the film share once and leave the remainder on the tip.
+export function filmTaxFeeShare(fee, charged, tip) {
+  if (![fee, charged, tip].every(n => Number.isSafeInteger(n) && n >= 0) ||
+      charged === 0 || tip > charged || fee > charged) throw new RangeError('Invalid tax fee allocation.');
+  const denominator = BigInt(charged);
+  return Number((2n * BigInt(fee) * BigInt(charged - tip) + denominator) / (2n * denominator));
+}

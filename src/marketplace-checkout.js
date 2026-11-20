@@ -137,8 +137,8 @@ export async function verifiedTax(key, order, session, fetchImpl, store) {
 }
 
 export async function settleFilmmaker(key, order, store, fetchImpl) {
-  if (!isMarketplace(order) || order.transferId || !order.paidAt || order.refundedAmount || order.revocationReason || order.stripeFeeCents == null) return;
-  const amount = Math.max(0, order.amount - order.stripeFeeCents);
+  if (!isMarketplace(order) || order.transferId || !order.paidAt || order.refundedAmount || order.revocationReason || order.cardProcessingCents == null || order.taxBasicFeeCents == null) return;
+  const amount = Math.max(0, order.amount - order.cardProcessingCents - order.filmTaxFeeCents);
   if (!amount) { store.setViewerTransfer(order.orderId, 'no_proceeds'); return; }
   const group = transferGroup(order);
   // A lost response can outlive Stripe's 24-hour idempotency cache. Reuse the transfer tied to this source charge.

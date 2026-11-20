@@ -1079,13 +1079,21 @@ test('one marketplace charge binds exclusive film tax, inclusive tip tax and net
   await assert.rejects(platformHook(),{statusCode:503});
   assert.equal(c.transfers.length,0);
   tip.price.product.tax_code='txcd_20030000';
-  c.behavior.loseTransfer=true;
   await platformHook();
+  assert.ok((await c.status()).receipt);
+  assert.equal(c.transfers.length,0);
+  await c.checkout.retryFilmmakerTransfers();
+  assert.equal(c.transfers.length,0);
+  const pending = c.store.viewerOrderById(opened.orderId);
+  assert.equal(pending.taxBasicFeeCents,null);
+  c.store.recordTaxFees(pending.platform,[{chargeId:charge.id, feeCents:8, reference:'txn_taxbasic'}]);
+  c.behavior.loseTransfer=true;
+  await c.checkout.retryFilmmakerTransfers();
   const settled=c.store.viewerOrderById(opened.orderId);
   assert.deepEqual([settled.taxCents,settled.tipTaxCents,settled.chargedTotalCents,settled.stripeFeeCents],[44,4,589,47]);
   assert.equal(settled.transferId,null);
   assert.equal(c.transfers.length,1);
-  assert.equal(c.transfers[0].amount,452);
+  assert.equal(c.transfers[0].amount,445); // $4.99 minus $0.47 in card fees and $0.07 of the $0.08 Tax Basic fee.
   assert.equal(c.transfers[0].source_transaction,charge.id);
   await platformHook();
   assert.equal(c.transfers.length,1);
@@ -1113,6 +1121,7 @@ test('a manual order keeps its district across retries and verifies the actual l
   c.behavior.lose = true;
   await assert.rejects(restarted.start(request),{statusCode:503});
   const order = await restarted.start({...request,viewingAddress:address});
+  assert.equal(c.store.viewerOrderById(order.orderId).taxBasicFeeCents,0);
   assert.deepEqual([order.manualTax,order.taxCents,order.tipTaxCents,order.chargedTotalCents],[true,9,1,117]);
   assert.equal(c.sessions.size,1);
   assert.equal(c.calls.filter(call => call.path === '/v1/tax_rates').length,2);
@@ -1151,7 +1160,9 @@ test('an unresolved NM viewing address uses Stripe automatic tax on the viewing 
 test('an explicitly rejected transfer can retry after the recipient becomes active without repeating the charge', async t => {
   const c = await context(t,{marketplace:true});
   const order = await c.checkout.start({offer:c.offer,token:c.token,origin,kind:'buy',tipPercent:10});
-  completeTaxedPurchase(c);
+  const {charge} = completeTaxedPurchase(c);
+  assert.ok((await c.status()).receipt);
+  c.store.recordTaxFees(c.store.viewerOrderById(order.orderId).platform,[{chargeId:charge.id,feeCents:3,reference:'txn_taxbasic'}]);
   c.behavior.denyFirstTransfer=true;
   c.behavior.transferCapability=false;
   assert.ok((await c.status()).receipt);
@@ -1164,4 +1175,29 @@ test('an explicitly rejected transfer can retry after the recipient becomes acti
   assert.equal(c.store.viewerOrderById(order.orderId).transferId,'tr_fixture');
   assert.equal(c.transfers.length,1);
   assert.equal(c.sessions.size,1);
+});
+
+test('zero customer tax never substitutes for confirmation of the actual Stripe fee', async t => {
+  for (const reason of ['not_collecting','product_exempt',undefined]) {
+    const c = await context(t,{marketplace:true});
+    const opened = await c.checkout.start({offer:c.offer,token:c.token,origin,kind:'buy',tipPercent:10});
+    const {session,charge} = completeTaxedPurchase(c);
+    const lines = c.lineItems.get(session.id);
+    for (const line of lines) {
+      line.amount_tax = 0;
+      line.amount_total = line.price.unit_amount;
+      line.taxes = [{amount:0,taxability_reason:'not_collecting'}];
+    }
+    lines[1].taxes = reason ? [{amount:0,taxability_reason:reason}] : [];
+    const total = session.amount_subtotal;
+    session.total_details.amount_tax = 0;
+    session.amount_total = total;
+    const intent = c.intents.get(session.payment_intent);
+    intent.amount = intent.amount_received = charge.amount = charge.amount_captured = total;
+    charge.balance_transaction.amount = total;
+    charge.balance_transaction.net = total - charge.balance_transaction.fee;
+    assert.ok((await c.status()).receipt);
+    assert.equal(c.store.viewerOrderById(opened.orderId).taxBasicFeeCents, null);
+    assert.equal(c.transfers.length, 0);
+  }
 });

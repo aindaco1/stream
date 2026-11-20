@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { openSetupStore } from '../src/setup-store.js';
+import { importTaxFeeReport } from '../src/tax-fee-report.js';
+import { filmTaxFeeShare } from '../src/checkout-tips.js';
 import { renderPlatformDashboard } from '../src/setup-view.js';
 
 async function setup(t) {
-  const directory = await mkdtemp(join(tmpdir(), 'stream-tax-ledger-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'stream-tax-ledger-'));
+  const directory = join(stateDir, 'filmmakers');
   let store = openSetupStore(directory);
-  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { store.close(); await rm(stateDir, { recursive: true, force: true }); });
   const owner = 'Seller', account = 'acct_Seller', platform = 'acct_DustWave', id = 'f-' + randomUUID();
   const bucket = { accountId: 'c'.repeat(32), bucket: 'private-tests', jurisdiction: 'default' };
   store.invite(owner);
@@ -29,7 +33,7 @@ async function setup(t) {
   };
   const verified = { intentId:'pi_Sale',chargeId:'ch_Sale',paidAt:Math.floor(Date.now()/1000),refundedAmount:0,
     revocationReason:null,disputeStatus:null,taxCents:90,tipTaxCents:10,chargedTotalCents:1180 };
-  return { get store() { return store; },owner,platform,account,reserve,verified,
+  return { get store() { return store; },stateDir,owner,platform,account,reserve,verified,
     restart() { store.close(); store = openSetupStore(directory); } };
 }
 
@@ -62,7 +66,10 @@ test('tax policy and verified charges survive restart, receipt replay, fee delay
   assert.equal(ctx.store.viewerOrderByPlatformPayment(ctx.platform,'pi_Wrong','ch_Sale'),undefined);
   assert.equal(ctx.store.viewerOrderByPayment(ctx.account,'pi_Sale','ch_Sale'),undefined);
   assert.throws(() => settle({taxCents:110,tipTaxCents:20,chargedTotalCents:1190}));
-  const later = settle({stripeFeeCents:55});
+  const later = settle({stripeFeeCents:55,chargeBalanceId:'txn_card'});
+  assert.equal(ctx.store.setViewerTransfer(order.orderId,'tr_TooEarly'),false);
+  assert.equal(ctx.store.pendingTaxFees(ctx.platform).length,1);
+  ctx.store.recordTaxFees(ctx.platform,[{chargeId:'ch_Sale',feeCents:0,reference:'frr_zero'}]);
   assert.equal(settle({},order),undefined);
   assert.throws(() => settle({stripeFeeCents:56},later));
   assert.equal(settle({}).stripeFeeCents,55);
@@ -94,8 +101,12 @@ test('transfer retries survive restart and separate zero-proceeds, adjusted and 
   t.mock.timers.enable({apis:['Date'],now});
   function paid(suffix, policy, adjustments = {}) {
     const order = ctx.reserve({taxPolicy:policy});
-    return ctx.store.reconcileViewerPayment(order, {...ctx.verified,intentId:'pi_' + suffix,chargeId:'ch_' + suffix,
+    const paidOrder = ctx.store.reconcileViewerPayment(order, {...ctx.verified,chargeBalanceId:'txn_' + suffix,intentId:'pi_' + suffix,chargeId:'ch_' + suffix,
       ...(policy==='none' && {taxCents:0,tipTaxCents:0,chargedTotalCents:1100}),...adjustments});
+    if (policy !== 'none' && paidOrder.stripeFeeCents !== null) {
+      ctx.store.recordTaxFees(ctx.platform,[{chargeId:paidOrder.chargeId,feeCents:0,reference:'frr_zero'}]);
+    }
+    return paidOrder;
   }
   const old = paid('Old','none'), empty = paid('Tiny','marketplace-v1',{stripeFeeCents:1000});
   const expired = paid('Expired','marketplace-v1',{paidAt:Math.floor(now/1000)-3*86400,stripeFeeCents:35});
@@ -130,15 +141,88 @@ test('an original order schema migrates with both paid orders and unfinished leg
     platform TEXT,title TEXT,origin TEXT,createdAt INTEGER,sessionId TEXT UNIQUE,intentId TEXT UNIQUE,paidAt INTEGER,
     status TEXT,checkedAt INTEGER,webhookEventId TEXT,webhookAt INTEGER);
     INSERT INTO viewer_test_orders(tokenHash,orderId,createdAt,status,sessionId,intentId,paidAt)
-      VALUES ('one','old-paid',1,'paid','cs_old','pi_old',3),('two','old-open',1,'pending','cs_open',NULL,NULL);`);
+      VALUES ('one','old-paid',1,'paid','cs_old','pi_old',3),('two','old-open',1,'pending','cs_open',NULL,NULL);
+    ALTER TABLE viewer_test_orders ADD COLUMN taxPolicy TEXT NOT NULL DEFAULT 'none';
+    INSERT INTO viewer_test_orders(tokenHash,orderId,platform,createdAt,status,sessionId,intentId,paidAt,taxPolicy)
+      VALUES ('three','market-open','acct_old',1,'pending','cs_mopen',NULL,NULL,'marketplace-v1'),
+             ('four','market-paid','acct_old',1,'paid','cs_mpaid','pi_mpaid',3,'marketplace-v1');`);
   old.close();
   const store = openSetupStore(directory);
   t.after(() => store.close());
   const legacy = store.viewerOrderById('old-paid');
   assert.deepEqual([legacy.taxPolicy,legacy.amount,legacy.tipAmount,legacy.chargedTotalCents,legacy.status],['none',99,0,null,'paid']);
   assert.equal(store.viewerOrderById('old-open').sessionId,'cs_open');
+  for (const id of ['market-open','market-paid']) {
+    const migrated = store.viewerOrderById(id);
+    assert.deepEqual([migrated.taxPolicy,migrated.taxBasicFeeCents,migrated.filmTaxFeeCents],['marketplace-v1',0,0]);
+  }
+  assert.deepEqual(store.pendingTaxFees('acct_old'),[]);
   const verified = store.reconcileViewerPayment(legacy,{intentId:'pi_old',chargeId:'ch_old',paidAt:3,refundedAmount:0,
     disputeStatus:null,revocationReason:null,stripeFeeCents:33});
   assert.deepEqual([verified.taxCents,verified.tipTaxCents,verified.chargedTotalCents],[0,0,99]);
   assert.equal(store.pendingViewerTransfers().length,0);
+});
+
+test('the film and tip share the actual fee in whole cents on their tax-inclusive line totals', () => {
+  assert.equal(filmTaxFeeShare(11, 2200, 200), 10);
+  assert.equal(filmTaxFeeShare(9, 2200, 200), 8); // Actual pricing can differ from 0.5%.
+  assert.equal(filmTaxFeeShare(11, 2200, 0), 11);
+  assert.equal(filmTaxFeeShare(0, 117, 10), 0);
+  assert.equal(filmTaxFeeShare(1, 100, 50), 1);
+  assert.throws(() => filmTaxFeeShare(2.5, 100, 10));
+  assert.throws(() => filmTaxFeeShare(12, 10, 0));
+});
+
+test('the itemized report matches the platform charge and deducts an inline tax fee only once', async t => {
+  const ctx = await setup(t);
+  const pay = suffix => ctx.store.reconcileViewerPayment(ctx.reserve(), {...ctx.verified, intentId:'pi_' + suffix,
+    chargeId:'ch_' + suffix, chargeBalanceId:'txn_' + suffix, stripeFeeCents:60});
+  const standalone = pay('standalone'), inline = pay('inline');
+  const headers = 'account_id,incurred_by,product,feature_name,amount,currency,balance_transaction_id';
+  const row = (account, id, product, feature, amount, currency, ref) => [account,id,product,feature,amount,currency,ref].join(',');
+  const external = row(ctx.platform,standalone.chargeId,'Automatic Taxes','Automatic tax','0.1100','USD','txn_fee');
+  const included = row(ctx.platform,inline.intentId,'Tax','Automatic tax','0.11','usd',inline.chargeBalanceId);
+  const load = (...rows) => importTaxFeeReport(ctx.store,ctx.platform,[headers,...rows].join('\n'));
+  assert.equal(ctx.store.platformReport(null).total.pendingTaxFees,2);
+  assert.deepEqual(load(external.replace('0.1100','0.11').replace(ctx.platform,'acct_other'),
+    included.replace(',Tax,Automatic tax,',',Payments,Card processing,')),{matched:0,recorded:0});
+  for (const bad of [included.replace(',usd,',',eur,'),included.replace('0.11','-0.11'),included.replace('0.11','0.115'),external]) {
+    assert.throws(() => load(external,bad));
+    assert.equal(ctx.store.viewerOrderById(standalone.orderId).taxBasicFeeCents,null);
+  }
+  assert.throws(() => load(external,included.replace('0.11','0.61'))); // Whole import rolls back.
+  assert.equal(ctx.store.pendingTaxFees(ctx.platform).length,2);
+  assert.deepEqual(load(external,included),{matched:2,recorded:2});
+  ctx.restart();
+  assert.deepEqual(load(external,included),{matched:2,recorded:0});
+  assert.throws(() => load(external.replace('0.1100','0.12')));
+  const a = ctx.store.viewerOrderById(standalone.orderId), b = ctx.store.viewerOrderById(inline.orderId);
+  assert.deepEqual([a.cardProcessingCents,a.filmTaxFeeCents,b.cardProcessingCents,b.filmTaxFeeCents],[60,10,49,10]);
+  const totals = ctx.store.platformReport(null).total;
+  assert.deepEqual([totals.reportedFees,totals.netRevenue,totals.platformTips,totals.filmTaxFees,totals.tipTaxFees,totals.pendingTaxFees],
+    [109,1871,178,20,2,0]);
+  assert.equal(ctx.store.pendingViewerTransfers(ctx.platform).length,2);
+});
+
+test('the operator can reconcile a reported fee and explicit exceptions from the command line', async t => {
+  const ctx = await setup(t);
+  const run = (...args) => execFileSync(process.execPath, ['scripts/tax-fees.js',args[0],ctx.platform,...args.slice(1)], {
+    encoding:'utf8', env:{...process.env,STREAM_STATE_DIR:ctx.stateDir}, stdio:['ignore','pipe','pipe']
+  });
+  for (const id of ['reported','manual','free']) {
+    ctx.store.reconcileViewerPayment(ctx.reserve(), {...ctx.verified,intentId:'pi_' + id,chargeId:'ch_' + id,
+      chargeBalanceId:'txn_' + id,stripeFeeCents:57});
+  }
+  assert.match(run('pending'),/ch_reported/);
+  const path = join(ctx.stateDir,'fees.csv');
+  await writeFile(path,'incurred_by,product,feature_name,amount,currency,balance_transaction_id\nch_reported,Tax,Automatic tax,0.06,usd,txn_reportfee');
+  assert.match(run('import',path),/recorded: 1/);
+  assert.match(run('import',path),/recorded: 0/);
+  assert.throws(() => run('confirm','ch_free','0','txn_unverified'));
+  assert.throws(() => run('confirm','ch_manual','1.5','txn_invalid'));
+  assert.match(run('confirm','ch_free','0','frr_complete'),/recorded: 1/);
+  assert.match(run('confirm','ch_manual','7','txn_manualfee'),/recorded: 1/);
+  assert.throws(() => run('confirm','ch_manual','8','txn_manualfee'));
+  assert.doesNotMatch(run('pending'),/ch_reported|ch_free|ch_manual/);
+  assert.deepEqual(ctx.store.pendingViewerTransfers(ctx.platform).map(o => o.taxBasicFeeCents).sort(),[0,6,7]);
 });
