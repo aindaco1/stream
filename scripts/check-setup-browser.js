@@ -69,7 +69,18 @@ async function signIn(page, origin, owner) {
   await page.getByRole('heading', { name: 'Filmmaker setup', exact: true }).waitFor();
 }
 
+async function openSection(page, id) {
+  const panel = page.locator('#' + id + '[role=tabpanel]');
+  await panel.waitFor({ state: 'attached' });
+  if (await panel.isVisible()) return;
+  const select = page.locator('.workspace-sections select.dw-admin-mobile-tabs__control');
+  if (await select.isVisible()) await select.selectOption(id);
+  else await page.locator('#tab-' + id).click();
+  await panel.waitFor();
+}
+
 async function finishStripe(page, mode, shouldResume) {
+  await openSection(page, 'payments');
   const card = page.locator('#payments');
   const providerReturn = page.getByRole('link', { name: 'Return to Stream' });
   await card.locator(`button[name="mode"][value="${mode}"]`).click();
@@ -89,6 +100,7 @@ async function finishStripe(page, mode, shouldResume) {
 }
 
 async function resetAndReconnect(page, owner, otherOwner, previewPath) {
+  await openSection(page, 'payments');
   const { store } = setup;
   const { stripe: connected, r2, draft } = store.maker(owner);
   // The app is running in test mode. Give this filmmaker a distinct live
@@ -132,6 +144,7 @@ async function resetAndReconnect(page, owner, otherOwner, previewPath) {
   assert.deepEqual(afterReset.r2, r2);
   assert.deepEqual(store.maker(otherOwner), otherMaker);
   assert.equal(providerCalls, previousCalls, 'Reset with no unfinished checkouts does not call the provider');
+  await openSection(page, 'film');
   const savedPreview = page.getByRole('link', { name: 'Projection test <first cut>' });
   assert.equal(await savedPreview.getAttribute('href'), previewPath);
   assert.equal(await page.locator('#storage .provider-status').textContent(), 'Connected');
@@ -164,6 +177,7 @@ async function submitKeyPair(form, key, buttonLabel) {
 }
 
 async function connectBucket(page, method, recover) {
+  await openSection(page, 'storage');
   const card = page.locator('#storage');
   if (method !== 'manual') {
     const dashboard = await card.getByRole('link', { name: 'Open Cloudflare R2' }).getAttribute('href');
@@ -225,6 +239,7 @@ async function connectBucket(page, method, recover) {
 }
 
 async function registerFilm(page, shouldRecover, origin, owner) {
+  await openSection(page, 'film');
   const section = page.locator('#film');
   assert.equal(await section.getByRole('link', { name: /Open your R2 bucket/ }).count(), 0);
   assert.equal(await section.locator('[name="objectKey"]').count(), 0);
@@ -334,6 +349,7 @@ try {
         assert.equal(await page.locator('#payments .provider-status').textContent(), 'Not connected');
         await finishStripe(page, mode, false);
       }
+      await openSection(page, 'film');
       await page.getByRole('link', { name: 'Watch private preview' }).click();
       await page.waitForFunction(() => document.querySelector('video')?.duration === 10);
       await page.getByRole('link', { name: 'Back to filmmaker setup' }).click();
@@ -350,8 +366,31 @@ try {
         await resetAndReconnect(page, owner, 'qa-new-new', privatePath);
       }
       if (first) {
-        await page.getByRole('link', { name: 'Film dashboard' }).click();
+        const workspace = page.getByRole('combobox', { name: 'Filmmaker workspace' });
+        assert.ok((await workspace.boundingBox()).height >= 44);
+        await workspace.selectOption('/setup/dashboard');
         await page.getByRole('heading', { name: 'Film dashboard' }).waitFor();
+        const sections = page.getByRole('combobox', { name: 'Dashboard sections' });
+        assert.ok((await sections.boundingBox()).height >= 44);
+        await sections.selectOption('overview');
+        await page.getByRole('heading', { name: 'All films' }).waitFor();
+        assert.equal(await page.locator('#films').isVisible(), false);
+        await page.goBack();
+        await page.locator('#films').waitFor();
+        assert.equal(await sections.inputValue(), 'films');
+        await page.goForward();
+        await page.reload();
+        await page.locator('#overview').waitFor();
+        assert.equal(await sections.inputValue(), 'overview');
+        await page.setViewportSize({ width: 1024, height: 844 });
+        const activeTab = page.getByRole('tab', { selected: true });
+        await activeTab.press('Home');
+        assert.equal(await activeTab.textContent(), 'Films');
+        await activeTab.press('ArrowLeft');
+        assert.equal(await activeTab.textContent(), 'Overview');
+        await activeTab.press('ArrowRight');
+        assert.equal(await activeTab.textContent(), 'Films');
+        assert.equal(await page.getByRole('tabpanel').count(), 1);
         await page.getByRole('button', { name: 'Publish film' }).click();
         const code = page.getByLabel('Embed code');
         await code.waitFor();
@@ -378,6 +417,9 @@ try {
         await page.getByLabel('Free preview (seconds)').fill('0');
         await page.getByLabel('Rental duration (hours)').fill('12');
         await page.getByRole('button', { name: 'Save settings' }).click();
+        assert.equal(new URL(page.url()).hash, '#' + privatePath.split('/').pop());
+        await page.reload();
+        await page.getByRole('form', { name: 'Edit prices and playback for Projection test <first cut>' }).waitFor();
         await page.getByRole('button', { name: 'Unpublish film' }).click();
         await page.getByRole('button', { name: 'Publish film' }).waitFor();
         assert.equal(await page.getByLabel('Embed code').count(), 0);

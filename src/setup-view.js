@@ -175,33 +175,48 @@ function filmSection({ r2, rights, film, draft, csrf }) {
     </form>`;
 }
 
-export function renderSetupPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, rights = {}, film, films = [], draft = {}, error, notice }) {
-  const filmHTML = `<section class="film-card" id="film">${filmSection({ r2, rights, film, draft, csrf })}</section>`;
+function sectionTabs(label, initial, sections) {
+  const links = sections.map(({ id, name }) => `<a href="#${id}" id="tab-${id}" data-tab="${id}">${name}</a>`).join('');
+  const panels = sections.map(({ id, content }) => `<div class="workspace-panel" id="${id}">${content}</div>`).join('');
+  return `<div class="workspace-sections" data-initial="${initial}">
+    <nav class="tab-bar subtabs" aria-label="${label}">${links}</nav>${panels}</div>`;
+}
+
+export function renderSetupPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, rights = {}, film, films = [], draft = {}, error, notice, initialSection }) {
+  const filmHTML = `<section class="film-card">${filmSection({ r2, rights, film, draft, csrf })}</section>`;
   const saved = films.length ? films.filter(item => privatePreview(item.previewPath) && item.id !== film?.id).map(item =>
     `<li>${previewSeconds(item.previewSeconds) ? `<a href="${escapeHtml(item.previewPath)}">${escapeHtml(item.title)}</a>` : escapeHtml(item.title)}${priceEditor(item, csrf)}</li>`).join('') : '';
   const library = saved ? `<section class="film-card"><h2>Saved films</h2><ul class="saved-films">${saved}</ul></section>` : '';
-  const connections = `<div id="payments">${stripeCard(stripe, csrf)}</div>
-    <div id="storage">${storageCard(r2, draft, csrf)}</div>`;
+  const initial = initialSection || (r2.status === 'ready' ? 'film' : stripe.status === 'ready' ? 'storage' : 'payments');
   return workspacePage('Filmmaker setup', csrf, `<div class="workspace-intro"><h1>Filmmaker setup</h1>
-      ${filmmaker.name ? `<p class="account">Signed in as ${escapeHtml(filmmaker.name)}</p>` : ''}
-      <nav class="section-links" aria-label="Setup sections"><a href="#payments">Payments</a>
-        <a href="#storage">Storage</a><a href="#film">Film</a><a href="/setup/dashboard">Film dashboard</a></nav></div>
+      ${filmmaker.name ? `<p class="account">Signed in as ${escapeHtml(filmmaker.name)}</p>` : ''}</div>
       ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
       ${notice ? `<div class="feedback" role="status">${escapeHtml(notice)}</div>` : ''}
-      ${r2.status === 'ready' ? filmHTML + library + connections : connections + filmHTML + library}
-    `);
+      ${sectionTabs('Setup sections', initial, [
+        { id: 'payments', name: 'Payments', content: stripeCard(stripe, csrf) +
+          (['ready', 'pending'].includes(stripe.status) ? (r2.status === 'ready' ? '<a href="#film">Continue to film</a>' : '<a href="#storage">Continue to storage</a>') : '') },
+        { id: 'storage', name: 'Storage', content: storageCard(r2, draft, csrf) +
+          (r2.status === 'ready' ? '<a href="#film">Continue to film</a>' : '') },
+        { id: 'film', name: 'Film', content: filmHTML + library }
+      ])}`);
 }
 
-function workspacePage(title, csrf, content, script = '') {
+export function workspacePage(title, csrf, content, { dashboard = false } = {}) {
+  const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="same-origin">
-    <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/setup/style.css">${script}</head>
-    <body><a class="skip" href="#main">Skip to setup</a>
+    <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/setup/style.css">
+    <script type="module" src="/setup/navigation.js"></script>${dashboard ? '<script src="/setup/dashboard.js" defer></script>' : ''}</head>
+    <body><a class="skip" href="#main">Skip to content</a>
     <header class="masthead"><div class="bar"><strong class="brand">Stream</strong>
       <form method="post" action="/setup/sign-out">${hidden('csrf', csrf)}
-      <button class="sign-out" type="submit">Sign out</button></form></div></header>
-    <main id="main" tabindex="-1">${content}</main></body></html>`;
+      <button class="sign-out" type="submit">Sign out</button></form></div>
+      <nav class="workspace-nav" aria-label="Filmmaker workspace"><div class="tab-bar">
+        <a href="/setup/dashboard"${dashboard ? current : ''}>Film dashboard</a>
+        <a href="/setup"${dashboard ? '' : current}>Filmmaker setup</a>
+      </div></nav></header>
+    <main class="setup-shell" id="main" tabindex="-1">${content}</main></body></html>`;
 }
 
 const statsLabels = { previews: 'Preview starts', plays: 'Paid plays', rentals: 'Rentals', purchases: 'Purchases',
@@ -230,11 +245,15 @@ export function renderDashboard({ csrf, owner, error, films, origin }) {
         <p class="hint">${terms}</p><button type="submit" class="${film.published ? 'secondary' : 'primary'}" name="visibility" value="${film.published ? 'private' : 'public'}">
           ${film.published ? 'Unpublish film' : 'Publish film'}</button></form></article>`;
   }).join('');
-  return workspacePage('Film dashboard', csrf, `<div class="workspace-intro"><h1>Film dashboard</h1><p class="account">Signed in as ${escapeHtml(owner)}</p>
-    <nav class="section-links" aria-label="Filmmaker workspace"><a href="/setup#film">Add a film</a><a href="/setup#payments">Payment settings</a><a href="/setup">Filmmaker setup</a></nav></div>
+  const overview = `<section class="film-card"><h2>All films</h2>${statsList(totals)}
+    <p class="hint">Counts include repeat viewings. Sales are final. Test payments show settled viewer orders before fees and refunds. Refunds show amounts returned through Stripe.</p>
+    <a href="/setup#payments">Payment settings</a></section>`;
+  return workspacePage('Film dashboard', csrf, `<div class="workspace-intro"><h1>Film dashboard</h1>
+    <p class="account">Signed in as ${escapeHtml(owner)}</p></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
-    ${films.length ? `<section class="film-card"><h2>All films</h2>${statsList(totals)}
-      <p class="hint">Counts include repeat viewings. Sales are final. Test payments show settled viewer orders before fees and refunds. Refunds show amounts returned through Stripe.</p></section>${cards}` :
-      '<p>You have no saved films yet. Add your first film in setup to publish it here.</p>'}`,
-    '<script src="/setup/dashboard.js" defer></script>');
+    ${sectionTabs('Dashboard sections', 'films', [
+      { id: 'films', name: 'Films', content: `<div class="film-actions"><a class="primary-link" href="/setup#film">Add a film</a></div>` +
+        (cards || '<p>You have no saved films yet. Add your first film to publish it here.</p>') },
+      { id: 'overview', name: 'Overview', content: overview }
+    ])}`, { dashboard: true });
 }

@@ -9,7 +9,7 @@ import { guidedBucketForm, parseR2BucketUrl, R2SetupError } from './setup-r2.js'
 import { openSetupStore } from './setup-store.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { escapeHtml, renderBucketAccess, renderDashboard, renderSetupPage, renderStripeCountryForm, renderStripeReset } from './setup-view.js';
+import { escapeHtml, renderBucketAccess, renderDashboard, renderSetupPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
@@ -90,7 +90,12 @@ export async function createSetup({
   sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm
 } = {}) {
   const style = await readFile(new URL('../public/setup.css', import.meta.url));
-  const dashboardScript = await readFile(new URL('../public/setup-dashboard.js', import.meta.url));
+  const scripts = new Map(await Promise.all(Object.entries({
+    '/setup/dashboard.js': new URL('../public/setup-dashboard.js', import.meta.url),
+    '/setup/navigation.js': new URL('../public/setup-navigation.js', import.meta.url),
+    '/setup/tabs.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs')),
+    '/setup/tabs-browser.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs-browser'))
+  }).map(async ([route, file]) => [route, await readFile(file)])));
   const store = openSetupStore(directory);
   const checkout = viewerCheckout ?? createViewerCheckout({store,env});
   const publications = createPublicFilms({ store, env, sourceFor });
@@ -128,6 +133,8 @@ export async function createSetup({
       const film = store.film(session.owner, draft.id);
       return html(status, renderSetupPage({
         filmmaker: { name: session.owner }, csrf: session.csrf,
+        initialSection: path.startsWith('/setup/stripe/') ? 'payments' : path.startsWith('/setup/r2') ? 'storage' :
+          ['/setup/film', '/setup/film/prices', '/setup/rights', '/setup/next'].includes(path) ? 'film' : undefined,
         stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
           canReset: Boolean(state.accountId || state.flow || state.createRequest),
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
@@ -139,7 +146,7 @@ export async function createSetup({
       }));
     };
     if (get && path === '/setup/style.css') return send(200, 'text/css', style, commonHeaders);
-    if (get && path === '/setup/dashboard.js') return send(200, 'text/javascript', dashboardScript, commonHeaders);
+    if (get && scripts.has(path)) return send(200, 'text/javascript', scripts.get(path), commonHeaders);
     if (get && path === '/setup/sign-in.js') {
       return send(200, 'text/javascript', "const code=location.hash.slice(1); if(code){history.replaceState(null,'',location.pathname); if(/^[\\w-]{43}$/.test(code)) document.querySelector('[name=code]').value=code;}", commonHeaders);
     }
@@ -162,6 +169,7 @@ export async function createSetup({
     }
     if (get && path === '/setup') return display();
     const owner = session.owner;
+    const step = (title, inner) => workspacePage(title, session.csrf, '<h1>' + escapeHtml(title) + '</h1>' + inner);
     const dashboard = (status = 200, error) => html(status, renderDashboard({ csrf: session.csrf, owner, error,
       origin: viewerOrigin(env, origin), films: store.dashboardFilms(owner).map(film => ({
         ...film, published: publications.isPublished(owner, film.id)
@@ -170,9 +178,9 @@ export async function createSetup({
     if (get && path === '/setup/stripe/reset') {
       const { state, confirmation } = store.stripeContext(owner, mode);
       if (!state.accountId && !state.flow && !state.createRequest) return redirect('/setup#payments');
-      return html(200, page('Reset Stripe connection', renderStripeReset(session.csrf, mode, state, confirmation)));
+      return html(200, step('Reset Stripe connection', renderStripeReset(session.csrf, mode, state, confirmation)));
     }
-    const bucketAccess = (status, location, error) => html(status, page('Connect your private bucket', renderBucketAccess(session.csrf, location, error)));
+    const bucketAccess = (status, location, error) => html(status, step('Connect your private bucket', renderBucketAccess(session.csrf, location, error)));
     if (get && path === '/setup/r2/access') {
       const location = store.storageDraft(owner);
       return location ? bucketAccess(200, location) : redirect('/setup#storage');
@@ -181,8 +189,8 @@ export async function createSetup({
       const film = store.film(owner, preview[1]);
       const seconds = film && previewSeconds(film.previewSeconds);
       if (!film || !seconds) return reject(404, 'Preview unavailable.');
-      if (!preview[2]) return html(200, page(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata" src="' +
-        path + '/clip.mp4"></video><p><a href="/setup">Back to filmmaker setup</a></p>'));
+      if (!preview[2]) return html(200, step(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata" src="' +
+        path + '/clip.mp4"></video><p><a href="/setup#film">Back to filmmaker setup</a></p>'));
       const key = film.id + '/' + seconds;
       if (!activePreviews.has(key)) {
         activePreviews.set(key, inspect(owner, film.bucket, film.objectKey, film.revision, seconds).finally(() => activePreviews.delete(key)));
@@ -204,7 +212,7 @@ export async function createSetup({
         const ctx = store.stripeContext(owner, mode);
         const result = callback ? await provider.callback(ctx, callback[1], searchParams) :
           path === '/setup/stripe/start' ? await provider.start(ctx, data.mode, data.country) : await provider.refresh(ctx);
-        if (result?.countryRequired) return html(200, page('Choose your business country', renderStripeCountryForm(session.csrf, data.mode)));
+        if (result?.countryRequired) return html(200, step('Choose your business country', renderStripeCountryForm(session.csrf, data.mode)));
         return redirect(result?.redirect || '/setup#payments');
       }
       if (path === '/setup/stripe/reset') {

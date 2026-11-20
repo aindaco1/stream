@@ -20,9 +20,9 @@ A filmmaker can set the rental and purchase prices for a film in setup. Leaving 
 
 ### Filmmaker dashboard
 
-Open **Film dashboard** from setup. Select a saved film, set rental and purchase prices, choose 1–720 rental hours and a preview of 0–30 whole seconds, then publish and copy the embed code. A zero-second preview shows the offers immediately. The preview must end before the film does. The filmmaker can change future offers without altering the price or expiry of an existing order.
+Open **Film dashboard** and choose **Films**. On a phone, use the **Filmmaker workspace** and **Dashboard sections** menus. Find your saved film, set rental and purchase prices, choose 1–720 rental hours and a preview of 0–30 whole seconds, then publish and copy the embed code. A zero-second preview shows the offers immediately. The preview must end before the film does. The filmmaker can change future offers without altering the price or expiry of an existing order.
 
-Each filmmaker sees their own per-film and total preview starts, paid plays, rental and purchase counts, gross USD test payments and refunds recorded by Stripe. Starts are player-reported playback events. Repeat screenings count, while seeking, pausing, fetching media ranges and retrying the same event do not add views. Unpublishing removes the preview, blocks new orders and expires open Stripe checkouts. If Stripe is temporarily unreachable, the dashboard reports outstanding closures and Stream retries. Existing renters and buyers keep access under their original terms.
+Each film shows its own counts. **Overview** shows totals across your films for preview starts, paid plays, rental and purchase counts, gross USD test payments and refunds recorded by Stripe. Starts are player-reported playback events. Repeat screenings count, while seeking, pausing, fetching media ranges and retrying the same event do not add views. Unpublishing removes the preview, blocks new orders and expires open Stripe checkouts. If Stripe is temporarily unreachable, the dashboard reports outstanding closures and Stream retries. Existing renters and buyers keep access under their original terms.
 
 ### Operator configuration
 
