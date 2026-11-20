@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { bucketReader } from './r2-write.js';
 import { DatabaseSync } from 'node:sqlite';
 import { recoveryStore } from './viewer-recovery.js';
 import { StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
@@ -59,6 +60,7 @@ export function openSetupStore(directory) {
     CREATE TABLE IF NOT EXISTS claims (mode TEXT NOT NULL, account TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(mode, account));
     CREATE TABLE IF NOT EXISTS buckets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, config TEXT NOT NULL, sealed BLOB NOT NULL);
     CREATE TABLE IF NOT EXISTS films (id TEXT PRIMARY KEY, owner TEXT NOT NULL, bucket_id TEXT NOT NULL, metadata TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS film_uploads (owner TEXT NOT NULL, draftId TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(owner,draftId));
     CREATE TABLE IF NOT EXISTS thumbnail_edits (filmId TEXT PRIMARY KEY, lock TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS film_publication (
       filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, published INTEGER NOT NULL CHECK (published IN (0,1))
@@ -124,6 +126,17 @@ export function openSetupStore(directory) {
         PRIMARY KEY(account,eventId))`);
   });
   const accessOrder = sql('SELECT filmId,owner,account,scope,revision,kind,intentId,paidAt,rentalHours,status,revocationReason,disputeStatus FROM viewer_test_orders WHERE orderId=?');
+  function bucketAccess(owner, config) {
+    const id = connectionId(owner, config);
+    const row = sql('SELECT sealed,config FROM buckets WHERE id=? AND owner=?').get(id, owner);
+    if (!row) throw new Error('Storage connection unavailable.');
+    const bytes = Buffer.from(row.sealed);
+    const cipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12));
+    cipher.setAAD(Buffer.from(id));
+    cipher.setAuthTag(bytes.subarray(12, 28));
+    const clear = Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]);
+    return { ...JSON.parse(row.config), ...JSON.parse(clear.toString('utf8')) };
+  }
   const store = {
     ...recoveryStore(db, key),
     invite(owner) {
@@ -324,8 +337,8 @@ export function openSetupStore(directory) {
       const row = sql('SELECT config FROM storage_drafts WHERE owner=?').get(owner);
       return row && JSON.parse(row.config);
     },
-    saveBucket(owner, { accountId, bucket, jurisdiction, accessKeyId, secretAccessKey }) {
-      const config = { accountId, jurisdiction, bucket };
+    saveBucket(owner, { accountId, bucket, jurisdiction, accessKeyId, secretAccessKey, uploads }, { select = true } = {}) {
+      const config = { accountId, jurisdiction, bucket, ...(uploads ? { uploads: true } : {}) };
       const id = connectionId(owner, config);
       const iv = randomBytes(12);
       const cipher = createCipheriv('aes-256-gcm', key, iv);
@@ -333,27 +346,43 @@ export function openSetupStore(directory) {
       const ciphertext = Buffer.concat([cipher.update(JSON.stringify({ accessKeyId, secretAccessKey })), cipher.final()]);
       const sealed = Buffer.concat([iv, cipher.getAuthTag(), ciphertext]);
       transaction(() => {
-        sql('INSERT INTO buckets VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET sealed=excluded.sealed')
+        sql('INSERT INTO buckets VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET sealed=excluded.sealed,config=excluded.config')
           .run(id, owner, JSON.stringify(config), sealed);
-        sql('UPDATE makers SET bucket_id=? WHERE id=?').run(id, owner);
-        sql('DELETE FROM storage_drafts WHERE owner=?').run(owner);
+        if (select) sql('UPDATE makers SET bucket_id=? WHERE id=?').run(id, owner);
+        if (select) sql('DELETE FROM storage_drafts WHERE owner=?').run(owner);
       });
     },
     credentials(owner, config) {
-      const id = connectionId(owner, config);
-      const row = sql('SELECT sealed FROM buckets WHERE id=? AND owner=?').get(id, owner);
-      if (!row) throw new Error('Storage connection unavailable.');
-      const bytes = Buffer.from(row.sealed);
-      const cipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12));
-      cipher.setAAD(Buffer.from(id));
-      cipher.setAuthTag(bytes.subarray(12, 28));
-      const clear = Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]);
-      return { ...config, ...JSON.parse(clear.toString('utf8')) };
+      const saved = bucketAccess(owner, config);
+      return saved.uploads ? bucketReader(saved) : saved;
+    },
+    uploadCredentials(owner, config) {
+      const saved = bucketAccess(owner, config);
+      return saved.uploads ? saved : undefined;
+    },
+    upload(owner, id) {
+      const row = sql('SELECT data FROM film_uploads WHERE owner=? AND draftId=?').get(owner, id);
+      return row && JSON.parse(row.data);
+    },
+    saveUpload(owner, id, value) {
+      sql('INSERT INTO film_uploads VALUES(?,?,?) ON CONFLICT(owner,draftId) DO UPDATE SET data=excluded.data')
+        .run(owner, id, JSON.stringify(value));
+    },
+    clearUpload(owner, id) { sql('DELETE FROM film_uploads WHERE owner=? AND draftId=?').run(owner, id); },
+    finishUpload(owner, id, objectKey) {
+      transaction(() => {
+        const changed = sql("UPDATE makers SET draft=json_set(draft,'$.objectKey',?) WHERE id=? AND json_extract(draft,'$.id')=?").run(objectKey, owner, id);
+        if (!changed.changes) throw new Error('Film draft changed.');
+        sql("UPDATE film_uploads SET data=json_set(data,'$.complete',json('true')) WHERE owner=? AND draftId=?").run(owner,id);
+      });
     },
     saveDraft(owner, draft) { sql('UPDATE makers SET draft=? WHERE id=?').run(JSON.stringify(draft), owner); },
     nextDraft(owner) { store.saveDraft(owner, newDraft()); },
     saveFilm(owner, bucket, film) {
-      sql('INSERT INTO films VALUES(?,?,?,?)').run(film.id, owner, connectionId(owner, bucket), JSON.stringify(film));
+      transaction(() => {
+        sql('INSERT INTO films VALUES(?,?,?,?)').run(film.id, owner, connectionId(owner, bucket), JSON.stringify(film));
+        store.clearUpload(owner, film.id);
+      });
     },
     setFilmPrices(owner, id, prices) {
       return sql("UPDATE films SET metadata=json_set(metadata, '$.prices', json(?)) WHERE owner=? AND id=?")
@@ -424,17 +453,17 @@ export function openSetupStore(directory) {
       });
     },
     dashboardFilms(owner) {
-      const rows = sql(`SELECT f.metadata, COALESCE(c.previews,0) AS previews,COALESCE(c.plays,0) AS plays,
+      const rows = sql(`SELECT f.metadata, json_extract(b.config,'$.uploads') AS uploads, COALESCE(c.previews,0) AS previews,COALESCE(c.plays,0) AS plays,
         COALESCE(p.rentals,0) AS rentals,COALESCE(p.purchases,0) AS purchases,
-        COALESCE(p.gross,0) AS gross,COALESCE(p.refunded,0) AS refunded FROM films f
+        COALESCE(p.gross,0) AS gross,COALESCE(p.refunded,0) AS refunded FROM films f JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner
         LEFT JOIN film_counts c ON c.filmId=f.id
         LEFT JOIN (SELECT filmId,SUM(kind='rent') AS rentals,SUM(kind='buy') AS purchases,
           SUM(amount) AS gross,SUM(refundedAmount) AS refunded FROM viewer_test_orders
           WHERE owner=? AND intentId IS NOT NULL AND paidAt IS NOT NULL GROUP BY filmId) p ON p.filmId=f.id
         WHERE f.owner=? ORDER BY f.rowid DESC`).all(owner, owner);
-      return rows.map(({ metadata, ...stats }) => {
+      return rows.map(({ metadata, uploads, ...stats }) => {
         const { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail } = JSON.parse(metadata);
-        return { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail, stats };
+        return { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail, uploads: Boolean(uploads), stats };
       });
     },
     films(owner) {

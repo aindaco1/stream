@@ -1,17 +1,21 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { localPreviewPort } from './config.js';
 import { operatorDirectory } from './operator.js';
 import { openFilm } from './media.js';
 import { filmPrices, priceFromInput, previewSeconds, rentalHours } from './prices.js';
 import { createPublicFilms } from './public-films.js';
 import { createThumbnails, maxThumbnailBytes, ThumbnailError } from './thumbnails.js';
-import { thumbnailEditor } from './thumbnail-view.js';
+import { createFilmUploads, FilmUploadError, UPLOAD_PART_BYTES } from './film-upload.js';
+import { centerFrame } from './thumbnail-frame.js';
+import { verifyUploadAccess } from './r2-write.js';
 import { checkR2Bucket, createR2Source } from './source.js';
 import { guidedBucketForm, parseR2BucketUrl, R2SetupError } from './setup-r2.js';
 import { openSetupStore } from './setup-store.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
 import { escapeHtml, infoFields, selectedFields } from './film-embed.js';
+import { renderFilmmakerSettings } from './filmmaker-help.js';
 import { filmSection, renderBucketAccess, renderDashboard, renderSetupPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
@@ -78,13 +82,13 @@ function bucketForm(data) {
   if (!/^[a-f0-9]{32}$/i.test(accountId.trim()) || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket.trim()) ||
       !['default', 'eu', 'us', 'fedramp'].includes(jurisdiction)) throw new SetupError('Check the account ID, exact bucket name and jurisdiction in Cloudflare.');
   if (![accessKeyId, secretAccessKey].every(v => /^\S{8,256}$/.test(v.trim()))) throw new SetupError('Paste both values from the R2 token screen.');
-  if (data.privateConfirmed !== 'yes') throw new SetupError('Confirm the private bucket and its read-only token before connecting.');
+  if (data.privateConfirmed !== 'yes') throw new SetupError('Confirm that the bucket is private and the token is limited to that bucket.');
   return { accountId: accountId.trim().toLowerCase(), bucket: bucket.trim(), jurisdiction, accessKeyId: accessKeyId.trim(), secretAccessKey: secretAccessKey.trim() };
 }
 
 export async function createSetup({
   directory = join(operatorDirectory(), 'filmmakers'), stripe, viewerCheckout, env = process.env,
-  sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm, thumbnailFetch = fetch
+  sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm, thumbnailFetch = fetch, uploadFetch = fetch
 } = {}) {
   const style = await readFile(new URL('../public/setup.css', import.meta.url));
   const darkStyle = await readFile(new URL('../public/setup-dark.css', import.meta.url));
@@ -94,13 +98,14 @@ export async function createSetup({
     '/setup/dashboard.js': new URL('../public/setup-dashboard.js', import.meta.url),
     '/setup/thumbnail.js': new URL('../public/thumbnail.js', import.meta.url),
     '/setup/thumbnail-frame.js': new URL('./thumbnail-frame.js', import.meta.url),
-    '/setup/thumbnail-grant.js': new URL('../public/thumbnail-grant.js', import.meta.url),
+    '/setup/video-upload.js': new URL('../public/video-upload.js', import.meta.url),
     '/setup/navigation.js': new URL('../public/setup-navigation.js', import.meta.url),
     '/setup/tabs.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs')),
     '/setup/tabs-browser.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs-browser'))
   }).map(async ([route, file]) => [route, await readFile(file)])));
   const store = openSetupStore(directory);
   const thumbnails = createThumbnails(store, thumbnailFetch);
+  const uploads = createFilmUploads(store, { fetchImpl: uploadFetch });
   const checkout = viewerCheckout ?? createViewerCheckout({store,env});
   const publications = createPublicFilms({ store, env, sourceFor });
   const busy = new Set();
@@ -163,11 +168,14 @@ export async function createSetup({
     }
     const preview = previewPattern.exec(path);
     if (!session) {
-      if (get && (path === '/setup' || path === '/setup/dashboard' || path === '/setup/dashboard/new')) return redirect('/setup/sign-in');
+      if (get && (path === '/setup' || path === '/setup/dashboard' || path === '/setup/settings' || path === '/setup/dashboard/new')) return redirect('/setup/sign-in');
       if (get && callbackPattern.test(path)) return html(401, signInPage('Your Stream session has ended. Sign in again and continue from the Stripe card.'));
       return reject(401, 'Sign in to your filmmaker workspace.');
     }
     if (get && path === '/setup') return display();
+    if (get && path === '/setup/settings') {
+      return html(200, workspacePage('Settings', session.csrf, '<div class="filmmaker-help">' + renderFilmmakerSettings() + '</div>', { settings: true }));
+    }
     const owner = session.owner;
     const step = (title, inner, options) => workspacePage(title, session.csrf, '<h1>' + escapeHtml(title) + '</h1>' + inner, options);
     const newFilm = (status = 200, feedback = {}) => {
@@ -178,17 +186,20 @@ export async function createSetup({
       return html(status, step('Add a film', message + '<section id="film" class="film-card">' + filmSection({
         r2: r2 ? { ...r2, status: 'ready' } : {}, draft, csrf: session.csrf,
         rights: { accepted: Boolean(draft.rights), statement: rightsStatement }
-      }) + '</section><p><a href="/setup/dashboard#films">Back to films</a></p>', { dashboard: true }));
+      }) + '</section><p><a href="/setup/dashboard#films">Back to films</a></p>', { dashboard: true, filmUpload: true }),
+        { 'Content-Security-Policy': csp + "; connect-src 'self'" });
     };
     const dashboard = (status = 200, error) => {
       const viewer = viewerOrigin(env, origin);
+      const port = localPreviewPort(env);
+      const previewOrigin = port && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin) ? 'http://127.0.0.1:' + port : viewer;
       return html(status, renderDashboard({ csrf: session.csrf, owner, error, draft: store.maker(owner).draft,
-        origin: viewer, selectionFilm: searchParams.get('film'), infoSaved: searchParams.get('saved') === 'details',
+        origin: viewer, previewOrigin, selectionFilm: searchParams.get('film'), infoSaved: searchParams.get('saved') === 'details',
         selection: searchParams.getAll('include').join(','),
         films: store.dashboardFilms(owner).map(film => ({ ...film, published: publications.isPublished(owner, film.id) }))
-      }), { 'Content-Security-Policy': csp + '; frame-src ' + viewer });
+      }), { 'Content-Security-Policy': csp.replace("img-src 'self'", "img-src 'self' blob:") + "; connect-src 'self'; frame-src " + previewOrigin });
     };
-    const thumb = /^\/setup\/thumbnail\/(f-[a-f0-9-]{36})(?:\/(source|poster)\.jpg)?$/.exec(path);
+    const thumb = /^\/setup\/thumbnail\/(f-[a-f0-9-]{36})(?:\/(?:(source|poster)\.jpg|(settings)))?$/.exec(path);
     if (thumb) {
       const film = store.film(owner, thumb[1]);
       if (!film) return reject(404, 'Film unavailable.');
@@ -198,12 +209,12 @@ export async function createSetup({
             const image = thumb[2] === 'source' ? (await thumbnails.read(owner, film))?.data : await thumbnails.poster(owner, film);
             return image ? send(200, 'image/jpeg', image, commonHeaders) : reject(404, 'No thumbnail.');
           }
-          const saved = await thumbnails.read(owner, film, 'HEAD');
+          if (!thumb[3]) return redirect('/setup/dashboard#thumbnail-' + film.id);
+          const saved = film.thumbnail ? await thumbnails.read(owner, film, 'HEAD') : null;
           if (film.thumbnail === 'pending') store.reconcileThumbnail(owner, film.id, saved?.version || '');
-          return html(200, workspacePage('Film thumbnail', session.csrf, thumbnailEditor(film, saved, session.csrf), { dashboard: true }),
-            { 'Content-Security-Policy': csp.replace("img-src 'self'", "img-src 'self' blob:") + "; connect-src 'self'" });
+          return send(200, 'application/json', JSON.stringify({ frame: saved?.frame || centerFrame, version: saved?.version || '' }), commonHeaders);
         }
-        if (method !== 'POST' || thumb[2]) return reject(405, 'Use the thumbnail editor.');
+        if (method !== 'POST' || thumb[2] || thumb[3]) return reject(405, 'Use the thumbnail editor.');
         if (req.headers['x-stream-csrf'] !== session.csrf) return reject(403, 'Reload the editor before saving.');
         const intent = req.headers['x-thumbnail-action'];
         if (!['save', 'delete'].includes(intent) || req.headers['content-type'] !== 'application/octet-stream') return reject(400, 'Use the thumbnail editor.');
@@ -218,7 +229,7 @@ export async function createSetup({
         let frame;
         try { frame = JSON.parse(req.headers['x-thumbnail-frame'] || '{}'); } catch { return reject(422, 'Check the thumbnail framing.'); }
         const version = await thumbnails.change(owner, film, { version: req.headers['x-thumbnail-version'] || '',
-          frame, jwt: req.headers['x-thumbnail-grant'], input: Buffer.concat(chunks), remove: intent === 'delete' });
+          frame, input: Buffer.concat(chunks), remove: intent === 'delete' });
         return send(200, 'application/json', JSON.stringify({ version }), commonHeaders);
       } catch (e) {
         const message = e instanceof ThumbnailError ? e.message : 'The thumbnail is temporarily unavailable. Try again.';
@@ -235,7 +246,15 @@ export async function createSetup({
       if (!state.accountId && !state.flow && !state.createRequest) return redirect('/setup#payments');
       return html(200, step('Reset Stripe connection', renderStripeReset(session.csrf, mode, state, confirmation)));
     }
-    const bucketAccess = (status, location, error) => html(status, step('Connect your private bucket', renderBucketAccess(session.csrf, location, error)));
+    const upgradePath = /^\/setup\/r2\/uploads(?:\/(f-[a-f0-9-]{36}))?$/.exec(path);
+    const upgradeFilm = upgradePath?.[1] || (upgradePath && searchParams.get('film'));
+    const upgradeBucket = () => upgradeFilm ? store.film(owner, upgradeFilm)?.bucket : store.maker(owner).r2;
+    const bucketAction = upgradePath ? '/setup/r2/uploads' + (upgradeFilm ? '/' + encodeURIComponent(upgradeFilm) : '') : '/setup/r2/access';
+    const bucketAccess = (status, location, error) => html(status, step('Connect your private bucket', renderBucketAccess(session.csrf, location, error, bucketAction)));
+    if (get && upgradePath) {
+      const bucket = upgradeBucket();
+      return bucket ? bucketAccess(200, bucket) : reject(404, 'Storage connection unavailable.');
+    }
     if (get && path === '/setup/r2/access') {
       const location = store.storageDraft(owner);
       return location ? bucketAccess(200, location) : redirect('/setup#storage');
@@ -253,6 +272,39 @@ export async function createSetup({
       }
       try { return sendMp4((await activePreviews.get(key)).preview, commonHeaders); }
       catch { return reject(409, 'The film changed or storage is unavailable. Check the original in Cloudflare.'); }
+    }
+    const upload = /^\/setup\/upload\/(status|start|part|complete|cancel)$/.exec(path);
+    if (upload) {
+      if (method !== 'POST') return reject(405, 'Use the video upload form.');
+      if (req.headers['x-stream-csrf'] !== session.csrf) return reject(403, 'Reload the film form before uploading.');
+      if (busy.has(owner)) return reject(409, 'Another change is in progress. Try again.');
+      busy.add(owner);
+      try {
+        const action = upload[1], id = req.headers['x-draft-id'], uploadId = req.headers['x-upload-id'];
+        let result;
+        if (action === 'part') {
+          const state = uploads.status(owner, id);
+          if (!state || state.complete || state.uploadId !== uploadId) return reject(409, 'Reload the current film upload.');
+          if (req.headers['content-type'] !== 'application/octet-stream') return reject(415, 'Choose a video file.');
+          if (Number(req.headers['content-length']) > UPLOAD_PART_BYTES) return reject(413, 'The video part is too large.');
+          const chunks = [];
+          let length = 0;
+          for await (const chunk of req) {
+            length += chunk.length;
+            if (length > UPLOAD_PART_BYTES) return reject(413, 'The video part is too large.');
+            chunks.push(chunk);
+          }
+          result = await uploads.part(owner, id, uploadId, Number(req.headers['x-part-number']), Buffer.concat(chunks));
+        } else if (action === 'start') {
+          const data = await readForm(req);
+          result = await uploads.start(owner, id, { fileId: data.fileId, size: Number(data.size) });
+        } else if (action === 'status') result = uploads.status(owner, id);
+        else result = await uploads[action](owner, id, uploadId);
+        return send(200, 'application/json', JSON.stringify(result ?? null), commonHeaders);
+      } catch (e) {
+        return reject(e instanceof FilmUploadError ? e.statusCode : 503,
+          e instanceof FilmUploadError ? e.message : 'The upload could not finish. Try again.');
+      } finally { busy.delete(owner); }
     }
     const callback = callbackPattern.exec(path);
     if (!callback && method !== 'POST') return reject(404, 'Page unavailable.');
@@ -281,16 +333,26 @@ export async function createSetup({
         }
         return redirect('/setup#payments');
       }
-      if (['/setup/r2', '/setup/r2/location', '/setup/r2/access'].includes(path)) {
+      if (upgradePath || ['/setup/r2', '/setup/r2/location', '/setup/r2/access'].includes(path)) {
         const guided = path !== '/setup/r2';
         const location = guided ? parseR2BucketUrl(data.bucketUrl) : bucketForm(data);
         const { accountId, bucket, jurisdiction } = location;
-        store.saveStorageDraft(owner, { accountId, bucket, jurisdiction });
+        const upgrade = Boolean(upgradePath);
+        if (upgrade) {
+          const current = upgradeBucket();
+          if (!current || current.accountId !== accountId || current.bucket !== bucket || current.jurisdiction !== jurisdiction) return reject(409, 'The bucket changed. Reopen Storage setup.');
+        } else store.saveStorageDraft(owner, { accountId, bucket, jurisdiction });
         if (path === '/setup/r2/location') return redirect('/setup/r2/access');
         let config;
         try {
           config = guided ? await resolveBucket(data) : location;
+          const wantsUploads = upgrade || data.storageAccess === 'uploads';
+          if (wantsUploads && data.uploadConsent !== 'yes') throw new R2SetupError('Confirm permission to store this bucket key for uploads.');
           await checkBucket(config);
+          if (wantsUploads) {
+            await verifyUploadAccess(config, thumbnailFetch);
+            config = { ...config, uploads: true };
+          }
         } catch (error) {
           const message = error instanceof R2SetupError ? error.message :
             'Cloudflare could not verify access. Check the selected bucket, jurisdiction and token, then try again.';
@@ -298,8 +360,8 @@ export async function createSetup({
           if (guided) return bucketAccess(code, location, message);
           throw new SetupError(message, code);
         }
-        store.saveBucket(owner, config);
-        return redirect('/setup#storage');
+        store.saveBucket(owner, config, { select: !upgrade });
+        return redirect(upgrade && upgradeFilm ? '/setup/dashboard#thumbnail-' + upgradeFilm : '/setup#storage');
       }
       if (['/setup/film/prices', '/setup/dashboard/settings', '/setup/dashboard/publication', '/setup/dashboard/info'].includes(path)) {
         const saved = store.film(owner, data.filmId || '');
@@ -350,6 +412,8 @@ export async function createSetup({
         const title = (data.title || '').trim();
         const objectKey = data.objectKey || '';
         const saving = data.intent === 'save';
+        const transfer = store.upload(owner, draft.id);
+        if (!saving && transfer && !transfer.complete) throw new SetupError('Finish or discard the current upload before saving this film.', 409);
         if (title.length > 160 || Buffer.byteLength(objectKey) > 1024 || (!saving && (!title || !objectKey)) ||
             /[\u0000-\u001f\u007f]/u.test(title + objectKey) || (objectKey && !saving && objectKey.split('/').some(part => !part || part === '.' || part === '..'))) {
           throw new SetupError('Enter a film title and the exact object key from your bucket, including any folder.');

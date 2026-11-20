@@ -25,3 +25,10 @@ export function sourceFromEnv(env, maker = 'maker-a') {
     accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY
   });
 }
+
+export function localPreviewPort(env) {
+  if (!env.STREAM_LOCAL_PREVIEW_PORT) return;
+  const port = Number(env.STREAM_LOCAL_PREVIEW_PORT);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Set a valid STREAM_LOCAL_PREVIEW_PORT.');
+  return port;
+}

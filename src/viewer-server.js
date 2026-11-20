@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
+import { localPreviewPort } from './config.js';
 import { operatorDirectory } from './operator.js';
 import { createPublicFilms } from './public-films.js';
 import { createRentalAuthority } from './rental.js';
@@ -37,6 +38,14 @@ server.on('close', () => {
   else store.close();
 });
 const port = Number(process.env.PORT || 8793);
+const previewPort = localPreviewPort(process.env);
+if (previewPort) {
+  if (previewPort === port) throw new Error('Choose a separate loopback port for dashboard previews.');
+  const localCheckout = createViewerCheckout({ store, env: { ...process.env, STREAM_PUBLIC_ORIGIN: undefined } });
+  const preview = await makeServer(null, { catalog, checkout: localCheckout, recovery });
+  preview.listen(previewPort, '127.0.0.1');
+  server.once('close', () => preview.close());
+}
 server.listen(port, '127.0.0.1', () => {
   console.log('Screening room: ' + (process.env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + port) + '/screening');
 });

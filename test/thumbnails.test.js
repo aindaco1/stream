@@ -6,9 +6,8 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { openSetupStore } from '../src/setup-store.js';
-import { createThumbnails, thumbnailScope } from '../src/thumbnails.js';
+import { createThumbnails } from '../src/thumbnails.js';
 import { centerFrame } from '../src/thumbnail-frame.js';
-import { thumbnailGrant } from '../public/thumbnail-grant.js';
 import { thumbnailBucket, testWriterId, testWriterSecret } from './fixtures/thumbnail-r2.js';
 
 test('private R2 artwork can be uploaded, reframed, replaced and deleted with a film-specific grant', async t => {
@@ -23,16 +22,14 @@ test('private R2 artwork can be uploaded, reframed, replaced and deleted with a 
   const film = () => store.film(owner, id);
   const { objects, fetcher } = thumbnailBucket();
   const thumbnails = createThumbnails(store, fetcher);
-  const scoped = (record, secret = testWriterSecret) => {
-    const scope = thumbnailScope(record);
-    return thumbnailGrant({ ...scope, account: scope.accountId }, testWriterId, secret);
-  };
-  const { jwt } = await scoped(film());
   const blue = await sharp({ create: { width: 180, height: 160, channels: 3, background: '#246acf' } }).png().toBuffer();
-  const change = (params = {}) => thumbnails.change(owner, film(), { jwt, version: film().thumbnail || '', frame: centerFrame, ...params });
+  const change = (params = {}) => thumbnails.change(owner, film(), { version: film().thumbnail || '', frame: centerFrame, ...params });
+  await assert.rejects(change({ input: blue }), { status: 403 });
+  const enable = secret => store.saveBucket(owner, { ...bucket, uploads: true, accessKeyId: testWriterId, secretAccessKey: secret });
+  enable('9'.repeat(64));
+  await assert.rejects(change({ input: blue }), { status: 403 });
+  enable(testWriterSecret);
   await assert.rejects(change({ input: Buffer.from('not an image') }), { status: 422 });
-  await assert.rejects(change({ input: blue, jwt: (await scoped({ ...film(), id: 'f-' + randomUUID() })).jwt }), { status: 403 });
-  await assert.rejects(change({ input: blue, jwt: (await scoped(film(), '9'.repeat(64))).jwt }), { status: 403 });
   assert.equal(objects.size, 0);
   assert.ok(!film().thumbnail);
   const first = await change({ input: blue });
