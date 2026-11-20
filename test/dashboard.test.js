@@ -95,14 +95,22 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.equal(store.recordView('Benny', ada.id, 'paid', randomUUID()), false);
   assert.equal(catalog.recordView(ada.id, 'preview', ''), false);
   for (const [kind, paid, refund] of [['rent', true, 0], ['buy', true, 175], ['buy', false, 0]]) {
-    const order = store.reserveViewerOrder({ ...spec, tokenHash: randomUUID(), platform: 'acct_Platform', origin, kind, amount: spec.prices[kind] });
+    const order = store.reserveViewerOrder({ ...spec, tokenHash: randomUUID(), platform: 'acct_Platform', origin, kind, amount: spec.prices[kind], tipPercent: kind === 'buy' ? 10 : 0 });
     const session = 'cs_' + randomUUID();
     store.bindViewerSession(order.orderId, session);
     if (paid) store.reconcileViewerPayment(store.viewerOrderById(order.orderId), { intentId: 'pi_' + randomUUID(), chargeId: 'ch_' + randomUUID(),
-      paidAt: Math.floor(Date.now() / 1000), refundedAmount: refund, disputeStatus: null, revocationReason: null });
+      paidAt: Math.floor(Date.now() / 1000), refundedAmount: refund, disputeStatus: null, revocationReason: null, stripeFeeCents: kind === 'buy' ? 60 : null });
   }
-  assert.deepEqual(store.dashboardFilms('Alice')[0].stats, { previews: 1, plays: 1, rentals: 1, purchases: 1, gross: 600, refunded: 175 });
-  assert.deepEqual(store.dashboardFilms('Benny')[0].stats, { previews: 0, plays: 0, rentals: 0, purchases: 0, gross: 0, refunded: 0 });
+  assert.deepEqual(store.dashboardFilms('Alice')[0].stats, { previews: 1, plays: 1, rentals: 1, purchases: 1, revenue: 600, estimatedFees: 79, netRevenue: 329, estimatedOrders: 1, platformTips: 40 });
+  assert.deepEqual(store.dashboardFilms('Benny')[0].stats, { previews: 0, plays: 0, rentals: 0, purchases: 0, revenue: 0, estimatedFees: 0, netRevenue: 0, estimatedOrders: 0, platformTips: 0 });
+  const platform = store.platformReport(null);
+  assert.equal(platform.total.films, 2);
+  assert.equal(platform.total.platformTips, 40);
+  assert.equal(platform.total.netRevenue, 329);
+  assert.equal(platform.total.revenue, 600);
+  assert.equal(platform.total.estimatedFees, 79);
+  assert.deepEqual(platform.rows.map(row => [row.name, row.revenue]), [['Alice', 600], ['Benny', 0]]);
+  assert.deepEqual(store.platformReport('Benny').rows.map(row => row.title), ['Other private title']);
   assert.match(await ada.get(), /\$6\.00/);
   assert.equal((await ada.post('settings', { ...settings, previewSeconds: '0' })).status, 303);
   assert.equal(catalog.recordView(ada.id, 'preview', randomUUID()), false);

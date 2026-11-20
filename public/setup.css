@@ -178,3 +178,9 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
   .film-sharing > * { grid-column: 1; }
   .film-sharing > .embed-preview { grid-column: 2; grid-row: 1 / span 5; }
 }
+
+.analytics-table { width: 100%; overflow-x: auto; }
+.analytics-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.analytics-table th, .analytics-table td { border-block-end: 1px solid var(--line); padding: .625rem .75rem; text-align: right; }
+.analytics-table th:first-child { text-align: left; }
+.analytics-table td { white-space: nowrap; }

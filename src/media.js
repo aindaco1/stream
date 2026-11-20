@@ -5,6 +5,7 @@ import {
   Input, MP4, Mp4OutputFormat, MpegTsOutputFormat, Output
 } from 'mediabunny';
 import { BLOCK_SIZE } from './source.js';
+import { picturePackets, probeFilm, renderText, transcode } from './media-compat.js';
 
 const META = { metadataOnly: true };
 const EPSILON = 1e-8;
@@ -12,6 +13,12 @@ const MAX_SEGMENTS = 4096;
 const MAX_PACKET_BYTES = 4 * 1024 * 1024;
 const MAX_RENDER_BYTES = 12 * 1024 * 1024;
 const MAX_PACKETS = 8000;
+const pictureCache = new Map();
+let pictureBytes = 0;
+function forgetPictures(key) {
+  const data = pictureCache.get(key);
+  if (data) { pictureBytes -= data.length; pictureCache.delete(key); }
+}
 
 // Block-aligned reads let interleaved audio and video share provider requests.
 function privateInput(source, head, getReadBudget) {
@@ -98,9 +105,7 @@ async function copyTrack({ sink, outputTrack, decoderConfig, isVideo }, start, e
   outputTrack.close();
 }
 
-export async function openFilm(source, { previewSeconds = 10 } = {}) {
-  if (!Number.isFinite(previewSeconds) || previewSeconds < 0 || previewSeconds > 30) throw new Error('Unsupported preview length.');
-  const head = await source.head();
+async function openRemux(source, head, previewSeconds) {
   const reads = new AsyncLocalStorage();
   const initialization = { reads: 0, maxReads: 64, deadline: Date.now() + 30000 };
   const input = privateInput(source, head, () => reads.getStore() ?? initialization);
@@ -189,4 +194,99 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
     input.dispose();
     throw error;
   }
+}
+
+export async function openFilm(source, { previewSeconds = 10 } = {}) {
+  if (!Number.isFinite(previewSeconds) || previewSeconds < 0 || previewSeconds > 30) throw new Error('Unsupported preview length.');
+  const head = await source.head();
+  const media = await probeFilm(source, head);
+  // Baseline/AAC with regularly spaced keyframes has a native packet-copy path. Other supported
+  // inputs (including Baseline films with long GOPs) get independently seekable H.264/AAC intervals.
+  let remux;
+  if (media.baseline) { try { remux = await openRemux(source, head, previewSeconds); } catch {} }
+  const duration = remux?.duration ?? media.duration;
+  const segments = remux?.segments ?? Object.freeze(Array.from({ length: Math.ceil(duration / 6) }, (_, i) => {
+    const start = i * 6, end = Math.min(duration, start + 6);
+    return Object.freeze({ start, end, duration: end - start });
+  }));
+  const jobs = new Map(), textCache = new Map();
+  let closed = false;
+  async function current() {
+    if (closed) throw new Error('Film is closed.');
+    const fresh = await source.head();
+    if (fresh.size !== head.size || fresh.revision !== head.revision) throw new Error('Film was replaced. Reconnect the source.');
+  }
+  function share(key, work) {
+    if (jobs.has(key)) return jobs.get(key);
+    if (jobs.size >= 16) throw new Error('Media renderer is busy.');
+    const job = Promise.resolve().then(work).finally(() => jobs.delete(key));
+    jobs.set(key, job);
+    return job;
+  }
+  function bitmap(id) {
+    if (id === undefined) return;
+    const track = media.subtitleTracks.find(s => s.id === id && s.format === 'bitmap');
+    if (!track) throw new Error('Unknown picture subtitle track.');
+    return track;
+  }
+  function pictures(track) {
+    return share('bitmap/' + track.id, async () => {
+      const existing = pictureCache.get(track);
+      if (existing) {
+        pictureCache.delete(track);
+        pictureCache.set(track, existing);
+        return existing;
+      }
+      const data = await picturePackets(source, head, media, track);
+      if (!closed && data) {
+        while (pictureBytes + data.length > 96 * 1024 * 1024) forgetPictures(pictureCache.keys().next().value);
+        pictureCache.set(track, data);
+        pictureBytes += data.length;
+      }
+      return data;
+    });
+  }
+  function render(start, end, preview, index, track) {
+    if (closed) throw new Error('Film is closed.');
+    return share([start, end, preview, track?.id].join('/'), async () => {
+      if (remux && !track) {
+        try { return await (preview ? remux.preview(end) : remux.segment(index)); }
+        catch (error) { if (!/exceeds prototype|read budget|Unsupported packet timing/.test(error.message)) throw error; }
+      }
+      await current();
+      const data = track && (preview ? await picturePackets(source, head, media, track, end) : await pictures(track));
+      return transcode(source, head, media, start, end, preview, data);
+    });
+  }
+  return Object.freeze({
+    extension: media.extension, revision: revisionFor(head), duration, segments,
+    subtitleTracks: Object.freeze(media.subtitleTracks.map(Object.freeze)),
+    unsupportedSubtitleTracks: Object.freeze(media.unsupportedSubtitleTracks.map(Object.freeze)),
+    async preview(seconds = previewSeconds, { subtitleId } = {}) {
+      if (!Number.isFinite(seconds) || seconds < 0 || seconds > 30) throw new Error('Unsupported preview length.');
+      if (!seconds) throw new Error('Preview is disabled.');
+      if (seconds >= duration) throw new Error('Preview must end before the film ends.');
+      return render(0, seconds, true, 0, bitmap(subtitleId));
+    },
+    async segment(index, { subtitleId } = {}) {
+      if (!Number.isInteger(index) || index < 0 || index >= segments.length) throw new Error('Unknown segment.');
+      const { start, end } = segments[index];
+      return render(start, end, false, index, bitmap(subtitleId));
+    },
+    async subtitles(id, { end } = {}) {
+      const track = media.subtitleTracks.find(s => s.id === id && s.format === 'text');
+      if (!track) throw new Error('Unknown text subtitle track.');
+      if (end !== undefined && !(Number.isFinite(end) && end > 0 && end < duration && end <= 30)) throw new Error('Invalid subtitle preview.');
+      const key = id + '/' + (end ?? 'full');
+      return share(key, async () => {
+        await current();
+        if (textCache.has(key)) return textCache.get(key);
+        const result = await renderText(source, head, media, track, end ?? duration, end !== undefined);
+        if (textCache.size >= 2) textCache.delete(textCache.keys().next().value);
+        textCache.set(key, result);
+        return result;
+      });
+    },
+    close() { closed = true; remux?.close(); textCache.clear(); media.subtitleTracks.forEach(forgetPictures); }
+  });
 }

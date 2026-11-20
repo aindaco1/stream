@@ -47,8 +47,9 @@ function mountUpload(form) {
     if (!file || busy) { if (busy) event.preventDefault(); return; }
     event.preventDefault();
     const submitter = event.submitter;
-    if (file.size < 1 || file.size > 1024 ** 3 || !/\.mp4$/i.test(file.name)) {
-      status.textContent = 'Choose an MP4 up to 1 GiB.'; return;
+    const extension = /\.(mp4|mov|mkv)$/i.exec(file.name)?.[1].toLowerCase();
+    if (file.size < 1 || file.size > 10_000_000_000 || !extension) {
+      status.textContent = 'Choose an MP4, MOV or MKV up to 10 GB.'; return;
     }
     if (selected !== file) { selected = file; fileId = crypto.randomUUID(); }
     controls(true);
@@ -57,7 +58,7 @@ function mountUpload(form) {
     try {
       await initial;
       status.textContent = 'Starting video upload…';
-      current = await request('start', {}, new URLSearchParams({ fileId, size: String(file.size) }));
+      current = await request('start', {}, new URLSearchParams({ fileId, size: String(file.size), extension }));
       controls(true);
       meter.hidden = false;
       meter.max = file.size;

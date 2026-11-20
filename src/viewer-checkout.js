@@ -4,6 +4,7 @@ import { connectedClient, platformAccount, verifyReadySeller } from './connected
 import { rentalScope } from './rental.js';
 import { isPrice } from './prices.js';
 import { adjustmentEvents, adjustmentReader, adjustmentReference } from './payment-adjustments.js';
+import { orderTotal, processingFee, tipFor } from './checkout-tips.js';
 
 const LEGACY_FLOW = 'stream-viewer-rental';
 const FLOW = 'stream-viewer-checkout';
@@ -55,10 +56,12 @@ function metadata(order) {
   const markers = { order: order.orderId, product: 'stream-rental-prototype',
     scope: rentalScope({ film: order.scope, revision: order.revision }) };
   return order.uiMode === 'hosted' ? { ...markers, flow: LEGACY_FLOW } :
-    { ...markers, flow: FLOW, kind: order.kind, amount: String(order.amount) };
+    { ...markers, flow: FLOW, kind: order.kind, amount: String(orderTotal(order)),
+      ...(order.tipAmount > 0 && { film_amount:String(order.amount), tip_percent:String(order.tipPercent), tip_amount:String(order.tipAmount) }) };
 }
 
 function sameMetadata(data, order) {
+  if (!order.tipAmount && (data?.tip_percent !== undefined || data?.tip_amount !== undefined || data?.film_amount !== undefined)) return false;
   if (order.uiMode === 'hosted' && (order.kind !== 'rent' || order.amount !== 99 || data?.kind || data?.amount)) return false;
   return Object.entries(metadata(order)).every(([k, v]) => data?.[k] === v);
 }
@@ -67,23 +70,25 @@ function checkSession(session, order) {
   if (session?.object !== 'checkout.session' || !SESSION.test(session.id) || (order.sessionId && session.id !== order.sessionId) ||
       session.livemode !== false || session.mode !== 'payment' || session.currency !== 'usd' ||
       (order.uiMode !== 'hosted' && session.ui_mode !== order.uiMode) ||
-      session.amount_subtotal !== order.amount || session.amount_total !== order.amount || session.client_reference_id !== order.orderId ||
+      session.amount_subtotal !== orderTotal(order) || session.amount_total !== orderTotal(order) || session.client_reference_id !== order.orderId ||
       !sameMetadata(session.metadata, order)) throw mismatch();
 }
 
 function checkIntent(intent, order, intentId) {
   if (intent?.object !== 'payment_intent' || intent.id !== intentId || intent.livemode !== false ||
-      intent.currency !== 'usd' || intent.amount !== order.amount || !sameMetadata(intent.metadata, order) ||
-      intent.transfer_data || intent.application_fee_amount || intent.on_behalf_of) throw mismatch();
+      intent.currency !== 'usd' || intent.amount !== orderTotal(order) || !sameMetadata(intent.metadata, order) ||
+      intent.transfer_data || (intent.application_fee_amount ?? 0) !== order.tipAmount || intent.on_behalf_of) throw mismatch();
 }
 
 function checkCharge(intent, order) {
   const charge = intent.latest_charge;
-  if (intent.status !== 'succeeded' || intent.amount_received !== order.amount ||
+  const total = orderTotal(order);
+  if (intent.status !== 'succeeded' || intent.amount_received !== total ||
       charge?.object !== 'charge' || !/^ch_[a-zA-Z0-9]+$/.test(charge.id) || charge.payment_intent !== intent.id ||
       charge.livemode !== false || charge.paid !== true || charge.captured !== true || charge.status !== 'succeeded' ||
-      charge.amount !== order.amount || charge.amount_captured !== order.amount || charge.currency !== 'usd' || charge.transfer_data ||
-      charge.application_fee || charge.application_fee_amount || charge.on_behalf_of ||
+      charge.amount !== total || charge.amount_captured !== total || charge.currency !== 'usd' || charge.transfer_data ||
+      (charge.application_fee_amount ?? 0) !== order.tipAmount || charge.on_behalf_of ||
+      (charge.application_fee != null && (!order.tipAmount || !/^fee_[a-zA-Z0-9]+$/.test(charge.application_fee))) ||
       !Number.isSafeInteger(charge.amount_refunded) || charge.amount_refunded < 0 || typeof charge.refunded !== 'boolean' ||
       typeof charge.disputed !== 'boolean' || !Number.isSafeInteger(charge.created) || charge.created <= 0 ||
       charge.created > Math.floor(Date.now() / 1000)) throw mismatch();
@@ -202,13 +207,17 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
       const redirect = order.uiMode === 'elements' ?
         { return_url: order.origin + '/embed/' + encodeURIComponent(order.filmId) + '?order=' + order.orderId } :
         { redirect_on_completion: 'never' };
+      const lineItems = [{ quantity: 1, price_data: { currency: 'usd', unit_amount: order.amount,
+        product_data: { name: order.title, description: order.kind === 'rent' ?
+          order.rentalHours + '-hour streaming rental, starting at purchase.' : 'One-time purchase with original file download.' } } }];
+      if (order.tipAmount) lineItems.push({ quantity:1, price_data:{currency:'usd',unit_amount:order.tipAmount,
+        product_data:{name:'Optional tip to Dust Wave'}} });
       session = await stripe.checkout.sessions.create({
         mode: 'payment', ui_mode: order.uiMode, ...redirect, adaptive_pricing: { enabled: false },
         ...(order.cardOnly ? { allowed_payment_method_types: ['card'] } : {}),
-        client_reference_id: order.orderId, metadata: markers, payment_intent_data: { metadata: markers },
-        line_items: [{ quantity: 1, price_data: { currency: 'usd', unit_amount: order.amount,
-          product_data: { name: order.title, description: order.kind === 'rent' ?
-            order.rentalHours + '-hour streaming rental, starting at purchase.' : 'One-time purchase with original file download.' } } }]
+        client_reference_id: order.orderId, metadata: markers, payment_intent_data: {
+          metadata: markers, ...(order.tipAmount > 0 && { application_fee_amount:order.tipAmount })
+        }, line_items:lineItems
       }, { ...options, idempotencyKey: 'stream-viewer-' + order.orderId });
       checkSession(session, order);
       store.bindViewerSession(order.orderId, session.id);
@@ -237,11 +246,12 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     if (session.status !== 'open' || typeof session.client_secret !== 'string' ||
         !session.client_secret.startsWith(session.id + '_secret_') || session.client_secret.length > 1024) throw mismatch();
     return { clientSecret: session.client_secret, publishableKey, account: order.account,
-      uiMode: order.uiMode, orderId: order.orderId, title: order.title, kind: order.kind, amount: order.amount, currency: session.currency,
+      uiMode: order.uiMode, orderId: order.orderId, title: order.title, kind: order.kind, amount: orderTotal(order),
+      filmAmount:order.amount, tipPercent:order.tipPercent, tipAmount:order.tipAmount, currency: session.currency,
       ...(order.kind === 'rent' && {rentalHours:order.rentalHours}) };
   }
 
-  async function start({ offer, token, origin, kind = 'rent' }) {
+  async function start({ offer, token, origin, kind = 'rent', tipPercent = 0 }) {
     if (!configured) throw new ViewerCheckoutError('Sandbox checkout is unavailable.', 503);
     if (!offer.account) throw mismatch();
     if (kind !== 'rent' && kind !== 'buy') throw new ViewerCheckoutError('Choose a rental or a purchase.');
@@ -250,10 +260,11 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const previous = store.viewerOrderForToken(digest);
     const amount = previous?.amount ?? offer.prices?.[kind];
     if (!isPrice(amount)) throw new ViewerCheckoutError('This option is unavailable for this film.', 409);
+    if (tipFor(amount,tipPercent) === null) throw new ViewerCheckoutError('Choose an available tip amount.');
     const id = await checkingPlatform();
     if (offer.account === id) throw mismatch();
-    const order = previous ?? store.reserveViewerOrder({ ...offer, tokenHash: digest, platform: id, origin: base, kind, amount });
-    if (!sameFilm(order, offer) || order.kind !== kind || order.platform !== id || order.origin !== base) throw mismatch();
+    const order = previous ?? store.reserveViewerOrder({ ...offer, tokenHash: digest, platform: id, origin: base, kind, amount, tipPercent });
+    if (!sameFilm(order, offer) || order.kind !== kind || order.tipPercent !== tipPercent || order.platform !== id || order.origin !== base) throw mismatch();
     if (order.account !== offer.account) {
       // openSession can only reconcile a paid/withdrawn order here. Never
       // disclose an old open form or create a charge on a former recipient.
@@ -274,7 +285,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     }
     if (session.status === 'open' && session.payment_status === 'unpaid') return { status: 'pending' };
     if (session.status !== 'complete' || !['unpaid','paid'].includes(session.payment_status) || !INTENT.test(session.payment_intent)) throw mismatch();
-    const intent = await stripe.paymentIntents.retrieve(session.payment_intent, { expand: ['latest_charge'] }, options);
+    const intent = await stripe.paymentIntents.retrieve(session.payment_intent, { expand: ['latest_charge.balance_transaction'] }, options);
     checkIntent(intent, order, session.payment_intent);
     if (session.payment_status === 'unpaid') {
       if (['canceled','requires_payment_method'].includes(intent.status)) {
@@ -296,7 +307,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const confirmed = datedEvent ? paidEvent.created : now;
     const paidAt = order.paidAt ?? (useConfirmation ? confirmed : charge.created);
     if (paidAt < charge.created || paidAt > now || (!useConfirmation && paidAt !== charge.created)) throw mismatch();
-    const saved = store.reconcileViewerPayment(order,{intentId:intent.id,paidAt,...paymentState});
+    const saved = store.reconcileViewerPayment(order,{intentId:intent.id,paidAt,stripeFeeCents:processingFee(order,charge),...paymentState});
     if (!saved) return;
     const status = localStatus(saved);
     if (status === 'paid') store.rememberViewerEmail(order.orderId, session.customer_details?.email || charge.billing_details?.email);
@@ -330,7 +341,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const result = await reconcile(order);
     if (result.status !== 'paid') return result;
     const film = { film: offer.scope, revision: offer.revision };
-    const options = { amount:order.amount, orderId:order.orderId, paymentState:result.paymentState };
+    const options = { amount:orderTotal(order), orderId:order.orderId, paymentState:result.paymentState };
     const receipt = order.kind === 'buy' ? await offer.authority.issuePurchaseReceipt(result.intent,film,options) :
       await offer.authority.issueReceipt(result.intent,film,{...options,paidAt:result.paidAt,rentalHours:order.rentalHours});
     return { status:'paid',kind:order.kind,receipt,title:order.title,position:order.position || 0,
@@ -366,6 +377,16 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const order = store.viewerOrderById(orderId);
     if (order?.kind !== 'buy' || !order.intentId || !existingOrderMatches(order, offer)) return false;
     return (await reconcile(order)).status === 'paid';
+  }
+
+  async function abandon({ offer, token }) {
+    const order = store.viewerOrderForToken(await viewerHash(token));
+    if (!order || !existingOrderMatches(order,offer)) return {status:'pending'};
+    store.withdrawViewerOrder(order.orderId);
+    await closeWithdrawnSession(order);
+    const fresh = store.viewerOrderById(order.orderId);
+    if (fresh.paidAt) return {status:'paid'};
+    return {status:fresh.status === 'expired' || (!fresh.sessionId && fresh.withdrawalState) ? 'expired' : 'pending'};
   }
 
   async function adjustmentWebhook(event) {
@@ -442,6 +463,6 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     };
   }
 
-  return { configured, indexPreviousOrders, closeWithdrawnSessions, start: guarded(start), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
+  return { configured, indexPreviousOrders, closeWithdrawnSessions, start: guarded(start), abandon: guarded(abandon), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
     verifyPurchase: guarded(verifyPurchase), webhook: guarded(webhook) };
 }

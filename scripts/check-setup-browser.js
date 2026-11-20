@@ -547,7 +547,7 @@ try {
       }
       if (first) {
         await openSection(page, 'payments');
-        assert.ok(await page.getByText('Stripe’s standard U.S. rate', { exact: false }).isVisible());
+        assert.ok(await page.getByText('2.9% + 30¢', { exact: false }).isVisible());
         await openSection(page, 'storage');
         assert.ok(await page.getByText('10 GB of storage free', { exact: false }).isVisible());
         await page.goto(origin + '/setup#payments');

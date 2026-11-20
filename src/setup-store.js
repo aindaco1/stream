@@ -1,11 +1,13 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { analyticsReports } from './analytics.js';
 import { bucketReader } from './r2-write.js';
 import { DatabaseSync } from 'node:sqlite';
 import { recoveryStore } from './viewer-recovery.js';
 import { StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { filmPrices, isPrice, rentalHours } from './prices.js';
+import { filmPrices, rentalHours } from './prices.js';
+import { tipFor } from './checkout-tips.js';
 
 const token = () => randomBytes(32).toString('base64url');
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -54,6 +56,7 @@ export function openSetupStore(directory) {
   db.exec(`CREATE TABLE IF NOT EXISTS makers (
       id TEXT PRIMARY KEY, stripe TEXT NOT NULL DEFAULT '{}', bucket_id TEXT, draft TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS platform_admins (id TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS invitations (digest TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions (digest TEXT PRIMARY KEY, owner TEXT NOT NULL, csrf TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS storage_drafts (owner TEXT PRIMARY KEY, config TEXT NOT NULL);
@@ -103,11 +106,19 @@ export function openSetupStore(directory) {
   }
   // Orders created before embedded Checkout are $0.99 hosted rentals.
   transaction(() => {
+    for (const table of ['invitations', 'sessions']) {
+      if (!sql('PRAGMA table_info(' + table + ')').all().some(row => row.name === 'audience')) {
+        db.exec("ALTER TABLE " + table + " ADD COLUMN audience TEXT NOT NULL DEFAULT 'filmmaker'");
+      }
+    }
     const columns = new Set(sql('PRAGMA table_info(viewer_test_orders)').all().map(row => row.name));
     if (!columns.has('verifiedAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN verifiedAt INTEGER');
     if (!columns.has('position')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('kind')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'rent'");
     if (!columns.has('amount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN amount INTEGER NOT NULL DEFAULT 99');
+    if (!columns.has('tipPercent')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipPercent INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('tipAmount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipAmount INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('stripeFeeCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN stripeFeeCents INTEGER');
     if (!columns.has('uiMode')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN uiMode TEXT NOT NULL DEFAULT 'hosted'");
     if (!columns.has('cardOnly')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN cardOnly INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('rentalHours')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN rentalHours INTEGER NOT NULL DEFAULT 48');
@@ -139,30 +150,35 @@ export function openSetupStore(directory) {
   }
   const store = {
     ...recoveryStore(db, key),
-    invite(owner) {
+    ...analyticsReports(db),
+    invite(owner, audience = 'filmmaker') {
+      if (!['admin', 'filmmaker'].includes(audience)) throw new Error('Invalid sign-in audience.');
       if (!/^[a-zA-Z0-9][a-zA-Z0-9 ._@+-]{0,95}$/.test(owner)) throw new Error('Use a short, unique filmmaker name.');
       const code = token();
       transaction(() => {
         const now = Date.now();
-        sql('DELETE FROM invitations WHERE expires <= ? OR owner = ?').run(now, owner);
+        sql('DELETE FROM invitations WHERE expires <= ? OR (owner = ? AND audience = ?)').run(now, owner, audience);
         sql('DELETE FROM sessions WHERE expires <= ?').run(now);
-        sql('INSERT OR IGNORE INTO makers(id,draft) VALUES(?,?)').run(owner, JSON.stringify(newDraft()));
-        sql('INSERT INTO invitations VALUES(?,?,?)').run(hash(code), owner, now + 30 * 60_000);
+        if (audience === 'admin') sql('INSERT OR IGNORE INTO platform_admins(id) VALUES(?)').run(owner);
+        else sql('INSERT OR IGNORE INTO makers(id,draft) VALUES(?,?)').run(owner, JSON.stringify(newDraft()));
+        sql('INSERT INTO invitations(digest,owner,expires,audience) VALUES(?,?,?,?)').run(hash(code), owner, now + 30 * 60_000, audience);
       });
       return code;
     },
-    signIn(code) {
+    signIn(code, audience = 'filmmaker') {
       if (!/^[\w-]{43}$/.test(code)) return;
       return transaction(() => {
-        const row = sql('DELETE FROM invitations WHERE digest=? AND expires>? RETURNING owner').get(hash(code), Date.now());
+        const row = sql('DELETE FROM invitations WHERE digest=? AND expires>? AND audience=? RETURNING owner').get(hash(code), Date.now(), audience);
         if (!row) return;
         const session = token();
-        sql('INSERT INTO sessions VALUES(?,?,?,?)').run(hash(session), row.owner, token(), Date.now() + 14 * 86400_000);
+        sql('INSERT INTO sessions(digest,owner,csrf,expires,audience) VALUES(?,?,?,?,?)')
+          .run(hash(session), row.owner, token(), Date.now() + (audience === 'admin' ? 12 * 3600_000 : 14 * 86400_000), audience);
         return session;
       });
     },
-    session(value) {
-      return value && sql('SELECT owner, csrf FROM sessions WHERE digest=? AND expires>?').get(hash(value), Date.now());
+    session(value, audience = 'filmmaker') {
+      return value && sql(`SELECT owner, csrf FROM sessions WHERE digest=? AND expires>? AND audience=?
+        AND (audience='filmmaker' OR EXISTS(SELECT 1 FROM platform_admins a WHERE a.id=sessions.owner))`).get(hash(value), Date.now(), audience);
     },
     signOut(value) { sql('DELETE FROM sessions WHERE digest=?').run(hash(value)); },
     maker(owner) {
@@ -242,15 +258,16 @@ export function openSetupStore(directory) {
         .run(intentId, orderId, intentId);
       if (result.changes !== 1) throw new Error('The test order has a conflicting Stripe payment.');
     },
-    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount, rentalHours: hours = 48 }) {
+    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount, tipPercent = 0, rentalHours: hours = 48 }) {
       return transaction(() => {
         const existing = store.viewerOrderForToken(tokenHash);
         if (existing) return existing;
         const maker = store.maker(owner);
         const seller = maker && stripeSetupStateForMode(maker.stripe, 'test');
         const film = store.film(owner, id);
-        if (store.filmPublication(id)?.published === 0 || !store.ownsTestAccount(owner, account) || seller?.accountId !== account || film?.revision !== revision ||
-            !isPrice(amount) || filmPrices(film.prices)?.[kind] !== amount ||
+        const tipAmount = tipFor(amount,tipPercent);
+        if (tipAmount === null || store.filmPublication(id)?.published === 0 || !store.ownsTestAccount(owner, account) || seller?.accountId !== account || film?.revision !== revision ||
+            filmPrices(film.prices)?.[kind] !== amount ||
             (kind === 'rent' && (rentalHours(film.rentalHours) !== hours || !Number.isInteger(hours)))) {
           const error = new Error('The film offer changed.');
           error.code = 'viewer_offer_changed';
@@ -263,8 +280,8 @@ export function openSetupStore(directory) {
           error.code = 'viewer_rate_limit';
           throw error;
         }
-        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,uiMode,cardOnly,rentalHours) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?)")
-          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, kind === 'rent' ? hours : 48);
+        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?)")
+          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, kind === 'rent' ? hours : 48);
         return store.viewerOrderForToken(tokenHash);
       });
     },
@@ -295,6 +312,9 @@ export function openSetupStore(directory) {
         .run(sessionId, orderId, sessionId);
       if (result.changes !== 1) throw new Error('Conflicting Checkout Session.');
     },
+    withdrawViewerOrder(orderId) {
+      sql("UPDATE viewer_test_orders SET withdrawalState='requested' WHERE orderId=? AND status='pending' AND withdrawalState IS NULL").run(orderId);
+    },
     requestedWithdrawals(owner = null, filmId = null) {
       return sql(`SELECT * FROM viewer_test_orders WHERE withdrawalState='requested' AND sessionId IS NOT NULL
         AND withdrawalRetryAt<=? AND (? IS NULL OR owner=?) AND (? IS NULL OR filmId=?) ORDER BY withdrawalRetryAt,createdAt LIMIT 32`)
@@ -316,15 +336,15 @@ export function openSetupStore(directory) {
     expireViewerOrder(orderId) {
       sql("UPDATE viewer_test_orders SET status='expired',ledgerVersion=ledgerVersion+1 WHERE orderId=? AND status='pending' AND intentId IS NULL").run(orderId);
     },
-    reconcileViewerPayment(order, { intentId, chargeId, paidAt, refundedAmount, disputeStatus, revocationReason }) {
+    reconcileViewerPayment(order, { intentId, chargeId, paidAt, refundedAmount, disputeStatus, revocationReason, stripeFeeCents = null }) {
       // A slower provider read cannot overwrite a newer reconciliation from another process.
       return sql(`UPDATE viewer_test_orders SET status=CASE WHEN ? IS NOT NULL OR
           (kind='rent' AND COALESCE(paidAt,?)+rentalHours*3600<=?) THEN 'expired' ELSE 'paid' END,
           intentId=?, chargeId=?, paidAt=COALESCE(paidAt,?), refundedAmount=?, disputeStatus=?, revocationReason=?,
-          verifiedAt=unixepoch(), ledgerVersion=ledgerVersion+1 WHERE orderId=? AND sessionId=? AND ledgerVersion=?
+          stripeFeeCents=COALESCE(?,stripeFeeCents), verifiedAt=unixepoch(), ledgerVersion=ledgerVersion+1 WHERE orderId=? AND sessionId=? AND ledgerVersion=?
           AND (intentId IS NULL OR intentId=?) AND (chargeId IS NULL OR chargeId=?) RETURNING *`)
         .get(revocationReason, paidAt, Math.floor(Date.now()/1000), intentId, chargeId, paidAt, refundedAmount,
-          disputeStatus, revocationReason, order.orderId, order.sessionId, order.ledgerVersion, intentId, chargeId);
+          disputeStatus, revocationReason, stripeFeeCents, order.orderId, order.sessionId, order.ledgerVersion, intentId, chargeId);
     },
     noteViewerWebhook(orderId, eventId) {
       sql('UPDATE viewer_test_orders SET webhookEventId=COALESCE(webhookEventId,?),webhookAt=COALESCE(webhookAt,?) WHERE orderId=?')
@@ -450,20 +470,6 @@ export function openSetupStore(directory) {
           DO UPDATE SET previews=previews+excluded.previews, plays=plays+excluded.plays`)
           .run(id, kind === 'preview' ? 1 : 0, kind === 'paid' ? 1 : 0);
         return true;
-      });
-    },
-    dashboardFilms(owner) {
-      const rows = sql(`SELECT f.metadata, json_extract(b.config,'$.uploads') AS uploads, COALESCE(c.previews,0) AS previews,COALESCE(c.plays,0) AS plays,
-        COALESCE(p.rentals,0) AS rentals,COALESCE(p.purchases,0) AS purchases,
-        COALESCE(p.gross,0) AS gross,COALESCE(p.refunded,0) AS refunded FROM films f JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner
-        LEFT JOIN film_counts c ON c.filmId=f.id
-        LEFT JOIN (SELECT filmId,SUM(kind='rent') AS rentals,SUM(kind='buy') AS purchases,
-          SUM(amount) AS gross,SUM(refundedAmount) AS refunded FROM viewer_test_orders
-          WHERE owner=? AND intentId IS NOT NULL AND paidAt IS NOT NULL GROUP BY filmId) p ON p.filmId=f.id
-        WHERE f.owner=? ORDER BY f.rowid DESC`).all(owner, owner);
-      return rows.map(({ metadata, uploads, ...stats }) => {
-        const { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail } = JSON.parse(metadata);
-        return { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail, uploads: Boolean(uploads), stats };
       });
     },
     films(owner) {

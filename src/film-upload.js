@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readBoundedText } from '@dustwave/worker-core/response-body';
-import { MAX_FILE_BYTES, r2Request } from './source.js';
+import { MAX_FILE_BYTES, r2Request, videoContentType } from './source.js';
 import { objectWriter } from './r2-write.js';
 
 export const UPLOAD_PART_BYTES = 8 * 1024 * 1024;
@@ -71,26 +71,28 @@ export function createFilmUploads(store, { fetchImpl = fetch } = {}) {
     }
   }
 
-  async function start(owner, draftId, { size, fileId }) {
+  async function start(owner, draftId, { size, fileId, extension = 'mp4' }) {
     const { current, state: existing } = context(owner, draftId);
-    if (!Number.isSafeInteger(size) || size < 1 || size > MAX_FILE_BYTES) throw new FilmUploadError('Choose an MP4 up to 1 GiB.', 413);
+    if (!Number.isSafeInteger(size) || size < 1 || size > MAX_FILE_BYTES) throw new FilmUploadError('Choose a video up to 10 GB.', 413);
+    if (!['mp4', 'mov', 'mkv'].includes(extension)) throw new FilmUploadError('Choose an MP4, MOV or MKV file.');
     if (typeof fileId !== 'string' || !uuid.test(fileId)) throw new FilmUploadError('Select the film again before starting the upload.');
     if (!current || !store.uploadCredentials(owner, current)) throw new FilmUploadError('Enable upload access for this bucket first.', 403);
     let state = existing;
     if (!state || (state.complete && state.fileId !== fileId)) {
       const { accountId, bucket, jurisdiction = 'default' } = current;
       state = { id: randomUUID(), fileId, size, bucket: { accountId, bucket, jurisdiction },
-        objectKey: 'stream-films/' + randomUUID() + '.mp4', writeId: randomUUID(), parts: [], complete: false };
+        objectKey: 'stream-films/' + randomUUID() + '.' + extension, extension, writeId: randomUUID(), parts: [], complete: false };
       save(owner, draftId, state);
     }
-    if (!sameBucket(state.bucket, current) || state.fileId !== fileId || state.size !== size) {
+    if (!sameBucket(state.bucket, current) || state.fileId !== fileId || state.size !== size || (state.extension ?? 'mp4') !== extension) {
       throw new FilmUploadError('Cancel the current upload before choosing a different film.', 409);
     }
     if (state.remoteId || state.complete) return view(state);
     // R2 initiation has no idempotency key. A lost response can leave an empty handle until its
     // lifecycle expiry. Parts are only accepted for the handle durably recorded below.
     const response = await request(owner, state, 'CreateMultipartUpload', 'POST', '?uploads', {
-      'Content-Type': 'video/mp4', 'If-None-Match': '*', 'x-amz-meta-write-id': state.writeId
+      'Content-Type': videoContentType(extension),
+      'If-None-Match': '*', 'x-amz-meta-write-id': state.writeId
     });
     if (!response.ok) { await response.body?.cancel(); throw providerError(response.status); }
     const xml = await xmlResult(response, 'InitiateMultipartUploadResult');

@@ -42,7 +42,7 @@ function fixture() {
 test('rights, current unsaved draft, authenticated owner, writer, size and file identity gate all R2 traffic', async () => {
   const { api, r2, maker, options } = fixture();
   const file = { fileId: randomUUID(), size: 10 };
-  for (const size of [0, 1.5, -1, NaN, '10', 1024 ** 3 + 1]) {
+  for (const size of [0, 1.5, -1, NaN, '10', 10_000_000_001]) {
     await assert.rejects(api.start(owner, draftId, { ...file, size }), denied(413));
   }
   await assert.rejects(api.start(owner, draftId, { ...file, fileId: '../other.mov' }), denied(400));
@@ -60,7 +60,7 @@ test('rights, current unsaved draft, authenticated owner, writer, size and file 
   }
   assert.equal(r2.calls.length, 0);
   maker.draft.rights = rights;
-  assert.equal((await api.start(owner, draftId, { ...file, size: 1024 ** 3 })).nextPart, 1);
+  assert.equal((await api.start(owner, draftId, { ...file, size: 10_000_000_000 })).nextPart, 1);
 });
 
 test('replays bounded sequential parts across restart, creates a new object only, and finishes the draft once', async () => {
@@ -114,6 +114,20 @@ test('replays bounded sequential parts across restart, creates a new object only
   assert.ok(!raw.includes(credentials.secretAccessKey));
   const remoteId = r2.calls[1].query.get('uploadId');
   assert.ok(remoteId && !JSON.stringify(result).includes(remoteId));
+});
+
+test('new MOV and MKV uploads preserve type, bind the file extension and reject unknown formats', async () => {
+  for (const [extension, type] of [['mov','video/quicktime'],['mkv','video/x-matroska']]) {
+    const { api, r2 } = fixture();
+    const file = { fileId: randomUUID(), size: 4, extension };
+    await assert.rejects(api.start(owner, draftId, { ...file, extension: 'exe' }), denied(400));
+    const { uploadId } = await api.start(owner, draftId, file);
+    await assert.rejects(api.start(owner, draftId, { ...file, extension:'mp4' }), denied(409));
+    await api.part(owner, draftId, uploadId, 1, Buffer.from('test'));
+    const result = await api.complete(owner, draftId, uploadId);
+    assert.ok(result.objectKey.endsWith('.' + extension));
+    assert.equal(r2.objects.get(result.objectKey).headers.get('content-type'), type);
+  }
 });
 
 test('lost initiation and part replies cannot mix files or change bytes under a pending part', async () => {

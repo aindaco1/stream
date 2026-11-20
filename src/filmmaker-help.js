@@ -1,67 +1,67 @@
 const pricing = {
   stripe: {
     heading: 'Stripe processing fees',
-    summary: 'Stripe’s standard U.S. rate for a successful online payment with a domestic card is 2.9% + 30¢. Your country, card type, currency and any custom pricing can change the fee.',
-    example: 'On a $0.99 U.S. rental at that rate, the fee is about $0.33, leaving $0.66 before any taxes or other charges.',
-    url: 'https://stripe.com/us/pricing',
-    link: 'Stripe pricing'
+    summary: 'For a successful online payment with a U.S. domestic card, Stripe’s standard U.S. rate is 2.9% + 30¢. Your country, the card and any custom pricing can change the fee.',
+    example: 'On a $0.99 rental with no tip, that’s about $0.33 for Stripe and $0.66 for the filmmaker.',
+    url: 'https://stripe.com/us/pricing', link: 'Stripe pricing'
   },
   r2: {
-    heading: 'Cloudflare R2 storage fees',
-    summary: 'Cloudflare’s Standard tier includes 10 GB of storage free each month across your Cloudflare account. Additional storage costs $0.015 per GB-month. Cloudflare charges for reads and writes above its monthly allowances. Sending video to viewers is free of bandwidth charges.',
-    example: 'For example, storing 20 GB for a full month costs about $0.15 for storage if your account has the full allowance available.',
-    operations: 'The monthly allowance also includes 1 million Class A operations (such as writes) and 10 million Class B operations (such as reads). Additional operations cost $4.50 and $0.36 per million respectively, rounded up to whole billing units. One viewing can involve several reads. The free tier applies only to Standard storage.',
-    url: 'https://developers.cloudflare.com/r2/pricing/',
-    link: 'Cloudflare R2 pricing'
+    heading: 'Cloudflare storage fees',
+    summary: 'Cloudflare includes 10 GB of storage free each month across your account on its Standard plan. Extra storage costs $0.015 per GB-month. There’s no bandwidth charge for sending a film to viewers.',
+    example: 'If you keep 20 GB of films online for the whole month and have the full free allowance available, storage costs about $0.15.',
+    details: 'Cloudflare also counts requests to store or read files. The Standard plan includes 1 million Class A requests (such as uploads) and 10 million Class B requests (such as reads) each month. Additional requests cost $4.50 and $0.36 per million, respectively. A single viewing can involve several reads.',
+    url: 'https://developers.cloudflare.com/r2/pricing/', link: 'Cloudflare R2 pricing'
   }
 };
 
-const platformCosts = 'Stream is free to use and takes no cut of rentals or purchases. Your connected Stripe account receives the payment, and Cloudflare bills your account for storage and usage.';
-const sandbox = 'Viewer checkout currently runs in a Stripe sandbox. Payments are simulated. Your Cloudflare bucket is real and its normal usage charges apply.';
-
 function feeCopy(provider, expanded = false) {
-  const { summary, example, operations, url, link } = pricing[provider];
-  return `<p>${summary} <a href="${url}">${link}</a></p>${expanded ? `<p>${example}</p>` : ''}${expanded && operations ? `<p>${operations}</p>` : ''}`;
+  const { summary, example, details, url, link } = pricing[provider];
+  return `<p>${summary} <a href="${url}">${link}</a></p>${expanded ? `<p>${example}</p>` : ''}
+    ${expanded && details ? `<details><summary>How does Cloudflare count requests?</summary><p>${details}</p></details>` : ''}`;
 }
 
 export function renderSetupCosts(provider) {
   if (!Object.hasOwn(pricing, provider)) throw new TypeError('Unknown setup cost provider.');
-  const pilot = provider === 'stripe' ? 'The current pilot simulates payments.' : 'These charges apply to your bucket during the pilot.';
+  const pilot = provider === 'stripe' ? 'Payments in the pilot use test cards.' : 'Your bucket is billed normally during the pilot.';
   return `<div class="provider-costs"><h3>${pricing[provider].heading}</h3>${feeCopy(provider)}<p>${pilot}</p></div>`;
 }
 
 export function renderFilmmakerFaq() {
-  return `<h1>Filmmaker FAQ</h1>
-    <p>Stream is an open-source player for filmmakers who want to rent or sell a film from their own website. <a href="https://github.com/aindaco1/stream">Stream on GitHub</a></p>
-    <section><h2>Can I use Stream today?</h2>
-      <p>The pilot is invite-only. ${sandbox}</p>
-      <p>You need distribution rights to your film, a private Cloudflare R2 bucket and a Stripe account eligible to accept card payments and payouts. Settings guides you through creating accounts or using existing ones. Stripe determines eligibility for your business and country. <a href="https://stripe.com/global">Countries supported by Stripe</a></p>
+  return `<h1>FAQ</h1>
+    <p>Stream lets filmmakers rent or sell a film from a player on their own website. Viewers pay and watch in the same place. <a href="https://github.com/aindaco1/stream">Stream on GitHub</a></p>
+    <section><h2>How do I get started?</h2>
+      <p>The pilot is invite-only. Open your invitation and go to Settings. You’ll connect Stripe to get paid and Cloudflare to store your film. You can use accounts you already have. <a href="https://stripe.com/global">Where Stripe is available</a></p>
+      <p>The pilot uses test cards, so no money changes hands at checkout. Your Cloudflare account still uses real storage.</p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
-      <p>${platformCosts}</p>
+      <p>Stream is free. You set the film price and it goes to your Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at zero. Stripe calculates its processing fee on the total, including the tip.</p>
       <h3>${pricing.stripe.heading}</h3>${feeCopy('stripe', true)}
       <h3>${pricing.r2.heading}</h3>${feeCopy('r2', true)}
     </section>
-    <section><h2>Where do I put my film?</h2>
-      <p>Stream currently supports Cloudflare R2. Your original stays in your private bucket. Confirm your distribution rights for each film, then upload it or select a file already in the bucket. To upload films and thumbnails through Stream, authorize an encrypted credential scoped to that one bucket.</p>
-      <p>Use a seekable MP4 with H.264 Baseline video and optional AAC-LC audio, up to 1 GiB and four hours. Start with a keyframe and keep later keyframes at most 12 seconds apart.</p>
+    <section><h2>What can I upload?</h2>
+      <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
+      <p>After you connect your private Cloudflare bucket, you can upload the film and its thumbnail right from Stream, or choose a film already in the bucket. The original stays in your account.</p>
     </section>
-    <section><h2>How do previews, rentals and purchases work?</h2>
-      <p>Choose a free preview from 0 to 30 seconds. The default is 10 seconds. Offer a streaming rental, a one-time purchase, or both at your own USD prices. The rental clock starts at purchase and runs for the 1 to 720 hours you set. Buyers can stream and download the original MP4. Sales are final.</p>
+    <section><h2>Can viewers turn subtitles on?</h2>
+      <p>Yes. Viewers can pick a language or choose Off in the player. Stream can use text subtitles and picture subtitles such as the ones on DVDs and Blu-rays. Include the tracks you want in the film you upload.</p>
     </section>
-    <section><h2>Where can I embed the player?</h2>
-      <p>Publish the film, copy its embed code from your dashboard and paste it into any page that allows iframe embeds and payments. Add an optional thumbnail, synopsis, credits or message from the dashboard. Multiple films can share a page. Each player handles its own preview, checkout and paid access.</p>
+    <section><h2>What’s the difference between renting and buying?</h2>
+      <p>A rental lets someone watch for the time you choose, from one hour to 30 days. Their time starts when they pay. Buying lets them watch and download the original file. You can offer either option or both. Sales are final.</p>
+      <p>You can give people up to 30 seconds to watch for free. The default is 10 seconds. Choose zero to show the offers immediately.</p>
     </section>
-    <section><h2>Can someone copy a rental?</h2>
-      <p>The player keeps your R2 address private and checks time-limited access before serving encrypted rental video. A viewer with playback access can still record the screen.</p>
+    <section><h2>How do I put a film on my site?</h2>
+      <p>Publish the film, then copy the embed code from your dashboard. Paste it into a page that accepts embedded players and payments. You can show your credits, a synopsis or a short message. Each film has its own checkout, even when several share a page.</p>
     </section>
-    <section><h2>How does a viewer watch again?</h2>
-      <p>Viewers can save the private access link from the player and open it on another device. Anyone with that link can use it. When email recovery is available, viewers can choose <strong>Restore access</strong> and use the email address from checkout. A rental keeps its original end time.</p>
+    <section><h2>Can someone save a rental?</h2>
+      <p>Rentals use a private video stream, and viewers never see your Cloudflare link. Someone who can watch a film can still record their screen. Buyers get a download button.</p>
     </section>
-    <section><h2>What can I see in my dashboard?</h2>
-      <p>See preview starts, paid plays, rentals, purchases and gross test payments for each film and across your films. Stripe shows fees and net amounts for individual payments.</p>
+    <section><h2>How do I watch again or switch devices?</h2>
+      <p>Save the private access link after checkout. Open it on your other device and keep it private. If email recovery is available, choose <strong>Restore access</strong> in the player and enter the email you used to pay. A rental ends at the same time on every device.</p>
     </section>
-    <section><h2>What happens if I unpublish?</h2>
-      <p>Unpublishing stops public previews and new sales. Earlier purchases and unexpired rentals keep their original terms. Keep the same file accessible in your bucket so those viewers can watch.</p>
+    <section><h2>What do the numbers in my dashboard mean?</h2>
+      <p>See how often people started a preview or a paid viewing, and how many rented or bought each film. Repeat plays count. Revenue is the film price collected. Net revenue deducts processing fees and any refunds recorded by Stripe. Platform tips are separate. When Stripe hasn’t reported a fee, Stream uses the estimate shown in the dashboard.</p>
+    </section>
+    <section><h2>What if I take my film offline?</h2>
+      <p>Unpublishing stops free previews and new sales. People who bought the film or have time left on a rental can still watch. Keep the original in your bucket so their access keeps working.</p>
     </section>`;
 }

@@ -1,7 +1,7 @@
 import { openFilm, revisionFor } from './media.js';
 import { createThumbnails } from './thumbnails.js';
 import { savedFilmScope } from './rental.js';
-import { BLOCK_SIZE, createR2Source } from './source.js';
+import { BLOCK_SIZE, createR2Source, videoContentType } from './source.js';
 import { filmPrices, previewSeconds, rentalHours } from './prices.js';
 import { stripeSetupStateForMode } from './setup-stripe.js';
 
@@ -71,7 +71,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     // seller recorded on that order, even while this filmmaker reconnects.
     const spec = Object.freeze({ id, title: film.title, info: film.info, thumbnail: film.thumbnail, owner, account: entitled ? null : account, scope: savedFilmScope(owner, id),
       revision: film.revision, authority, prices, duration: film.duration, previewSeconds: seconds, rentalHours: hours });
-    return { spec, bucket: film.bucket, objectKey: film.objectKey };
+    return { spec, bucket: film.bucket, objectKey: film.objectKey, extension: film.extension || 'mp4' };
   }
 
   function record(id, { entitled = false } = {}) {
@@ -165,7 +165,8 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
       const head = await source.head();
       // The caller rechecks this purchase order before beginning HTTP delivery.
       return {
-        size: head.size, title: entry.spec.title, revision: entry.spec.revision, orderId,
+        size: head.size, title: entry.spec.title, extension: entry.extension,
+        contentType: videoContentType(entry.extension), revision: entry.spec.revision, orderId,
         async *stream(start = 0, end = head.size, signal) {
           if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > head.size) {
             throw new Error('Invalid download range.');

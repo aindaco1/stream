@@ -13,8 +13,10 @@ import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
+  ['/subtitles.js', ['../public/subtitles.js', 'text/javascript']],
   ['/checkout.js', ['../public/checkout.js', 'text/javascript']],
   ['/payment.js', ['../public/payment.js', 'text/javascript']],
+  ['/platform-tip.js', [import.meta.resolve('@dustwave/worker-core/platform-tip'), 'text/javascript']],
   ['/filmmaker.css', ['../public/setup.css', 'text/css']],
   ['/filmmaker-dark.css', ['../public/setup-dark.css', 'text/css']],
   ['/dust-wave-square.webp', ['../public/dust-wave-square.webp', 'image/webp']],
@@ -44,13 +46,13 @@ function rangeFor(header, size) {
   if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end && start < size) return [start, end];
 }
 
-function playlist(segments) {
+function playlist(segments, subtitleId) {
   const lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-PLAYLIST-TYPE:VOD',
     '#EXT-X-TARGETDURATION:' + Math.ceil(Math.max(...segments.map(s => s.duration))),
     '#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-INDEPENDENT-SEGMENTS', '#EXT-X-KEY:METHOD=AES-128,URI="key"'];
   segments.forEach(({ duration }, index) => {
     if (index) lines.push('#EXT-X-DISCONTINUITY');
-    lines.push('#EXTINF:' + duration.toFixed(6) + ',', index + '.ts');
+    lines.push('#EXTINF:' + duration.toFixed(6) + ',', index + '.ts' + (subtitleId ? '?subtitle=' + subtitleId : ''));
   });
   return [...lines, '#EXT-X-ENDLIST', ''].join('\n');
 }
@@ -86,10 +88,10 @@ const stripePlayerHeaders = {
   ].join('; ')
 };
 
-function attachmentName(title) {
+function attachmentName(title, extension) {
   const name = String(title).replace(/[\p{C}/\\]/gu, '').trim().slice(0, 150).toWellFormed() || 'film';
   const encoded = encodeURIComponent(name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16));
-  return "attachment; filename=\"film.mp4\"; filename*=UTF-8''" + encoded + '.mp4';
+  return `attachment; filename="film.${extension}"; filename*=UTF-8''${encoded}.${extension}`;
 }
 
 const checkoutHeaders = {
@@ -174,7 +176,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (!read) return fail(405);
         const back = setup ? '<a href="/setup/dashboard">Filmmaker workspace</a>' : '<a href="/screening">Screening room</a>';
         return send(200, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1"><title>Filmmaker FAQ · Stream</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1"><title>FAQ · Stream</title>
           <link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css"><link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)"></head>
           <body><a class="skip" href="#main">Skip to content</a><header class="masthead"><div class="bar"><strong class="brand">Stream</strong>${back}${faqLink(true)}</div></header>
           <main id="main" tabindex="-1" class="filmmaker-help">${renderFilmmakerFaq()}</main>${siteFooter(setup ? '/setup/dashboard' : '/screening')}</body></html>`,
@@ -234,14 +236,14 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           .replace(/\{\{(title|filmInfo|poster)\}\}/g, (_, key) => text[key]);
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
-      const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|order|session|download|restore|redeem|position|view|preview\.mp4|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
+      const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|abandon|order|session|download|restore|redeem|position|view|preview\.mp4|(?:preview|play)\/subtitles(?:\/([a-zA-Z0-9_-]{1,64})\.vtt)?|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
       if (!route) return fail(404);
-      const [, id, action, asset] = route;
-      const entitled = ['order', 'session', 'download', 'restore', 'redeem', 'position', 'view'].includes(action) || Boolean(asset);
+      const [, id, action, trackId, asset] = route;
+      const entitled = ['abandon', 'order', 'session', 'download', 'restore', 'redeem', 'position', 'view'].includes(action) || action.startsWith('play/');
       const spec = lookup(id, entitled);
       if (!spec) return fail(404);
       const grant = /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(req.headers.authorization || '')?.[1];
-      if (asset && !grant) return fail(403);
+      if (action.startsWith('play/') && !grant) return fail(403);
       if (['restore', 'redeem', 'position', 'view'].includes(action)) {
         if (!checkout || !spec.id) return fail(404);
         if (req.method !== 'POST') return fail(405);
@@ -298,8 +300,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const range = req.headers.range && rangeFor(req.headers.range, file.size);
         if (req.headers.range && !range) return send(416, 'text/plain', '', { 'Content-Range': 'bytes */' + file.size });
         const [from, to] = range || [0, file.size - 1];
-        res.writeHead(range ? 206 : 200, { ...headers, 'Content-Type': 'video/mp4',
-          'Content-Disposition': attachmentName(file.title), 'Accept-Ranges': 'bytes',
+        const extension = ['mp4', 'mov', 'mkv'].includes(file.extension) ? file.extension : 'mp4';
+        res.writeHead(range ? 206 : 200, { ...headers, 'Content-Type': file.contentType || 'video/mp4',
+          'Content-Disposition': attachmentName(file.title, extension), 'Accept-Ranges': 'bytes',
           ...(range && { 'Content-Range': 'bytes ' + from + '-' + to + '/' + file.size }),
           'Content-Length': to - from + 1 });
         if (req.method === 'HEAD') return res.end();
@@ -316,15 +319,18 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         finally { res.off('close', cancel); }
         return;
       }
-      if (['checkout', 'buy', 'order', 'session'].includes(action)) {
+      if (['checkout', 'buy', 'abandon', 'order', 'session'].includes(action)) {
         if (action !== 'session' && (!checkout || !spec.id)) return fail(404);
         if (req.method !== 'POST') return fail(405);
         if (req.headers.origin !== origin || req.headers['content-type'] !== 'text/plain') return fail(403);
         const token = (await body(req, action === 'session' ? 4096 : 64)).toString('utf8');
         if (action !== 'session') {
-          if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return fail(400);
-          const result = action === 'order' ? await checkout.status({ offer: spec, token }) :
-            await checkout.start({ offer: await catalog.verify(id), kind: action === 'buy' ? 'buy' : 'rent', token, origin });
+          const opening = action === 'buy' || action === 'checkout';
+          const match = /^([A-Za-z0-9_-]{43})(?: (0|[1-9]|1[0-5]))?$/.exec(token);
+          if (!match || (!opening && match[2] !== undefined)) return fail(400);
+          const result = opening ? await checkout.start({ offer: await catalog.verify(id), kind: action === 'buy' ? 'buy' : 'rent',
+            token: match[1], tipPercent: Number(match[2] || 0), origin }) :
+            await checkout[action === 'abandon' ? 'abandon' : 'status']({ offer: spec, token });
           return send(200, 'application/json', JSON.stringify(result), checkoutHeaders);
         }
         // Published orders have a saved revision, so invalid receipts never open R2.
@@ -337,14 +343,31 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         } catch { return fail(403); }
       }
       if (!read) return fail(405);
-      if (action === 'preview.mp4') {
+      const subtitles = new URL(req.url, origin).searchParams.getAll('subtitle');
+      const rendition = subtitles[0];
+      if (subtitles.length && (subtitles.length !== 1 || !/^s\d{1,5}$/.test(rendition))) return fail(400);
+      const hasRendition = film => !rendition || film.subtitleTracks?.some(track => track.id === rendition && track.format === 'bitmap');
+      async function sendSubtitles(film, options, allowed) {
+        if (!allowed()) return fail(403);
+        const tracks = film.subtitleTracks || [];
+        if (!trackId) return send(200, 'application/json', JSON.stringify(tracks.map(({ id, language, label, kind, format, forced }) =>
+          ({ id, language, label, kind, format, forced }))));
+        if (!tracks.some(track => track.id === trackId && track.format !== 'bitmap')) return fail(404);
+        const vtt = await film.subtitles(trackId, options);
+        return allowed() ? send(200, 'text/vtt; charset=utf-8', vtt) : fail(403);
+      }
+      if (action === 'preview.mp4' || action.startsWith('preview/')) {
         const seconds = spec.previewSeconds ?? 10;
         if (!seconds) return fail(403);
         const { film } = await connection(spec);
-        const clip = await film.preview(seconds);
-        const published = lookup(id);
-        if (!published || (published.previewSeconds ?? 10) !== seconds || published.revision !== spec.revision) return fail(403);
-        return sendMp4(clip);
+        const allowed = () => {
+          const published = lookup(id);
+          return published && (published.previewSeconds ?? 10) === seconds && published.revision === spec.revision;
+        };
+        if (action !== 'preview.mp4') return await sendSubtitles(film, { end: seconds }, allowed);
+        if (!hasRendition(film)) return fail(404);
+        const clip = await film.preview(seconds, { subtitleId: rendition });
+        return allowed() ? sendMp4(clip) : fail(403);
       }
       const runtime = spec.id ? { authority: spec.authority, revision: spec.revision } : await connection(spec);
       const { authority } = runtime;
@@ -353,17 +376,22 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       const authorized = () => !spec.id || (access?.expiresAt > Date.now()/1000 && checkout.accessAllowed({
         offer:spec,kind:access.access || 'rent',orderId:access.orderId,rentalExpiresAt:access.rentalExpiresAt}));
       try {
-        if (spec.id || asset === 'index.m3u8') access = await authority.verifyGrant(grant, scope);
+        if (spec.id || asset === 'index.m3u8' || !asset) access = await authority.verifyGrant(grant, scope);
         if (!authorized()) return fail(403);
-        if (asset !== 'index.m3u8') key = await authority.keyForGrant(grant, scope);
+        if (asset && asset !== 'index.m3u8') key = await authority.keyForGrant(grant, scope);
       } catch { return fail(403); }
       if (asset === 'key') return send(200, 'application/octet-stream', key);
       const film = runtime.film || (await connection(spec, true)).film;
       if (!authorized()) return fail(403);
-      if (asset === 'index.m3u8') return send(200, 'application/vnd.apple.mpegurl', playlist(film.segments));
+      if (!asset) return await sendSubtitles(film, {}, () => {
+        const live = lookup(id, true);
+        return authorized() && access.expiresAt > Date.now() / 1000 && live?.scope === spec.scope && live.revision === spec.revision;
+      });
+      if (!hasRendition(film)) return fail(404);
+      if (asset === 'index.m3u8') return send(200, 'application/vnd.apple.mpegurl', playlist(film.segments, rendition));
       const index = Number(asset.slice(0, -3));
       if (index >= film.segments.length) return fail(404);
-      const segment = await film.segment(index);
+      const segment = await film.segment(index, { subtitleId: rendition });
       if (!authorized()) return fail(403);
       return send(200, 'video/mp2t', encrypt(segment, key, index));
     } catch (error) {

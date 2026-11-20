@@ -15,7 +15,7 @@ import { openSetupStore } from './setup-store.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
 import { escapeHtml, infoFields, selectedFields } from './film-embed.js';
-import { filmSection, renderBucketAccess, renderDashboard, renderSettingsPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
+import { filmSection, renderBucketAccess, renderDashboard, renderPlatformDashboard, renderSettingsPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
@@ -28,11 +28,15 @@ class SetupError extends Error {
   constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; }
 }
 
-function signInPage(message = '') {
+function signInPage(message = '', admin = false) {
+  const title = admin ? 'Super admin sign-in' : 'Filmmaker sign-in';
   const feedback = message ? '<p role="alert">' + escapeHtml(message) + '</p>' : '';
-  return workspacePage('Filmmaker sign-in', null, '<h1>Filmmaker sign-in</h1>' + feedback + '<p>Open the private invitation from Dust Wave, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.</p>' +
-    '<form method="post" action="/setup/sign-in"><label>Invitation code <input name="code" type="password" required autocomplete="one-time-code" maxlength="64"></label> ' +
-    '<button type="submit">Open settings</button></form>');
+  const instructions = admin ? 'Open your private admin invitation or enter its one-time code.' :
+    'Open the private invitation from Dust Wave, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.';
+  return workspacePage(title, null, `<h1>${title}</h1>${feedback}<p>${instructions}</p>
+    <form method="post" action="${admin ? '/setup/admin/sign-in' : '/setup/sign-in'}"><label>Invitation code
+    <input name="code" type="password" required autocomplete="one-time-code" maxlength="64"></label>
+    <button type="submit">${admin ? 'Open platform analytics' : 'Open settings'}</button></form>`, { admin });
 }
 
 async function readForm(req, limit = 8192) {
@@ -117,7 +121,7 @@ export async function createSetup({
       if (seconds >= film.duration) throw new SetupError('Choose a free preview shorter than this film, or set the preview to 0.', 422);
       const preview = seconds ? await film.preview() : null;
       if (!seconds) await film.segment(0);
-      return { revision: film.revision, duration: film.duration, preview };
+      return { revision: film.revision, duration: film.duration, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitleTracks.map(track => track.label), preview };
     } finally { film.close(); }
   }
 
@@ -129,10 +133,13 @@ export async function createSetup({
     const method = req.method;
     const get = method === 'GET' || method === 'HEAD';
     const secure = origin.startsWith('https:');
-    const cookieName = secure ? '__Secure-stream_setup' : 'stream_setup';
-    const cookie = (value, age) => cookieName + '=' + value + '; Path=/setup; HttpOnly; SameSite=Lax; Max-Age=' + age + (secure ? '; Secure' : '');
+    const admin = path === '/setup/admin' || path.startsWith('/setup/admin/');
+    const audience = admin ? 'admin' : 'filmmaker';
+    const basePath = admin ? '/setup/admin' : '/setup';
+    const cookieName = (secure ? '__Secure-' : '') + (admin ? 'stream_admin' : 'stream_setup');
+    const cookie = (value, age) => cookieName + '=' + value + '; Path=' + basePath + '; HttpOnly; SameSite=Lax; Max-Age=' + age + (secure ? '; Secure' : '');
     const sessionId = req.headers.cookie?.split(/;\s*/).find(v => v.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
-    const session = store.session(sessionId);
+    const session = store.session(sessionId, audience);
     const provider = stripe ?? createStripeSetup({ env, origin });
     const mode = env.STRIPE_CONNECT_LIVE === '1' ? 'live' : 'test';
     const display = (status = 200, feedback = {}) => {
@@ -155,15 +162,30 @@ export async function createSetup({
       return send(200, 'text/javascript', "const code=location.hash.slice(1); if(code){history.replaceState(null,'',location.pathname); if(/^[\\w-]{43}$/.test(code)) document.querySelector('[name=code]').value=code;}", commonHeaders);
     }
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
-    if (path === '/setup/sign-in') {
-      if (get) return html(200, signInPage());
+    if (path === basePath + '/sign-in') {
+      if (get) return html(200, signInPage('', admin));
       if (method !== 'POST') return reject(405, 'Use the sign-in form.');
       try {
         const { code } = await readForm(req);
-        const id = store.signIn(code || '');
-        if (!id) return html(401, signInPage('This invitation has expired or was used. Ask Dust Wave for a fresh link.'));
-        return redirect('/setup/settings', { 'Set-Cookie': cookie(id, 14 * 86400) });
+        const id = store.signIn(code || '', audience);
+        if (!id) return html(401, signInPage('This invitation has expired or was used. Ask Dust Wave for a fresh link.', admin));
+        return redirect(admin ? basePath : '/setup/settings', { 'Set-Cookie': cookie(id, admin ? 12 * 3600 : 14 * 86400) });
       } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
+    }
+    if (admin) {
+      if (!session) return get ? redirect(basePath + '/sign-in') : reject(401, 'Sign in as a super admin.');
+      if (get && path === basePath) {
+        const report = store.platformReport(searchParams.get('maker'), Number(searchParams.get('page') || 1));
+        return report ? html(200, renderPlatformDashboard(session.csrf, report)) : reject(404, 'Filmmaker unavailable.');
+      }
+      if (method === 'POST' && path === basePath + '/sign-out') {
+        let form;
+        try { form = await readForm(req); } catch { return reject(400, 'Use the sign-out form.'); }
+        if (form.csrf !== session.csrf) return reject(403, 'Reload before signing out.');
+        store.signOut(sessionId);
+        return redirect(basePath + '/sign-in', { 'Set-Cookie': cookie('', 0) });
+      }
+      return reject(404, 'Page unavailable.');
     }
     const preview = previewPattern.exec(path);
     if (!session) {
@@ -294,7 +316,7 @@ export async function createSetup({
           result = await uploads.part(owner, id, uploadId, Number(req.headers['x-part-number']), Buffer.concat(chunks));
         } else if (action === 'start') {
           const data = await readForm(req);
-          result = await uploads.start(owner, id, { fileId: data.fileId, size: Number(data.size) });
+          result = await uploads.start(owner, id, { fileId: data.fileId, size: Number(data.size), extension: data.extension });
         } else if (action === 'status') result = uploads.status(owner, id);
         else result = await uploads[action](owner, id, uploadId);
         return send(200, 'application/json', JSON.stringify(result ?? null), commonHeaders);
@@ -425,9 +447,9 @@ export async function createSetup({
         try { film = await inspect(owner, r2, objectKey, undefined, settings.previewSeconds); }
         catch (error) {
           if (error instanceof SetupError) throw error;
-          throw new SetupError('Stream could not read this film. Check the exact object key, read access and supported MP4 settings below. You can retry this film.', 422);
+          throw new SetupError('Stream could not read this film. Check the exact object key, read access and supported video settings below. You can retry this film.', 422);
         }
-        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision });
+        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitles });
       }
       return redirect(path === '/setup/film' ? '/setup/dashboard#' + draft.id : '/setup/dashboard/new');
     } catch (e) {
