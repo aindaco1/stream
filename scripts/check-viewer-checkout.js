@@ -411,7 +411,7 @@ try {
   await page.goto(host);
   const frames = async () => Promise.all((await page.locator('iframe').elementHandles()).map(e => e.contentFrame()));
   let [renter, buyer, neighbor, legacy] = await frames();
-  await renter.getByText('Restore film access', { exact: true }).click();
+  await renter.getByText('Restore access', { exact: true }).click();
   const email = renter.getByLabel('Email used at checkout');
   const send = renter.getByRole('button', { name: 'Send access link' });
   await email.fill('viewer@example.test');
@@ -421,7 +421,7 @@ try {
   const [fieldBox, sendBox, feedbackBox] = await Promise.all([email, send, feedback].map(item => item.boundingBox()));
   assert.ok(sendBox.y - (fieldBox.y + fieldBox.height) >= 8);
   assert.ok(feedbackBox.y - (sendBox.y + sendBox.height) >= 8);
-  await renter.getByText('Restore film access', { exact: true }).click();
+  await renter.getByText('Restore access', { exact: true }).click();
   await preview(renter);
   await preview(buyer);
   await preview(neighbor);

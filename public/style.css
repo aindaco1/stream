@@ -21,7 +21,7 @@ button:disabled { opacity: .65; cursor: wait; }
 .secondary { background: #333; color: #fafafa; }
 .actions, .details { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
 .details { justify-content: space-between; }
-.details h1 + p { margin-top: .25rem; }
+
 body[data-checkout]:not(.paying) main { display: grid; gap: var(--section-gap); padding-block-end: var(--section-gap); }
 body[data-checkout]:not(.paying) main > :not(video) { min-width: 0; margin-inline: var(--gutter); }
 #purchase, #restore-form { display: grid; gap: .75rem; }
@@ -137,7 +137,19 @@ body.paying #status { color: var(--pay-muted); padding: 0 0 .75rem; margin: 0; }
   .payment-header { margin-bottom: .75rem; padding-bottom: .5rem; }
   #card-form { gap: .75rem; }
 }
-.film-info { display: grid; gap: .75rem; margin-block: 0; padding-top: .75rem; border-top: 1px solid #444; }
-.film-info dt { font-weight: 600; }
-.film-info dd { margin: .25rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #ccc; }
+.film-info { margin-block: 0; border-block-start: 1px solid #393939; }
+.film-info > div { display: grid; grid-template-columns: minmax(5rem, 8rem) minmax(0, 1fr); gap: .75rem; padding-block: .55rem; }
+.film-info > div + div { border-block-start: 1px solid #303030; }
+.film-info dt { color: #aaa; font-size: .75rem; font-weight: 600; line-height: 1.5; }
+.film-info dd { margin: 0; max-width: 66ch; font-size: .875rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 26rem) {
+  .film-info > div { grid-template-columns: minmax(0, 1fr); gap: .125rem; }
+}
+#restore-tools { border-block-start: 1px solid #393939; }
+#restore-tools summary { width: fit-content; min-height: 2.75rem; align-content: center; font-size: .8125rem; color: #bdbdbd; }
+#restore-form { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; max-width: 32rem; }
+#restore-form label { flex: 1 1 12rem; }
+#restore-form button { font-size: .875rem; }
+#restore-email { width: 100%; }
+#restore-feedback:not(:empty) { margin-top: .5rem; font-size: .8125rem; }
 body.paying .film-info { display: none; }

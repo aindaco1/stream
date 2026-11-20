@@ -258,7 +258,9 @@ export function renderDashboard({ csrf, owner, error, films, origin, draft, sele
       'Publishing makes this film available to viewers and allows other sites to embed it.';
     return `<article class="film-card dashboard-film" id="${escapeHtml(film.id)}">
       <header><h3>${escapeHtml(film.title)}</h3><p>${film.published ? 'Published' : 'Private'} · ${formatDuration(film.duration)}</p>${preview}</header>
-      ${statsList(film.stats)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, infoSaved && selectionFilm === film.id)}
+      ${statsList(film.stats)}<section class="film-thumbnail" id="thumbnail-${film.id}"><h4>Thumbnail</h4>
+      ${film.thumbnail ? `<img src="/setup/thumbnail/${film.id}/poster.jpg" loading="lazy" width="224" height="126" alt="Current film thumbnail">` : ''}
+      <a href="/setup/thumbnail/${film.id}">${film.thumbnail ? 'Edit thumbnail' : 'Add thumbnail'}</a></section>${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, infoSaved && selectionFilm === film.id)}
       ${film.published ? embedBuilder(film, url, fields) : ''}
       <form class="film-publication" action="/setup/dashboard/publication" method="post">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
         <p class="hint">${terms}</p><button type="submit" class="${film.published ? 'secondary' : 'primary'}" name="visibility" value="${film.published ? 'private' : 'public'}">

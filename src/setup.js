@@ -4,6 +4,8 @@ import { operatorDirectory } from './operator.js';
 import { openFilm } from './media.js';
 import { filmPrices, priceFromInput, previewSeconds, rentalHours } from './prices.js';
 import { createPublicFilms } from './public-films.js';
+import { createThumbnails, maxThumbnailBytes, ThumbnailError } from './thumbnails.js';
+import { thumbnailEditor } from './thumbnail-view.js';
 import { checkR2Bucket, createR2Source } from './source.js';
 import { guidedBucketForm, parseR2BucketUrl, R2SetupError } from './setup-r2.js';
 import { openSetupStore } from './setup-store.js';
@@ -12,7 +14,7 @@ import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './
 import { escapeHtml, infoFields, selectedFields } from './film-embed.js';
 import { filmSection, renderBucketAccess, renderDashboard, renderSetupPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
-const csp = "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
+const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
 const previewPattern = /^\/setup\/preview\/(f-[a-f0-9-]{36})(\/clip\.mp4)?$/;
 const callbackPattern = /^\/setup\/stripe\/(oauth|refresh|return)$/;
@@ -82,7 +84,7 @@ function bucketForm(data) {
 
 export async function createSetup({
   directory = join(operatorDirectory(), 'filmmakers'), stripe, viewerCheckout, env = process.env,
-  sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm
+  sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm, thumbnailFetch = fetch
 } = {}) {
   const style = await readFile(new URL('../public/setup.css', import.meta.url));
   const darkStyle = await readFile(new URL('../public/setup-dark.css', import.meta.url));
@@ -90,11 +92,15 @@ export async function createSetup({
     '/setup/appearance.js': new URL(import.meta.resolve('@dustwave/admin-shell/appearance-browser')),
     '/setup/film-embed.js': new URL('./film-embed.js', import.meta.url),
     '/setup/dashboard.js': new URL('../public/setup-dashboard.js', import.meta.url),
+    '/setup/thumbnail.js': new URL('../public/thumbnail.js', import.meta.url),
+    '/setup/thumbnail-frame.js': new URL('./thumbnail-frame.js', import.meta.url),
+    '/setup/thumbnail-grant.js': new URL('../public/thumbnail-grant.js', import.meta.url),
     '/setup/navigation.js': new URL('../public/setup-navigation.js', import.meta.url),
     '/setup/tabs.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs')),
     '/setup/tabs-browser.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs-browser'))
   }).map(async ([route, file]) => [route, await readFile(file)])));
   const store = openSetupStore(directory);
+  const thumbnails = createThumbnails(store, thumbnailFetch);
   const checkout = viewerCheckout ?? createViewerCheckout({store,env});
   const publications = createPublicFilms({ store, env, sourceFor });
   const busy = new Set();
@@ -182,6 +188,46 @@ export async function createSetup({
         films: store.dashboardFilms(owner).map(film => ({ ...film, published: publications.isPublished(owner, film.id) }))
       }), { 'Content-Security-Policy': csp + '; frame-src ' + viewer });
     };
+    const thumb = /^\/setup\/thumbnail\/(f-[a-f0-9-]{36})(?:\/(source|poster)\.jpg)?$/.exec(path);
+    if (thumb) {
+      const film = store.film(owner, thumb[1]);
+      if (!film) return reject(404, 'Film unavailable.');
+      try {
+        if (get) {
+          if (thumb[2]) {
+            const image = thumb[2] === 'source' ? (await thumbnails.read(owner, film))?.data : await thumbnails.poster(owner, film);
+            return image ? send(200, 'image/jpeg', image, commonHeaders) : reject(404, 'No thumbnail.');
+          }
+          const saved = await thumbnails.read(owner, film, 'HEAD');
+          if (film.thumbnail === 'pending') store.reconcileThumbnail(owner, film.id, saved?.version || '');
+          return html(200, workspacePage('Film thumbnail', session.csrf, thumbnailEditor(film, saved, session.csrf), { dashboard: true }),
+            { 'Content-Security-Policy': csp.replace("img-src 'self'", "img-src 'self' blob:") + "; connect-src 'self'" });
+        }
+        if (method !== 'POST' || thumb[2]) return reject(405, 'Use the thumbnail editor.');
+        if (req.headers['x-stream-csrf'] !== session.csrf) return reject(403, 'Reload the editor before saving.');
+        const intent = req.headers['x-thumbnail-action'];
+        if (!['save', 'delete'].includes(intent) || req.headers['content-type'] !== 'application/octet-stream') return reject(400, 'Use the thumbnail editor.');
+        const chunks = [];
+        let length = 0;
+        if (Number(req.headers['content-length']) > maxThumbnailBytes) return reject(413, 'Choose an image up to 8 MB.');
+        for await (const chunk of req) {
+          length += chunk.length;
+          if (length > maxThumbnailBytes) return reject(413, 'Choose an image up to 8 MB.');
+          chunks.push(chunk);
+        }
+        let frame;
+        try { frame = JSON.parse(req.headers['x-thumbnail-frame'] || '{}'); } catch { return reject(422, 'Check the thumbnail framing.'); }
+        const version = await thumbnails.change(owner, film, { version: req.headers['x-thumbnail-version'] || '',
+          frame, jwt: req.headers['x-thumbnail-grant'], input: Buffer.concat(chunks), remove: intent === 'delete' });
+        return send(200, 'application/json', JSON.stringify({ version }), commonHeaders);
+      } catch (e) {
+        const message = e instanceof ThumbnailError ? e.message : 'The thumbnail is temporarily unavailable. Try again.';
+        const status = e instanceof ThumbnailError ? e.status : 503;
+        if (get && !thumb[2]) return html(status, step('Film thumbnail', '<p role="alert">' + escapeHtml(message) +
+          '</p><p><a href="/setup/dashboard#' + film.id + '">Back to film</a></p>', { dashboard: true }));
+        return reject(status, message);
+      }
+    }
     if (get && path === '/setup/dashboard') return dashboard();
     if (get && path === '/setup/dashboard/new') return newFilm();
     if (get && path === '/setup/stripe/reset') {
@@ -198,7 +244,8 @@ export async function createSetup({
       const film = store.film(owner, preview[1]);
       const seconds = film && previewSeconds(film.previewSeconds);
       if (!film || !seconds) return reject(404, 'Preview unavailable.');
-      if (!preview[2]) return html(200, step(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata" src="' +
+      const poster = film.thumbnail ? ' poster="/setup/thumbnail/' + film.id + '/poster.jpg"' : '';
+      if (!preview[2]) return html(200, step(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata"' + poster + ' src="' +
         path + '/clip.mp4"></video><p><a href="/setup/dashboard#' + film.id + '">Back to film</a></p>', { dashboard: true }));
       const key = film.id + '/' + seconds;
       if (!activePreviews.has(key)) {

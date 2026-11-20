@@ -128,3 +128,13 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .embed-options legend { padding: 0 0 .5rem; font-weight: 650; }
 .embed-options label { min-height: 2.75rem; align-items: center; }
 .embed-preview iframe { display: block; width: 100%; border: 0; background: #181818; }
+.film-thumbnail { display: grid; justify-items: start; gap: .5rem; }
+.film-thumbnail h4 { font-size: 1.125rem; margin: 0; }
+.film-thumbnail img { max-width: 100%; height: auto; border-radius: .35rem; background: #181818; }
+.thumbnail-editor { max-width: 40rem; }
+.thumbnail-editor canvas { display: block; width: 100%; height: auto; background: #181818; border-radius: .35rem; }
+.thumbnail-framing { min-width: 0; margin: 0; padding: 0; border: 0; }
+.thumbnail-framing legend { font-weight: 650; margin-block-end: .5rem; }
+.thumbnail-sliders { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%, 10rem),1fr)); gap: .75rem; margin-block-start: .75rem; }
+.thumbnail-sliders input[type=range] { width: 100%; accent-color: var(--accent); padding: 0; }
+.thumbnail-editor [role=status]:empty { display: none; }
