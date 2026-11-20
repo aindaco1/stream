@@ -80,8 +80,13 @@ async function checkAppearance(page, origin) {
   await scheme('dark');
   await page.emulateMedia({ colorScheme: 'light' });
   await scheme('light');
+  await choice.click();
   await choice.selectOption('dark');
   await scheme('dark');
+  assert.ok(await choice.evaluate(select => document.activeElement === select && getComputedStyle(select).outlineStyle === 'none'));
+  await choice.press('Tab');
+  await page.keyboard.press('Shift+Tab');
+  assert.ok(await choice.evaluate(select => document.activeElement === select && getComputedStyle(select).outlineStyle === 'solid'));
   await page.reload();
   assert.equal(await choice.inputValue(), 'dark');
   const second = await page.context().newPage();

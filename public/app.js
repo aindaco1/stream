@@ -1,5 +1,6 @@
 import { attachSubtitles } from './subtitles.js';
 import { attachVideoControls } from './video-controls.js';
+import './select-focus.js';
 
 const video = document.querySelector('video');
 const play = document.querySelector('#play');

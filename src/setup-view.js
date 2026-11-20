@@ -188,6 +188,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/setup/style.css">
     <link rel="stylesheet" href="/setup/dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
     <script src="/setup/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
+    <script type="module" src="/select-focus.js"></script>
     ${!csrf ? '<script src="/setup/sign-in.js" defer></script>' : !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}
     ${builder ? '<script type="module" src="/setup/dashboard.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>

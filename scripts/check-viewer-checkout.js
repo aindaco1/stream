@@ -327,9 +327,19 @@ async function preview(frame, captions = false) {
       await pip.click();
       await frame.waitForFunction(() => !document.pictureInPictureElement);
     }
+    await menu.click();
     await menu.selectOption('s2');
     await frame.waitForFunction(() => [...document.querySelector('video').textTracks]
       .some(track => track.mode === 'showing' && track.cues?.length === 1 && track.cues[0].endTime === 10));
+    const captionOutline = () => menu.evaluate(select => getComputedStyle(select.closest('label')).outlineStyle);
+    assert.equal(await captionOutline(), 'none');
+    await frame.locator('video').evaluate(video => video.play());
+    await frame.waitForFunction(() => getComputedStyle(document.querySelector('.video-tools')).opacity === '0');
+    assert.ok(await menu.evaluate(select => document.activeElement === select));
+    await menu.press('Tab');
+    await frame.page().keyboard.press('Shift+Tab');
+    assert.equal(await captionOutline(), 'solid');
+    await frame.waitForFunction(() => getComputedStyle(document.querySelector('.video-tools')).opacity === '1');
     await frame.locator('video').evaluate(video => { video.pause(); video.currentTime = 4; });
     await menu.selectOption('s3');
     await frame.waitForFunction(() => {

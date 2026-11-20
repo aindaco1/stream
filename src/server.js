@@ -14,6 +14,7 @@ import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
   ['/video-controls.js', ['../public/video-controls.js', 'text/javascript']],
+  ['/select-focus.js', ['../public/select-focus.js', 'text/javascript']],
   ['/subtitles.js', ['../public/subtitles.js', 'text/javascript']],
   ['/checkout.js', ['../public/checkout.js', 'text/javascript']],
   ['/payment.js', ['../public/payment.js', 'text/javascript']],
