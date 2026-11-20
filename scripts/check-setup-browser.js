@@ -119,6 +119,9 @@ async function checkThumbnails(page, publicUrl, fixtureBucket) {
   assert.ok(await save.isDisabled());
   await form.getByLabel('Thumbnail image').setInputFiles({ name: 'poster.png', mimeType: 'image/png', buffer: image });
   await form.locator('canvas').waitFor();
+  const desktopFile = await form.getByLabel('Thumbnail image').boundingBox();
+  const desktopPreview = await form.locator('canvas').boundingBox();
+  assert.ok(desktopPreview.x >= desktopFile.x + desktopFile.width && desktopPreview.width > desktopFile.width);
   await save.click();
   await form.getByText('Thumbnail saved.', { exact: true }).waitFor();
   assert.equal(new URL(page.url()).pathname, '/setup/dashboard');
@@ -132,6 +135,10 @@ async function checkThumbnails(page, publicUrl, fixtureBucket) {
   await form.getByRole('button', { name: 'Adjust saved framing' }).click();
   await page.setViewportSize({ width: 320, height: 720 });
   await form.locator('canvas').waitFor();
+  const mobileFile = await form.getByLabel('Thumbnail image').boundingBox();
+  const mobilePreview = await form.locator('canvas').boundingBox();
+  const mobileZoom = await form.getByLabel('Zoom').boundingBox();
+  assert.ok(mobilePreview.y >= mobileFile.y + mobileFile.height && mobileZoom.y >= mobilePreview.y + mobilePreview.height);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   if (evidence) await section.screenshot({ path: path.join(evidence, 'thumbnail-editor-mobile.png') });
   await form.getByLabel('Zoom').fill('200');
@@ -540,6 +547,9 @@ try {
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       }
       await signIn(page, origin, owner);
+      await page.locator('#storage[role=tabpanel]').waitFor();
+      assert.equal(await page.locator('#payments').isVisible(), false);
+      assert.deepEqual(await page.locator('.subtabs [role=tab]').allTextContents(), ['Storage', 'Payments']);
       if (first) assert.equal(await page.getByRole('combobox', { name: 'Appearance' }).inputValue(), 'dark');
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       if (evidence && (first || mode === 'reuse')) {
@@ -621,8 +631,16 @@ try {
         await blankField.check();
         assert.equal(await sharing.locator('iframe').getAttribute('height'), '480');
         await blankField.uncheck();
+        await page.setViewportSize({ width: 1024, height: 844 });
+        const controlOffsets = () => sharing.evaluate(section => {
+          const top = section.getBoundingClientRect().top;
+          return ['h4', 'form', '.embed-code', '.copy-embed'].map(selector =>
+            Math.round(section.querySelector(selector).getBoundingClientRect().top - top));
+        });
+        const defaultOffsets = await controlOffsets();
         await sharing.getByRole('checkbox', { name: 'Credits' }).check();
         assert.equal(await sharing.locator('iframe').getAttribute('height'), '528');
+        assert.deepEqual(await controlOffsets(), defaultOffsets, 'Growing the preview must preserve control spacing');
         await frame.getByText('Directed by <Ada>', { exact: true }).waitFor();
         assert.equal(await frame.getByText('A short film.').count(), 0);
         const embedUrl = await sharing.locator('iframe').getAttribute('src');

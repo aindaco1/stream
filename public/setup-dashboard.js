@@ -26,6 +26,9 @@ for (const builder of document.querySelectorAll('.film-sharing')) {
     const preview = embedLayout(builder.dataset.preview, fields, populated);
     if (frame.src !== preview.src) frame.src = preview.src;
     frame.height = layout.height;
+    // Match the 16:9 picture to this column. Long text can scroll inside the
+    // preview; a checkout or a restore form never resizes the dashboard.
+    frame.style.height = `calc(56.25cqw + var(--preview-controls) + ${layout.populatedCount} * var(--preview-field))`;
     code.value = iframeCode(layout, frame.title);
     builder.querySelector('.public-player').href = layout.src;
     card.querySelector('[name=show]').value = selection;

@@ -130,7 +130,7 @@ await new Promise(resolve => player.listen(0, '127.0.0.1', resolve));
 const app = 'http://127.0.0.1:' + player.address().port;
 const publisher = createServer((req, res) => {
   const frames = [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660]]
-    .map(([id, width, height]) => '<iframe allow="autoplay; payment" width="' + width + '" height="' + height + '" src="' + app + '/embed/' + id + '"></iframe>');
+    .map(([id, width, height]) => `<iframe allow="autoplay; payment; picture-in-picture ${id === 'legacy' ? "'none'" : '*'}" width="${width}" height="${height}" src="${app}/embed/${id}"></iframe>`);
   res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Publisher</title>' +
     '<style>body{margin:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px}iframe{border:0}</style>' + frames.join('\n'));
 });
@@ -314,6 +314,19 @@ async function preview(frame, captions = false) {
   }
   if (captions) {
     const menu = frame.getByRole('combobox', { name: 'Subtitles' });
+    await frame.locator('video').evaluate(video => video.pause());
+    const tools = frame.locator('.video-tools');
+    const [overlay, screen] = await Promise.all([tools.boundingBox(), frame.locator('video').boundingBox()]);
+    assert.ok(overlay.x >= screen.x && overlay.y >= screen.y &&
+      overlay.x + overlay.width <= screen.x + screen.width && overlay.y + overlay.height <= screen.y + screen.height);
+    const pip = frame.getByRole('button', { name:'Picture-in-picture' });
+    if (await frame.evaluate(() => document.pictureInPictureEnabled)) {
+      await pip.click();
+      await frame.waitForFunction(() => document.pictureInPictureElement === document.querySelector('video'));
+      assert.equal(await pip.getAttribute('aria-pressed'), 'true');
+      await pip.click();
+      await frame.waitForFunction(() => !document.pictureInPictureElement);
+    }
     await menu.selectOption('s2');
     await frame.waitForFunction(() => [...document.querySelector('video').textTracks]
       .some(track => track.mode === 'showing' && track.cues?.length === 1 && track.cues[0].endTime === 10));
@@ -331,6 +344,7 @@ async function preview(frame, captions = false) {
     await menu.selectOption('s2');
     await frame.locator('video').evaluate(video => video.play());
   }
+  if (frame.url().endsWith('/legacy')) assert.equal(await frame.locator('#picture-in-picture').isHidden(), true);
   const length = await frame.locator('video').evaluate(video => { video.currentTime = 9.7; return video.duration; });
   assert.ok(Math.abs(length - 10) < .1);
   await frame.locator('#rent').waitFor();

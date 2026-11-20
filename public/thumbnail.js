@@ -28,6 +28,7 @@ function setupEditor(form) {
 
   function updateControls() {
     framing.hidden = !image;
+    canvas.hidden = !image;
     poster.hidden = !version || Boolean(image);
     save.disabled = busy || !image;
     remove.hidden = !version;

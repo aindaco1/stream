@@ -9,6 +9,33 @@
 body, p, h1 { margin: 0; }
 main { max-width: 60rem; margin-inline: auto; }
 video { display: block; background: #080808; width: 100%; aspect-ratio: 16 / 9; }
+.video-stage { position: relative; min-height: 0; min-width: 0; background: #080808; }
+.video-tools {
+  position: absolute; inset: .4rem .4rem auto auto; display: flex; gap: .125rem;
+  transition: opacity .15s ease-out;
+}
+.video-stage.tools-idle:not(:has(.video-tools:focus-within)) .video-tools { opacity: 0; pointer-events: none; }
+.video-tools:focus-within { opacity: 1; }
+.video-tool {
+  position: relative; display: grid; place-items: center; width: 44px; height: 44px;
+  padding: 0; border: 0; border-radius: .35rem; background: rgb(0 0 0 / .72); color: #fff;
+}
+.video-tool:hover, .video-tool:focus-within { background: #222; }
+.video-tool:has(:focus-visible) { outline: 2px solid white; outline-offset: 2px; }
+.caption-icon {
+  font: 700 .69rem/1 Arial, sans-serif; letter-spacing: .03em; padding: .11rem .13rem;
+  border: 1.5px solid currentColor; border-radius: .15rem;
+}
+#subtitles { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 1rem; cursor: pointer; }
+#subtitle-control:has(option:not([value=""]):checked) .caption-icon,
+#picture-in-picture[aria-pressed="true"] .pip-icon { background: white; color: #151515; outline: 1px solid white; }
+.pip-icon {
+  position: relative; width: 1.3rem; height: .95rem; border: 1.5px solid currentColor; border-radius: .14rem;
+}
+.pip-icon::after {
+  content: ''; position: absolute; inset: auto .1rem .1rem auto; width: .55rem; height: .35rem; background: currentColor;
+}
+@media (prefers-reduced-motion: reduce) { .video-tools { transition: none; } }
 h1 { font-size: clamp(1.1rem, 3vw, 1.5rem); line-height: 1.25; font-weight: 600; overflow-wrap: anywhere; }
 p { color: #c5c5c5; font-size: .875rem; }
 a, summary { color: #eee; text-underline-offset: .2em; }
@@ -23,12 +50,10 @@ button:disabled { opacity: .65; cursor: wait; }
 .details { justify-content: space-between; }
 
 body[data-checkout]:not(.paying) main { display: grid; gap: var(--section-gap); padding-block-end: var(--section-gap); }
-body[data-checkout]:not(.paying) main > :not(video) { min-width: 0; margin-inline: var(--gutter); }
+body[data-checkout]:not(.paying) main > :not(.video-stage) { min-width: 0; margin-inline: var(--gutter); }
 #purchase, #restore-form { display: grid; gap: .75rem; }
 #status:empty, #rental-end:empty { display: none; }
 #subtitle-status:empty { display: none; }
-#subtitle-control { display: inline-flex; align-items: center; gap: .4rem; font-size: .875rem; }
-#subtitles { max-width: 12rem; min-height: 2.75rem; font: inherit; }
 #tip-choice { display: grid; justify-content: start; grid-template-columns: max-content minmax(3rem, 10rem) 3ch; align-items: center; gap: 0 .625rem; font-size: .875rem; }
 #tip-percent { width: 100%; margin: 0; min-height: 2.75rem; accent-color: #f2f2f2; }
 #tip-value { text-align: end; font-variant-numeric: tabular-nums; }
@@ -71,7 +96,7 @@ body.paying :is(#access-tools, #restore-tools) { display: none; }
   #purchase { row-gap: .375rem; }
   #purchase #terms { order: 1; }
   #tip-note { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  main:has(#purchase:not([hidden])) video.preview-ended { display: none; }
+  main:has(#purchase:not([hidden])) .video-stage:has(video.preview-ended) { display: none; }
   main:has(#purchase:not([hidden])) .details > div { flex: 1; min-width: 0; }
   main:has(#purchase:not([hidden])) h1 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
@@ -88,7 +113,7 @@ body.paying main {
   display: flex; flex-direction: column; width: min(100%, 32rem); height: auto;
   padding: clamp(.75rem, 3vw, 1.5rem);
 }
-body.paying :is(.details, #ownership, #purchase .actions > :is(#buy, #rent), #terms, video) { display: none; }
+body.paying :is(.details, #ownership, #purchase .actions > :is(#buy, #rent), #terms, .video-stage) { display: none; }
 body.paying #payment { order: -1; min-width: 0; }
 .payment-header { padding-bottom: .75rem; border-bottom: 1px solid var(--pay-line); margin-bottom: 1rem; }
 .payment-nav, .order-line { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
@@ -168,13 +193,21 @@ body.paying #status { color: var(--pay-muted); padding: 0 0 .75rem; margin: 0; }
   .payment-header { margin-bottom: .75rem; padding-bottom: .5rem; }
   #card-form { gap: .75rem; }
 }
-.film-info { margin-block: 0; border-block-start: 1px solid #393939; }
-.film-info > div { display: grid; grid-template-columns: minmax(5rem, 8rem) minmax(0, 1fr); gap: .75rem; padding-block: .55rem; }
-.film-info > div + div { border-block-start: 1px solid #303030; }
-.film-info dt { color: #aaa; font-size: .75rem; font-weight: 600; line-height: 1.5; }
-.film-info dd { margin: 0; max-width: 66ch; font-size: .875rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 26rem) {
-  .film-info > div { grid-template-columns: minmax(0, 1fr); gap: .125rem; }
+.film-info {
+  display: grid; align-content: start; align-items: start; gap: .625rem 1.5rem;
+  border-block-start: 1px solid #494949; padding-block-start: .75rem;
+}
+.film-info p { white-space: pre-line; overflow-wrap: anywhere; text-wrap: pretty; }
+.film-synopsis { max-width: 65ch; line-height: 1.45; color: #e6e6e6; }
+.film-message { max-width: 48ch; font: italic 1.0625rem/1.35 Georgia, 'Times New Roman', serif; color: #d2d2d2; }
+.film-credits {
+  grid-column: 1 / -1; justify-self: center; max-width: 82ch; color: #b8b8b8;
+  font: 600 .8125rem/1.25 'Avenir Next Condensed', 'Arial Narrow', 'Roboto Condensed', sans-serif;
+  text-transform: uppercase; letter-spacing: .055em; text-align: center; text-wrap: balance;
+}
+@media (min-width: 34rem) {
+  .film-info:has(.film-synopsis):has(.film-message) { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .film-synopsis + .film-message { padding-inline-start: .875rem; border-inline-start: 1px solid #666; }
 }
 #restore-tools { border-block-start: 1px solid #393939; }
 #restore-tools summary { width: fit-content; min-height: 2.75rem; align-content: center; font-size: .8125rem; color: #bdbdbd; }

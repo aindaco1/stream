@@ -1,3 +1,5 @@
+export const firstSale = 'You can upload a film and watch a private preview before connecting Stripe. To publish and get paid for rentals or purchases, first connect your Stripe account and finish verification.';
+
 const pricing = {
   stripe: {
     heading: 'Stripe processing fees',
@@ -31,31 +33,39 @@ export function renderFilmmakerFaq() {
   return `<h1>FAQ</h1>
     <p>Stream lets filmmakers rent or sell a film from a player on their own website. Viewers pay and watch in the same place. <a href="https://github.com/aindaco1/stream">Stream on GitHub</a></p>
     <section><h2>How do I get started?</h2>
-      <p>The pilot is invite-only. Open your invitation and go to Settings. You’ll connect Stripe to get paid and Cloudflare to store your film. You can use accounts you already have. <a href="https://stripe.com/global">Where Stripe is available</a></p>
+      <p>The pilot is invite-only. Open your invitation and go to Settings. Start in Storage to connect your Cloudflare bucket. Then open Payments to connect the Stripe account where you want to get paid. You can use accounts you already have. <a href="https://stripe.com/global">Where Stripe is available</a></p>
       <p>The pilot uses test cards, so no money changes hands at checkout. Your Cloudflare account still uses real storage.</p>
+    </section>
+    <section><h2>When can I start selling?</h2>
+      <p>${firstSale} Viewers can pay as soon as you publish.</p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
       <p>Stream is free. You set the film price. For new marketplace orders, Dust Wave transfers the film price less the verified card processing fee to your connected Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. The processing fee applies to the full charge, including tax and tip.</p>
       <h3>${pricing.stripe.heading}</h3>${feeCopy('stripe', true)}
       <h3>${pricing.r2.heading}</h3>${feeCopy('r2', true)}
     </section>
-    <section><h2>How does checkout calculate tax?</h2>
-      <p>For viewers watching in New Mexico, Stream can use their viewing address to look up the local gross receipts tax rate. Other locations use Stripe Tax at checkout. Applicable film tax is added to your price. Any tax on an optional tip is included in the tip amount the viewer chose. The viewer sees the total and pays once.</p>
-      <p>The pilot tests Dust Wave as the marketplace responsible for collection. A test charge can show zero tax, for example when the product is exempt or the sandbox has no registration for the viewer’s location. Before live sales, Dust Wave needs to confirm its obligations, configure live registrations where required, and arrange filing and remittance. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for platforms and marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
+    <section><h2>What tax will my viewers pay?</h2>
+      <p>Viewers see the total before they pay. Any film tax is added to your price. Any tax on an optional tip is included in the tip amount the viewer selects. It all goes through as one payment.</p>
+      <p>In New Mexico, Stream looks up the local gross receipts tax rate using the address where the viewer will watch. If Stream can’t match the address, Stripe asks the viewer to confirm or correct it. Elsewhere, Stripe Tax uses the viewer’s billing address.</p>
+      <p>For example, in our downtown Albuquerque test, a 99¢ rental with a 10¢ tip came to $1.17. The viewer paid 8¢ in tax on the film, and 1¢ of the tip went toward tax. Dust Wave’s pilot treats the tip as taxable at the film’s rate.</p>
+      <p>Dust Wave handles checkout tax as the marketplace in the pilot. A test charge can show zero tax where no sandbox registration applies. Before live sales, Dust Wave needs to set up any required live registrations and arrange filing and remittance. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for platforms and marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
     </section>
     <section><h2>What can I upload?</h2>
       <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
       <p>After you connect your private Cloudflare bucket, you can upload the film and its thumbnail right from Stream, or choose a film already in the bucket. The original stays in your account.</p>
     </section>
     <section><h2>Can viewers turn subtitles on?</h2>
-      <p>Yes. Viewers can pick a language or choose Off in the player. Stream can use text subtitles and picture subtitles such as the ones on DVDs and Blu-rays. Include the tracks you want in the film you upload.</p>
+      <p>Yes. If the film has subtitles, tap or move over the video to show its controls. Choose the captions button to pick a language or turn subtitles off. Stream supports text subtitles and picture subtitles such as the ones on DVDs and Blu-rays.</p>
+    </section>
+    <section><h2>Can I keep watching in a floating window?</h2>
+      <p>Start the film, then choose the picture-in-picture button on the video. It appears when your browser, device and the site hosting the player allow it.</p>
     </section>
     <section><h2>What’s the difference between renting and buying?</h2>
       <p>A rental lets someone watch for the time you choose, from one hour to 30 days. Their time starts when they pay. Buying lets them watch and download the original file. You can offer either option or both. Sales are final.</p>
       <p>You can give people up to 30 seconds to watch for free. The default is 10 seconds. Choose zero to show the offers immediately.</p>
     </section>
     <section><h2>How do I put a film on my site?</h2>
-      <p>Publish the film, then copy the embed code from your dashboard. Paste it into a page that accepts embedded players and payments. You can show your credits, a synopsis or a short message. Each film has its own checkout, even when several share a page.</p>
+      <p>Open your published film in the Dashboard. Choose the details you want alongside the player and check the live preview. You can include a synopsis, credits or a personal message. Copy the embed code and paste it into your site. Each film has its own checkout, even when several share a page.</p>
     </section>
     <section><h2>Can someone save a rental?</h2>
       <p>Rentals use a private video stream, and viewers never see your Cloudflare link. Someone who can watch a film can still record their screen. Buyers get a download button.</p>

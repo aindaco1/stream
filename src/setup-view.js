@@ -2,7 +2,7 @@ import { sumFilmStats } from './analytics.js';
 import { filmPrices, previewSeconds, rentalHours, usdInput } from './prices.js';
 import { stripeBusinessCountries } from './setup-stripe.js';
 import { faqLink, siteFooter } from './site-frame.js';
-import { renderSetupCosts } from './filmmaker-help.js';
+import { firstSale, renderSetupCosts } from './filmmaker-help.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
@@ -36,10 +36,10 @@ function stripeCard(stripe, csrf) {
     action_required: 'More information needed',
     restricted: 'Restricted by Stripe'
   };
-  let description = stripe.mode === 'test' ? 'Connect on Stripe to receive sandbox rental and purchase payments.' : 'Connect on Stripe to receive rental and purchase payments.';
-  if (!stripe.configured) description = 'You can connect storage and preview a film while Dust Wave configures Stripe.';
+  let description = 'Use a new Stripe account or sign in to one you already have.';
+  if (!stripe.configured) description = 'Dust Wave is still setting up Stripe for this workspace.';
   else if (ready) description = stripe.businessName ? `Payments account for ${stripe.businessName}.` : `Your Stripe account is ready for ${payments}.`;
-  else if (stripe.status === 'pending') description = 'Stripe is reviewing your information. You can prepare your film while you wait.';
+  else if (stripe.status === 'pending') description = 'Stripe is reviewing your account information.';
   else if (stripe.status === 'unavailable') description = 'Check the connection again. If Stripe asks, reconnect the same account.';
   else if (stripe.reason) description = stripe.reason;
 
@@ -48,7 +48,7 @@ function stripeCard(stripe, csrf) {
     status: stripe.configured ? (statuses[stripe.status] || 'Not connected') : 'Payments setup unavailable',
     // The shared renderer uses this flag to hide onboarding controls. Status
     // text and payment authorization retain their independent provider values.
-    description, csrfToken: csrf, ready: ready || stripe.status === 'pending', existingOAuth: stripe.existingAvailable === true,
+    description: ready ? description : firstSale + ' ' + description, csrfToken: csrf, ready: ready || stripe.status === 'pending', existingOAuth: stripe.existingAvailable === true,
     resume: stripe.hasAccount === true || stripe.creating === true,
     action: stripe.configured ? '/setup/stripe/start' : undefined,
     checkAction: stripe.configured && stripe.hasAccount ? '/setup/stripe/check' : undefined,
@@ -167,16 +167,16 @@ function sectionTabs(label, initial, sections) {
 }
 
 export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, draft = {}, error, notice, initialSection }) {
-  const initial = initialSection || (stripe.status === 'ready' ? 'storage' : 'payments');
+  const initial = initialSection || 'storage';
   return workspacePage('Settings', csrf, `<div class="workspace-intro"><h1>Settings</h1>
       ${filmmaker.name ? `<p class="account">Signed in as ${escapeHtml(filmmaker.name)}</p>` : ''}</div>
       ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
       ${notice ? `<div class="feedback" role="status">${escapeHtml(notice)}</div>` : ''}
       ${sectionTabs('Settings sections', initial, [
-        { id: 'payments', name: 'Payments', content: renderSetupCosts('stripe') + stripeCard(stripe, csrf) +
-          (['ready', 'pending'].includes(stripe.status) ? (r2.status === 'ready' ? '<a href="/setup/dashboard#films">Go to films</a>' : '<a href="#storage">Continue to storage</a>') : '') },
-        { id: 'storage', name: 'Storage', content: renderSetupCosts('r2') + storageCard(r2, draft, csrf) +
-          (r2.status === 'ready' ? (r2.uploads ? '' : '<a class="primary-link" href="/setup/r2/uploads">Enable film and thumbnail uploads</a>') + '<a href="/setup/dashboard#films">Go to films</a>' : '') }
+        { id: 'storage', name: 'Storage', content: storageCard(r2, draft, csrf) +
+          (r2.status === 'ready' ? (r2.uploads ? '' : '<a class="primary-link" href="/setup/r2/uploads">Enable film and thumbnail uploads</a>') + '<a href="/setup/dashboard#films">Go to films</a>' : '') + renderSetupCosts('r2') },
+        { id: 'payments', name: 'Payments', content: stripeCard(stripe, csrf) +
+          (['ready', 'pending'].includes(stripe.status) ? (r2.status === 'ready' ? '<a href="/setup/dashboard#films">Go to films</a>' : '<a href="#storage">Go to storage</a>') : '') + renderSetupCosts('stripe') }
       ])}`);
 }
 
@@ -276,15 +276,16 @@ function embedBuilder(film, url, previewUrl, selection) {
   const options = infoFields.map(field =>
     `<label><input type="checkbox" name="include" value="${field.name}"${fields.includes(field) ? ' checked' : ''}> ${field.label}</label>`).join('');
   return `<section class="film-sharing" id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}" data-preview="${escapeHtml(previewUrl)}" data-populated="${populated.join(',')}">
-    <h4>Embed this film</h4>
-    <form method="get" action="/setup/dashboard#embed-${escapeHtml(film.id)}">${hidden('film', film.id)}
-      <fieldset class="embed-options"><legend>Include in this embed</legend><p class="hint">Only fields with saved text will appear.</p><div class="film-actions">${options}</div></fieldset>
-      <noscript><button>Update preview and code</button></noscript></form>
-    <div class="embed-preview"><h5>Live preview</h5>${iframeCode(embedLayout(previewUrl, fields, populated), film.title, false)}</div>
-    <a class="public-player" href="${escapeHtml(layout.src)}">Open public player</a>
-    <div><label for="code-${escapeHtml(film.id)}">Embed code</label>
-    <textarea id="code-${escapeHtml(film.id)}" class="embed-code" readonly spellcheck="false" rows="3">${escapeHtml(code)}</textarea></div>
-    <div class="film-actions"><button class="secondary copy-embed" type="button">Copy embed code</button><span class="copy-status" role="status"></span></div>
+    <div class="embed-controls"><h4>Embed this film</h4>
+      <form method="get" action="/setup/dashboard#embed-${escapeHtml(film.id)}">${hidden('film', film.id)}
+        <fieldset class="embed-options"><legend>Include in this embed</legend><div class="embed-checks">${options}</div><p class="hint">Only fields with saved text will appear.</p></fieldset>
+        <noscript><button>Update preview and code</button></noscript></form>
+      <div><label for="code-${escapeHtml(film.id)}">Embed code</label>
+        <textarea id="code-${escapeHtml(film.id)}" class="embed-code" readonly spellcheck="false" rows="3">${escapeHtml(code)}</textarea></div>
+      <div class="film-actions"><button class="secondary copy-embed" type="button">Copy embed code</button><span class="copy-status" role="status"></span></div>
+    </div>
+    <div class="embed-preview"><div class="preview-heading"><h5>Live preview</h5><a class="public-player" href="${escapeHtml(layout.src)}">Open public player</a></div>
+      ${iframeCode(embedLayout(previewUrl, fields, populated), film.title, false)}</div>
     </section>`;
 }
 

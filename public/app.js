@@ -1,8 +1,10 @@
 import { attachSubtitles } from './subtitles.js';
+import { attachVideoControls } from './video-controls.js';
 
 const video = document.querySelector('video');
 const play = document.querySelector('#play');
 const status = document.querySelector('#status');
+const videoControls = attachVideoControls(video, status);
 const filmId = location.pathname.split('/')[2] || 'clock';
 const prefix = '/film/' + encodeURIComponent(filmId);
 const subtitles = attachSubtitles(video, prefix, switchRendition);
@@ -78,6 +80,7 @@ if (!receipt && document.body.dataset.checkout === 'true') {
 
 function fail(message) {
   playbackGeneration++;
+  videoControls.exitPictureInPicture();
   clearTimeout(renewal);
   subtitles.clear();
   playGrant = undefined;
