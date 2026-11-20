@@ -29,6 +29,10 @@ export async function platformAccount(key, fetchImpl) {
 
 export function connectedClient(key, account, platform, fetchImpl) {
   if (!accountIdPattern.test(account) || account === platform) throw new Error('A distinct connected account is required.');
+  return paymentClient(key, account, fetchImpl);
+}
+
+export function paymentClient(key, account, fetchImpl) {
   return createStripeClient(key, { fetchImplementation: (href, init) => {
     const url = new URL(href);
     const endpoint = (init.method === 'POST' && (['/v1/payment_intents', '/v1/checkout/sessions'].includes(url.pathname) ||
@@ -36,19 +40,19 @@ export function connectedClient(key, account, platform, fetchImpl) {
       (init.method === 'GET' && /^\/v1\/(?:payment_intents\/pi_[a-zA-Z0-9]+|checkout\/sessions\/cs_test_[a-zA-Z0-9]+)$/.test(url.pathname));
     if (url.origin !== API || !endpoint) throw new Error('Unexpected payment endpoint.');
     const headers = new Headers(init.headers);
-    headers.set('Stripe-Account', account);
+    if (account) headers.set('Stripe-Account', account);
     return fetchImpl(url.href, { ...init, headers, redirect: 'error', signal: AbortSignal.timeout(15000) });
   } });
 }
 
-export async function verifyReadySeller({ store, env, fetchImpl, owner, account }) {
+export async function verifyReadySeller({ store, env, fetchImpl, owner, account, requireTransfers = false }) {
   const maker = store.maker(owner);
   const state = maker && stripeSetupStateForMode(maker.stripe, 'test');
   if (state?.creatorId !== owner || state.accountId !== account || !store.ownsTestAccount(owner, account)) {
     throw new Error('This filmmaker needs a verified sandbox connection.');
   }
   // Refresh a private snapshot. Never overwrite setup changes from another process.
-  const connect = createStripeSetup({ env, origin: 'http://127.0.0.1', fetchImpl });
+  const connect = createStripeSetup({ env, origin: 'http://127.0.0.1', fetchImpl, requireTransfers });
   const refreshed = await connect.refresh({
     creatorId: owner, state, save: () => {}, claimAccount: id => store.ownsTestAccount(owner, id)
   });

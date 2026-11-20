@@ -36,11 +36,16 @@
             <button type="button" id="close-checkout">Back to film</button></div>
           <div class="order-line"><p id="order-terms"></p><strong id="order-price"></strong></div>
           <p id="order-tip" hidden></p>
+          <p id="order-tax" aria-live="polite" aria-atomic="true"></p>
         </header>
         <div id="payment-feedback"></div>
         <div id="stripe-checkout"></div>
         <form id="card-form" hidden>
           <div id="contact-element"></div>
+          <section id="billing-location" aria-labelledby="billing-label" hidden>
+            <h3 id="billing-label">Billing address</h3>
+            <div id="billing-address-element"></div>
+          </section>
           <div id="payment-element"></div>
           <p id="payment-error" role="alert" tabindex="-1" hidden></p>
         </form>

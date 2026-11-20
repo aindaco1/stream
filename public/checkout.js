@@ -166,7 +166,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     const terms = [];
     if (available.includes('rent')) terms.push('Rent for ' + rentalLength(hours) + ' from payment.');
     if (available.includes('buy')) terms.push('Buy to watch and download.');
-    byId('terms').textContent = available.length ? 'Test checkout. ' + terms.join(' ') : '';
+    byId('terms').textContent = available.length ? 'Test checkout. ' + terms.join(' ') + ' Applicable film tax is added at checkout.' : '';
   }
 
   function schedule() {
@@ -260,6 +260,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     byId('order-terms').textContent = kind === 'rent' ? 'Test rental · ' + rentalLength(hours) + ' from payment' : 'Test purchase · Watch and download';
     byId('order-price').textContent = '';
     byId('order-tip').hidden = true;
+    byId('order-tax').textContent = '';
     byId('payment-feedback').append(status);
     heading.focus({ preventScroll: true });
     showOffer();
@@ -293,20 +294,29 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
       const result = await startOrder(kind, attempt, percent);
       if (run !== generation) return;
       if (result.status === 'paid') { await inspect(true, true); return; }
-      if (!result.clientSecret || !result.publishableKey || !result.account) throw new Error('Checkout unavailable');
+      const marketplace = result.taxPolicy === 'marketplace-v1';
+      if (!result.clientSecret || !result.publishableKey ||
+          (marketplace ? result.account !== null || result.uiMode !== 'elements' : !result.account || result.taxPolicy)) {
+        throw new Error('Checkout unavailable');
+      }
+      if (marketplace && (!Number.isSafeInteger(result.filmAmount) || result.filmAmount < 1 ||
+          !Number.isSafeInteger(result.tipAmount) || result.tipAmount < 0 || result.filmAmount + result.tipAmount !== result.amount)) {
+        throw new Error('Invalid offer');
+      }
       if (kind === 'rent' && Number.isInteger(result.rentalHours)) byId('order-terms').textContent =
         'Test rental · ' + rentalLength(result.rentalHours) + ' from payment';
       if (typeof result.title === 'string' && result.title) heading.textContent = result.title;
-      if (result.currency === 'usd' && Number.isSafeInteger(result.amount) && result.amount > 0) {
+      if (!marketplace && result.currency === 'usd' && Number.isSafeInteger(result.amount) && result.amount > 0) {
         byId('order-price').textContent = currency.format(result.amount / 100);
       }
-      if (result.tipAmount > 0) {
-        byId('order-tip').textContent = 'Film ' + currency.format(result.filmAmount / 100) + ' + Dust Wave tip ' + currency.format(result.tipAmount / 100);
+      if (result.tipAmount > 0 || marketplace) {
+        byId('order-tip').textContent = 'Film ' + currency.format(result.filmAmount / 100) + (result.tipAmount > 0
+          ? ' + Dust Wave tip ' + currency.format(result.tipAmount / 100) + (marketplace ? ' (tax included)' : '') : '');
         byId('order-tip').hidden = false;
       }
       const [, card] = await Promise.all([stripeScript(), result.uiMode === 'elements' ? import('/payment.js') : undefined]);
       if (run !== generation) return;
-      const stripe = window.Stripe(result.publishableKey, { stripeAccount: result.account });
+      const stripe = marketplace ? window.Stripe(result.publishableKey) : window.Stripe(result.publishableKey, { stripeAccount: result.account });
       const complete = () => {
         if (run !== generation) return;
         delay = 0;

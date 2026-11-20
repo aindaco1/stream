@@ -5,7 +5,7 @@ import { renderFilmmakerFaq, renderSetupCosts } from '../src/filmmaker-help.js';
 test('provider settings and public FAQ disclose the same provider rates and link to official terms', () => {
   const stripe = renderSetupCosts('stripe'), r2 = renderSetupCosts('r2');
   for (const view of [stripe,renderFilmmakerFaq()]) {
-    for (const text of ['U.S.', 'domestic card','2.9% + 30¢','custom pricing','https://stripe.com/us/pricing']) assert.ok(view.includes(text),text);
+    for (const text of ['U.S.', 'domestic card','2.9% + 30¢','0.5% of the full checkout total','custom pricing','https://stripe.com/us/pricing']) assert.ok(view.includes(text),text);
   }
   for (const view of [r2,renderFilmmakerFaq()]) {
     for (const text of ['10 GB of storage free','$0.015 per GB-month','bandwidth charge',
@@ -26,4 +26,13 @@ test('the public FAQ explains costs, the pilot and how to sell films', () => {
   assert.doesNotMatch(faq, /<form\b|<script\b/);
   for (const text of ['invite-only','permission to distribute','10 GB','30 seconds','starts when they pay','original file',
     'embed code','record their screen','private access link','text subtitles','picture subtitles']) assert.ok(faq.includes(text),text);
+});
+
+test('the FAQ explains marketplace tax and separates sandbox testing from live obligations', () => {
+  const faq = renderFilmmakerFaq();
+  assert.match(faq, /film tax is added to your price/);
+  assert.match(faq, /tax on an optional tip is included in the tip amount/);
+  assert.match(faq, /test charge can show zero tax/);
+  assert.match(faq, /Before live sales.*live registrations.*filing and remittance/);
+  assert.match(faq, /https:\/\/docs\.stripe\.com\/tax\/testing/);
 });

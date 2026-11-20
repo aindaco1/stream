@@ -193,9 +193,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         return send(200, 'text/html; charset=utf-8', screening.replace('{{faqLink}}', faqLink()).replace('{{footer}}', siteFooter('/screening')).replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
           { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
       }
-      if (checkout && path === '/checkout/webhook') {
+      if (checkout && (path === '/checkout/webhook' || path === '/checkout/platform-webhook')) {
         if (req.method !== 'POST') return fail(405);
-        const result = await checkout.webhook(await body(req, 256 * 1024), req.headers['stripe-signature']);
+        const result = await checkout.webhook(await body(req, 256 * 1024), req.headers['stripe-signature'], path === '/checkout/platform-webhook');
         return send(200, 'application/json', JSON.stringify(result));
       }
       if (checkout && read && (path === '/checkout/return' || path === '/checkout/cancel')) {

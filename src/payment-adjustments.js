@@ -21,7 +21,7 @@ export function adjustmentReference(event) {
 export function adjustmentReader(key, account, fetchImpl) {
   async function get(path) {
     const response = await fetchImpl('https://api.stripe.com/v1/' + path, {method:'GET', redirect:'error',
-      headers:{Authorization:'Bearer ' + key,'Stripe-Account':account,'Stripe-Version':'2026-10-28.endive'},
+      headers:{Authorization:'Bearer ' + key,...(account && {'Stripe-Account':account}),'Stripe-Version':'2026-10-28.endive'},
       signal:AbortSignal.timeout(15000)});
     if (!response.ok) { await response.body?.cancel(); throw Error('Payment adjustment unavailable.'); }
     return readBoundedJson(response, 2 * 1024 * 1024);

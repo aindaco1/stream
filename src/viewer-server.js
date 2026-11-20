@@ -8,6 +8,7 @@ import { createRentalAuthority } from './rental.js';
 import { makeServer } from './server.js';
 import { openSetupStore } from './setup-store.js';
 import { createViewerRecovery } from './viewer-recovery.js';
+import { marketplaceEnabled } from './marketplace-checkout.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 
 const directory = operatorDirectory();
@@ -16,6 +17,9 @@ if (!/^(sk|rk)_test_[A-Za-z0-9]+$/.test(process.env.STRIPE_CONNECT_SECRET_KEY ??
     process.env.STRIPE_CONNECT_LIVE === '1' || !process.env.STRIPE_CONNECT_WEBHOOK_SECRET?.startsWith('whsec_')) {
   throw new Error('Configure Stripe sandbox secret and publishable keys and a Connect webhook signing secret for viewer checkout.');
 }
+if (marketplaceEnabled(process.env) && !process.env.STRIPE_PLATFORM_WEBHOOK_SECRET?.startsWith('whsec_')) {
+  throw new Error('Configure STRIPE_PLATFORM_WEBHOOK_SECRET for marketplace sandbox checkout.');
+}
 const secret = process.env.STREAM_RENTAL_SECRET ||
   parseEnv(await readFile(join(directory, 'rental.env'), 'utf8')).STREAM_RENTAL_SECRET;
 const store = openSetupStore(join(directory, 'filmmakers'));
@@ -23,7 +27,8 @@ const catalog = createPublicFilms({ store, authority: createRentalAuthority(secr
 const checkout = createViewerCheckout({ store });
 let withdrawalSweep;
 const retryWithdrawals = () => {
-  withdrawalSweep ??= checkout.closeWithdrawnSessions().catch(() => console.error('Checkout closure interrupted.'))
+  withdrawalSweep ??= Promise.allSettled([checkout.closeWithdrawnSessions(), checkout.retryFilmmakerTransfers()])
+    .then(results => { if (results.some(result => result.status === 'rejected')) console.error('Checkout reconciliation interrupted.'); })
     .finally(() => { withdrawalSweep = undefined; });
 };
 retryWithdrawals();
