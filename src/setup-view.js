@@ -1,3 +1,4 @@
+import { sumFilmStats } from './analytics.js';
 import { filmPrices, previewSeconds, rentalHours, usdInput } from './prices.js';
 import { stripeBusinessCountries } from './setup-stripe.js';
 import { faqLink, siteFooter } from './site-frame.js';
@@ -104,7 +105,7 @@ function priceFields(film) {
   const maxPreview = film.duration > 0 ? Math.min(30, Math.ceil(film.duration) - 1) : 30;
   return `<fieldset class="price-fields"><legend>Prices and playback</legend>
     <div class="field-stack">
-      <p class="hint">Rental time starts at payment. Buyers can save the original MP4. Leave a price blank to turn off that offer for new viewers.</p>
+      <p class="hint">Rental time starts at payment. Buyers can save the original film file. Leave a price blank to turn off that offer for new viewers.</p>
       <div class="price-grid">
         <label>Rental price (USD) <input type="number" name="rentPrice" min="0.50" max="999999.99" step="0.01" inputmode="decimal" value="${usdInput(prices.rent)}"></label>
         <label>Rental duration (hours) <input type="number" name="rentalHours" min="1" max="720" step="1" required value="${rentalHours(film.rentalHours)}"></label>
@@ -138,21 +139,20 @@ export function filmSection({ r2, rights, draft, csrf }) {
   }
   return `
     <details class="film-guide"><summary>Supported video settings</summary>
-      <p>Use a seekable MP4 in the H.264 Baseline profile, with optional AAC-LC audio. Start with a keyframe and place keyframes at least every 12 seconds.</p>
-      <p>The current player supports films up to 1 GiB and four hours long.</p>
+      <p>Choose an MP4, MOV or MKV up to 10 GB and four hours long. Supported video formats are H.264, H.265 (HEVC), AV1 and VP9. Include subtitle tracks in the file if you want viewers to be able to turn them on.</p>
     </details>
     <form method="post" action="/setup/film" data-film-form>${fields}
       <label>Film title<input id="film-title" name="title" type="text" maxlength="160" required value="${escapeHtml(draft.title)}"></label>
       ${r2.uploads ? `<div class="video-upload">
-        <label>Video file<input type="file" accept=".mp4,video/mp4" data-video></label>
-        <p class="hint">MP4, up to 1 GiB.</p>
+        <label>Video file<input type="file" accept=".mp4,.mov,.mkv,video/mp4,video/quicktime,video/x-matroska" data-video></label>
+        <p class="hint">MP4, MOV or MKV, up to 10 GB.</p>
         <p data-upload-status role="status" aria-live="polite"></p><progress data-upload-progress value="0" max="1" hidden></progress>
         <button class="secondary" type="button" data-cancel-upload hidden>Discard unfinished upload</button></div>` :
         '<p><a href="/setup/r2/uploads">Enable uploads in Storage settings</a> to choose a video from this device.</p>'}
       <details class="film-guide"${!r2.uploads ? ' open' : ''}><summary>Use an existing file</summary>
         <label>Object key<input id="object-key" name="objectKey" type="text" maxlength="1024" spellcheck="false"
           autocapitalize="none" value="${escapeHtml(draft.objectKey)}"></label>
-        <p class="hint">Enter the exact path of an MP4 already in your connected bucket.</p></details>
+        <p class="hint">Enter the exact path of a film already in your connected bucket.</p></details>
       ${priceFields(draft)}
       <div class="film-actions"><button type="submit">Check film and create preview</button>
         <button class="secondary" type="submit" name="intent" value="save" formnovalidate>Save draft</button></div>
@@ -180,7 +180,7 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
       ])}`);
 }
 
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, admin = false } = {}) {
   const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -188,7 +188,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/setup/style.css">
     <link rel="stylesheet" href="/setup/dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
     <script src="/setup/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
-    ${csrf ? '<script type="module" src="/setup/navigation.js"></script>' : '<script src="/setup/sign-in.js" defer></script>'}
+    ${!csrf ? '<script src="/setup/sign-in.js" defer></script>' : !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}
     ${builder ? '<script type="module" src="/setup/dashboard.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>
     <body><a class="skip" href="#main">Skip to content</a>
@@ -197,23 +197,61 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
       <label class="appearance" title="Appearance"><span aria-hidden="true">🌓</span><select aria-label="Appearance" data-appearance-select>
         <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
       </select></label>
-      ${csrf ? `<form method="post" action="/setup/sign-out">${hidden('csrf', csrf)}
+      ${csrf ? `<form method="post" action="${admin ? '/setup/admin/sign-out' : '/setup/sign-out'}">${hidden('csrf', csrf)}
         <button class="sign-out" type="submit">Sign out</button></form>` : ''}</div>
-      ${csrf ? `<nav class="workspace-nav" aria-label="Filmmaker workspace"><div class="tab-bar">
+      ${csrf && !admin ? `<nav class="workspace-nav" aria-label="Filmmaker workspace"><div class="tab-bar">
         <a href="/setup/dashboard"${dashboard ? current : ''}>Dashboard</a>
         <a href="/setup/settings"${dashboard ? '' : current}>Settings</a>
       </div></nav>` : ''}</header>
     <main class="setup-shell" id="main" tabindex="-1">${content}</main>
-    ${siteFooter('/setup/dashboard')}</body></html>`;
+    ${siteFooter(admin ? '/setup/admin' : '/setup/dashboard')}</body></html>`;
 }
 
-const statsLabels = { previews: 'Preview starts', plays: 'Paid plays', rentals: 'Rentals', purchases: 'Purchases',
-  gross: 'Test payments', refunded: 'Refunds' };
+const statsLabels = {
+  previews: 'Preview starts', plays: 'Paid plays', rentals: 'Rentals', purchases: 'Purchases',
+  revenue: 'Revenue', netRevenue: 'Net Revenue', estimatedFees: 'Estimated Stripe fees'
+};
+const platformLabels = { ...statsLabels, platformTips: 'Platform tips' };
+const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'platformTips']);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
-function statsList(stats) {
-  return '<dl class="film-stats">' + Object.entries(statsLabels).map(([key, label]) =>
-    `<div><dt>${label}</dt><dd>${['gross', 'refunded'].includes(key) ? usd.format(stats[key] / 100) : stats[key]}</dd></div>`
+const displayStat = (stats, key) => moneyFields.has(key) ? usd.format(stats[key] / 100) : String(stats[key]);
+function statsList(stats, labels = statsLabels) {
+  return '<dl class="film-stats">' + Object.entries(labels).map(([key, label]) =>
+    `<div><dt>${label}</dt><dd>${displayStat(stats, key)}</dd></div>`
   ).join('') + '</dl>';
+}
+function revenueNote(stats) {
+  const fees = stats.estimatedOrders ? 'For charges with no reported fee yet, net revenue uses the estimate.' : '';
+  return `<p class="hint">Sandbox amounts in USD. Revenue counts film sales. Net revenue deducts Stripe processing fees and recorded refunds. Tips go to Dust Wave. The fee estimate uses the standard U.S. domestic card rate on the full payment. See Stripe for payouts and dispute adjustments. ${fees}</p>`;
+}
+
+export function renderPlatformDashboard(csrf, report) {
+  const { owner, rows, page, pages, total, makers } = report;
+  const url = (maker, number = 1) => {
+    const query = new URLSearchParams();
+    if (maker !== null) query.set('maker', maker);
+    if (number > 1) query.set('page', String(number));
+    return '/setup/admin' + (query.size ? '?' + escapeHtml(query.toString()) : '');
+  };
+  const platform = owner === null;
+  const headers = Object.values(platformLabels).map(label => `<th scope="col">${label}</th>`).join('');
+  const tableRows = rows.map(row => {
+    const name = platform ? `<a href="${url(row.name)}">${escapeHtml(row.name)}</a>` : escapeHtml(row.title);
+    const cells = Object.keys(platformLabels).map(key => `<td>${displayStat(row, key)}</td>`).join('');
+    return `<tr><th scope="row">${name}</th>${platform ? `<td>${row.films}</td>` : ''}${cells}</tr>`;
+  }).join('');
+  const paging = pages > 1 ? `<nav class="film-actions" aria-label="Report pages">
+    ${page > 1 ? `<a href="${url(owner, page - 1)}">Previous</a>` : ''} Page ${page} of ${pages}
+    ${page < pages ? `<a href="${url(owner, page + 1)}">Next</a>` : ''}</nav>` : '';
+  return workspacePage('Platform analytics', csrf, `
+    <div class="workspace-intro">${platform ? '' : '<a href="/setup/admin">All filmmakers</a>'}
+      <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
+      <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films</p></div>
+    <section class="film-card"><h2>Overview</h2>${statsList(total, platformLabels)}${revenueNote(total)}</section>
+    <section class="film-list"><h2>${platform ? 'Filmmakers' : 'Films'}</h2>
+      ${tableRows ? `<div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
+        <th scope="col">${platform ? 'Filmmaker' : 'Film'}</th>${platform ? '<th scope="col">Films</th>' : ''}${headers}</tr></thead><tbody>${tableRows}</tbody></table></div>` : '<p>No results yet.</p>'}
+      ${paging}</section>`, { admin: true });
 }
 
 function filmInfoEditor(film, csrf, selection, saved) {
@@ -248,7 +286,7 @@ function embedBuilder(film, url, previewUrl, selection) {
 }
 
 export function renderDashboard({ csrf, owner, error, films, origin, previewOrigin = origin, draft, selectionFilm, selection = '', infoSaved = false }) {
-  const totals = Object.fromEntries(Object.keys(statsLabels).map(key => [key, films.reduce((total, film) => total + film.stats[key], 0)]));
+  const totals = sumFilmStats(films);
   const cards = films.map(film => {
     const path = '/embed/' + encodeURIComponent(film.id);
     const fields = selectionFilm === film.id ? selection : '';
@@ -258,6 +296,7 @@ export function renderDashboard({ csrf, owner, error, films, origin, previewOrig
     return `<details class="dashboard-film" name="films" id="${escapeHtml(film.id)}"${selectionFilm === film.id ? ' open' : ''}>
       <summary><span class="film-title">${escapeHtml(film.title)}</span><span class="film-meta">${film.published ? 'Published' : 'Private'} · ${formatDuration(film.duration)}</span></summary>
       <div class="film-panel">${preview}
+      ${film.unsupportedSubtitles?.length ? '<p class="hint">The player could not use these subtitle tracks: ' + film.unsupportedSubtitles.map(escapeHtml).join(', ') + '. Include a text, DVD or Blu-ray subtitle track when preparing the film.</p>' : ''}
       ${statsList(film.stats)}${thumbnailEditor(film, csrf)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, infoSaved && selectionFilm === film.id)}
       ${film.published ? embedBuilder(film, origin + path, previewOrigin + path, fields) : ''}
       <form class="film-publication" action="/setup/dashboard/publication" method="post">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
@@ -271,7 +310,7 @@ export function renderDashboard({ csrf, owner, error, films, origin, previewOrig
     <p class="account">Signed in as ${escapeHtml(owner)}</p></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
     <section class="film-card" id="overview"><h2>Overview</h2>${statsList(totals)}
-      <p class="hint">Counts include repeat viewings. Sales are final. Test payments show settled viewer orders before fees and refunds.</p>
+      ${revenueNote(totals)}
       <a href="/setup/settings#payments">Payment settings</a></section>
     <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2>${add}</header>
       ${cards || '<p>You have no saved films yet.</p>'}</section>`, { dashboard: true, builder: true });

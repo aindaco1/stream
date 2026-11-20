@@ -233,8 +233,10 @@ test('only a buyer grant can stream an original range, including after new purch
   assert.equal(heads, 1);
   assert.ok(f.store.setFilmPrices(film.owner, film.id, { rent: null, buy: null }));
   const file = await catalog.download(film.id, 'buyer');
-  assert.deepEqual(Object.keys(file).sort(), ['orderId', 'revision', 'size', 'stream', 'title']);
+  assert.deepEqual(Object.keys(file).sort(), ['contentType', 'extension', 'orderId', 'revision', 'size', 'stream', 'title']);
   assert.equal(file.orderId, 'order_1');
+  assert.equal(file.extension, 'mp4');
+  assert.equal(file.contentType, 'video/mp4');
   assert.equal(file.size, head.size);
   assert.deepEqual(await Array.fromAsync(file.stream(6, 10)), [Uint8Array.of(6, 7, 8, 9)]);
   assert.deepEqual(calls, [[head, 6, 10]]);

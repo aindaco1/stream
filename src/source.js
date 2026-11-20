@@ -2,7 +2,11 @@ import { open, stat } from 'node:fs/promises';
 import { AwsClient } from 'aws4fetch';
 
 export const BLOCK_SIZE = 128 * 1024;
-export const MAX_FILE_BYTES = 1024 * 1024 * 1024;
+export const MAX_FILE_BYTES = 10_000_000_000;
+const videoTypes = new Map([['mp4', 'video/mp4'], ['mov', 'video/quicktime'], ['mkv', 'video/x-matroska']]);
+export function videoContentType(extension) {
+  return videoTypes.get(extension) ?? 'application/octet-stream';
+}
 
 function checkedHead(size, revision) {
   if (!Number.isSafeInteger(size) || size < 1 || size > MAX_FILE_BYTES || !revision) {

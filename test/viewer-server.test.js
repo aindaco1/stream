@@ -182,6 +182,7 @@ test('only playback events count views, and disabled previews and rejected event
 
 test('only a verified purchase can stream the saved original, including a byte range or a native download', async t => {
   const original = Buffer.from('original-film');
+  let originalFormat = {};
   let paid = true;
   const streamCalls = [];
   const offer = { id: 'test-film', scope: 'saved/test', revision: 'r1', prices: { rent: 99, buy: 299 }, title: 'My film', authority: {
@@ -201,7 +202,7 @@ test('only a verified purchase can stream the saved original, including a byte r
       async download(id, grant) {
         assert.equal(id, offer.id);
         assert.equal(grant, 'purchase-grant');
-        return { size: original.length, title: 'Film\r\nÉ', async *stream(from, end) {
+        return { ...originalFormat, size: original.length, title: 'Film\r\nÉ', async *stream(from, end) {
           streamCalls.push([from, end]);
           yield original.subarray(from, end);
         } };
@@ -238,6 +239,13 @@ test('only a verified purchase can stream the saved original, including a byte r
   const head = await fetch(url, { method: 'HEAD', headers: auth });
   assert.equal(head.status, 200);
   assert.equal(head.headers.get('content-length'), String(original.length));
+  for (const [extension, contentType] of [['mov', 'video/quicktime'], ['mkv', 'video/x-matroska']]) {
+    originalFormat = { extension, contentType };
+    const response = await fetch(url, { method: 'HEAD', headers: auth });
+    assert.equal(response.headers.get('content-type'), contentType);
+    assert.ok(response.headers.get('content-disposition').endsWith('.' + extension));
+  }
+  originalFormat = {};
   assert.equal((await fetch(url, { headers: { ...auth, Range: 'bytes=15-21' } })).status, 416);
   assert.deepEqual(streamCalls, []);
   const range = await fetch(url, { headers: { ...auth, Range: 'bytes=1-3' } });
@@ -275,4 +283,60 @@ test('a download already in progress closes before its next chunk after revocati
     allowed=false;
   } finally {resume.resolve();}
   await assert.rejects(reader.read());
+});
+
+test('public subtitles follow the preview cutoff and paid renditions follow the current film grant', async t => {
+  const tracks = [
+    { id: 's2', language: 'en', label: 'English', kind: 'subtitles', format: 'text', source: 'private-location' },
+    { id: 's3', language: 'fr', label: 'Français', kind: 'subtitles', format: 'bitmap' }
+  ];
+  let allowed = true, published = true, opens = 0;
+  const reads = [];
+  const film = { subtitleTracks: tracks, segments: [{ duration: 2 }], close() {},
+    async preview(end, { subtitleId }) { reads.push(['preview', end, subtitleId]); return Buffer.from('private preview'); },
+    async segment(index, { subtitleId }) { reads.push(['full', index, subtitleId]); return Buffer.from('private video'); },
+    async subtitles(id, { end }) { return end ? 'WEBVTT\n\npreview ' + end : 'WEBVTT\n\nfull dialogue'; } };
+  const spec = { id: 'captions', scope: 'seller/captions', revision: 'r1', previewSeconds: 10,
+    authority: {
+      async verifyGrant(grant, scope) {
+        if (grant !== 'granted' || scope.film !== 'seller/captions' || scope.revision !== 'r1') throw Error();
+        return { access: 'rent', expiresAt: Date.now() / 1000 + 60, orderId: 'order' };
+      },
+      async keyForGrant() { return Buffer.alloc(16); }
+    } };
+  const catalog = { get: (id, { entitled } = {}) => id === spec.id && (published || entitled) && spec,
+    async open() { opens++; return film; } };
+  const server = await makeServer(null, { catalog, checkout: { accessAllowed: () => allowed } });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = 'http://127.0.0.1:' + server.address().port + '/film/captions/';
+  const get = (path, token) => fetch(base + path, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
+  assert.equal((await get('play/subtitles/s2.vtt')).status, 403);
+  assert.equal((await get('play/subtitles', 'other-film')).status, 403);
+  assert.equal(opens, 0);
+  const listed = await (await get('preview/subtitles')).json();
+  assert.deepEqual(listed.map(t => [t.id, t.format]), [['s2', 'text'], ['s3', 'bitmap']]);
+  assert.equal(listed[0].source, undefined);
+  const clipped = await get('preview/subtitles/s2.vtt');
+  assert.match(clipped.headers.get('content-type'), /text\/vtt/);
+  assert.equal(await clipped.text(), 'WEBVTT\n\npreview 10');
+  assert.equal((await get('preview/subtitles/s3.vtt')).status, 404);
+  assert.equal((await get('preview.mp4?subtitle=s2')).status, 404);
+  assert.equal((await get('preview.mp4?subtitle=s3')).status, 200);
+  assert.deepEqual(reads.pop(), ['preview', 10, 's3']);
+  assert.equal((await get('play/0.ts?subtitle=s3')).status, 403);
+  assert.match(await (await get('play/index.m3u8?subtitle=s3', 'granted')).text(), /0\.ts\?subtitle=s3/);
+  assert.equal((await get('play/0.ts?subtitle=s3', 'granted')).status, 200);
+  assert.deepEqual(reads.pop(), ['full', 0, 's3']);
+  spec.previewSeconds = 0;
+  assert.equal((await get('preview/subtitles/s2.vtt')).status, 403);
+  assert.equal((await get('preview.mp4?subtitle=s3')).status, 403);
+  published = false;
+  assert.equal((await get('preview/subtitles')).status, 404);
+  assert.equal(await (await get('play/subtitles/s2.vtt', 'granted')).text(), 'WEBVTT\n\nfull dialogue');
+  allowed = false;
+  assert.equal((await get('play/subtitles/s2.vtt', 'granted')).status, 403);
+  allowed = true;
+  spec.revision = 'r2';
+  assert.equal((await get('play/subtitles/s2.vtt', 'granted')).status, 403);
 });

@@ -1,3 +1,5 @@
+import { calculatePlatformTip } from './platform-tip.js';
+
 const validToken = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const kinds = ['rent', 'buy'];
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -89,6 +91,9 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   const knownPurchase = slot && read('localStorage', slot + ':purchase');
   const knownRental = slot && read('localStorage', slot + ':rent');
   const activeKind = kinds.includes(attempts.active) ? attempts.active : 'rent';
+  const tip = byId('tip-percent');
+  tip.value = String(Number(attempts[activeKind + 'Tip']) || 0);
+  const starts = new Map();
   const address = new URL(location.href);
   const returnId = address.searchParams.get('order');
   const authSlot = id => 'stream:authentication:' + film + ':' + id;
@@ -115,6 +120,20 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
 
   function persist() { write('sessionStorage', slot, JSON.stringify(attempts)); }
 
+  function startOrder(kind, attempt, percent) {
+    if (starts.has(attempt)) return starts.get(attempt);
+    const opening = postToken(film, kind === 'rent' ? 'checkout' : 'buy', attempt + (percent ? ' ' + percent : ''))
+      .then(result => {
+        if (attempts[kind] === attempt) {
+          attempts[kind + 'Opened'] = attempt;
+          persist();
+        }
+        return result;
+      }).finally(() => starts.delete(attempt));
+    starts.set(attempt, opening);
+    return opening;
+  }
+
   function closeForm() {
     generation++;
     instance?.destroy();
@@ -129,12 +148,16 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     const available = offers.filter(kind => !unlocked || (unlocked.kind === 'rent' && kind === 'buy'));
     check.hidden = !payment.hidden || !token || token === unlocked?.token;
     panel.hidden = !available.length && check.hidden;
+    byId('tip-choice').hidden = !available.length;
+    byId('tip-value').textContent = tip.value + '%';
+    tip.setAttribute('aria-valuetext', tip.value + ' percent');
     for (const kind of kinds) {
       const button = byId(kind);
       button.hidden = !available.includes(kind);
       if (!button.hidden) {
         const action = kind === 'buy' ? 'Buy' : 'Rent';
-        button.textContent = action + ' · ' + currency.format(Number(document.body.dataset[kind]) / 100);
+        const price = Number(document.body.dataset[kind]);
+        button.textContent = action + ' · ' + currency.format((price + calculatePlatformTip(price, Number(tip.value))) / 100);
         button.disabled = !payment.hidden;
       }
     }
@@ -224,11 +247,8 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   async function open(kind) {
     closeForm();
     const run = generation;
-    token = validToken(attempts[kind]) ? attempts[kind] : newToken();
-    const attempt = token;
-    attempts[kind] = attempt;
-    attempts.active = kind;
-    persist();
+    const percent = Number(tip.value);
+    const previous = attempts[kind];
     delay = 0;
     payment.hidden = false;
     document.body.classList.add('paying');
@@ -237,13 +257,38 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     heading.textContent = byId('film-title').textContent;
     byId('order-terms').textContent = kind === 'rent' ? 'Test rental · ' + rentalLength(hours) + ' from payment' : 'Test purchase · Watch and download';
     byId('order-price').textContent = '';
+    byId('order-tip').hidden = true;
     byId('payment-feedback').append(status);
     heading.focus({ preventScroll: true });
     showOffer();
     status.textContent = 'Opening secure test checkout…';
     clearTimeout(timer);
     try {
-      const result = await postToken(film, kind === 'rent' ? 'checkout' : 'buy', attempt);
+      if (validToken(previous) && Number(attempts[kind + 'Tip'] || 0) !== percent) {
+        // A closed form can still be waiting for Stripe to open the session.
+        // Resolve its outcome before replacing the viewer's only recovery token.
+        if (attempts[kind + 'Opened'] !== previous) await startOrder(kind, previous, Number(attempts[kind + 'Tip'] || 0));
+        else await starts.get(previous);
+        if (run !== generation) return;
+        const prior = await postToken(film, 'abandon', previous);
+        if (run !== generation) return;
+        if (prior.status !== 'expired') {
+          token = previous;
+          if (prior.status === 'paid') { await inspect(true, true); return; }
+          closeForm();
+          showOffer();
+          status.textContent = 'Your earlier payment is still processing. Check payment before trying again.';
+          schedule();
+          return;
+        }
+        delete attempts[kind];
+      }
+      const attempt = token = validToken(attempts[kind]) ? attempts[kind] : newToken();
+      attempts[kind] = attempt;
+      attempts[kind + 'Tip'] = percent;
+      attempts.active = kind;
+      persist();
+      const result = await startOrder(kind, attempt, percent);
       if (run !== generation) return;
       if (result.status === 'paid') { await inspect(true, true); return; }
       if (!result.clientSecret || !result.publishableKey || !result.account) throw new Error('Checkout unavailable');
@@ -252,6 +297,10 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
       if (typeof result.title === 'string' && result.title) heading.textContent = result.title;
       if (result.currency === 'usd' && Number.isSafeInteger(result.amount) && result.amount > 0) {
         byId('order-price').textContent = currency.format(result.amount / 100);
+      }
+      if (result.tipAmount > 0) {
+        byId('order-tip').textContent = 'Film ' + currency.format(result.filmAmount / 100) + ' + Dust Wave tip ' + currency.format(result.tipAmount / 100);
+        byId('order-tip').hidden = false;
       }
       const [, card] = await Promise.all([stripeScript(), result.uiMode === 'elements' ? import('/payment.js') : undefined]);
       if (run !== generation) return;
@@ -286,6 +335,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   }
 
   for (const kind of kinds) byId(kind).addEventListener('click', () => open(kind));
+  tip.addEventListener('input', showOffer);
   check.addEventListener('click', () => inspect(true, true));
   byId('close-checkout').addEventListener('click', () => {
     const button = byId(attempts.active);

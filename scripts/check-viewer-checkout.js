@@ -2,7 +2,11 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pictureSubtitles } from '../test/fixtures/picture-subtitles.js';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -11,7 +15,17 @@ import { createRentalAuthority, rentalScope } from '../src/rental.js';
 import { makeServer } from '../src/server.js';
 import { createFileSource } from '../src/source.js';
 
-const path = fileURLToPath(new URL('../.local/clock.mp4', import.meta.url));
+const clock = fileURLToPath(new URL('../.local/clock.mp4', import.meta.url));
+const directory = await mkdtemp(join(tmpdir(), 'stream-subtitled-checkout-'));
+const path = join(directory, 'screening.mkv');
+const text = join(directory, 'words.srt'), picture = join(directory, 'picture.sup');
+await Promise.all([
+  writeFile(text, '1\n00:00:00,000 --> 00:00:11,000\nPreview caption\n\n2\n00:02:00,000 --> 00:02:10,000\nPaid caption\n'),
+  writeFile(picture, pictureSubtitles())
+]);
+execFileSync('ffmpeg', ['-v', 'error', '-i', clock, '-i', text, '-itsoffset', '2', '-f', 'sup', '-i', picture,
+  '-map', '0:v:0', '-map', '0:a:0', '-map', '1:s', '-map', '2:s', '-c', 'copy',
+  '-metadata:s:s:0', 'language=eng', '-metadata:s:s:1', 'language=fra', path]);
 const source = createFileSource(path);
 const film = await openFilm(source);
 const fileHead = await source.head();
@@ -20,8 +34,9 @@ const expectedHash = hash(await readFile(path));
 const offers = new Map(['first', 'second', 'legacy'].map(id => [id, { id, title: 'Test film ' + id, scope: 'test/' + id,
   prices: { rent: 99, buy: 299 }, revision: film.revision, authority: createRentalAuthority(randomBytes(32)) }]));
 const catalog = {
-  get: id => offers.get(id), verify: id => offers.get(id), open: () => openFilm(source), list: () => [...offers.values()],
-  async download(id) { return { title: offers.get(id).title, size: fileHead.size, stream: (start, end, signal) => createReadStream(path, { start, end: end - 1, signal }) }; }
+  get: id => offers.get(id), verify: id => offers.get(id), list: () => [...offers.values()],
+  open: () => openFilm(source),
+  async download(id) { return { title: offers.get(id).title, size: fileHead.size, extension: 'mkv', contentType: 'video/x-matroska', stream: (start, end, signal) => createReadStream(path, { start, end: end - 1, signal }) }; }
 };
 const orders = new Map();
 const sessions = new Map();
@@ -30,24 +45,33 @@ let mismatchedTotal;
 let opening;
 let downloadChecks = 0;
 const checkout = {
-  async start({ offer, token, kind }) {
+  async start({ offer, token, kind, tipPercent }) {
     assert.match(token, /^[A-Za-z0-9_-]{43}$/);
     assert.ok(['rent', 'buy'].includes(kind));
     if (interruptNext) { interruptNext = false; throw Error('Simulated outage'); }
     if (opening) await opening.promise;
     if (!orders.has(token)) {
+      const filmAmount = offer.prices[kind], tipAmount = Math.round(filmAmount * tipPercent / 100);
       const order = { offer, kind, id: 'session_' + (orders.size + 1), status: 'pending',
-        amount: offer.prices[kind], attempts: 0, submissions: 0, pendingChecks: 0 };
+        filmAmount, tipPercent, tipAmount, amount: filmAmount + tipAmount, attempts: 0, submissions: 0, pendingChecks: 0 };
       orders.set(token, order);
       sessions.set(order.id, order);
     }
     const order = orders.get(token);
     assert.equal(order.offer, offer);
     assert.equal(order.kind, kind);
+    assert.equal(order.tipPercent, tipPercent);
     return order.status === 'paid' ? { status: 'paid' } :
       { clientSecret: order.id, publishableKey: 'pk_test_fixture', account: 'acct_' + offer.id,
         uiMode: offer.id === 'legacy' ? 'embedded_page' : 'elements', orderId: order.id, amount: order.amount,
-        currency: 'usd', title: offer.title, kind };
+        filmAmount: order.filmAmount, tipPercent, tipAmount: order.tipAmount, currency: 'usd', title: offer.title, kind };
+  },
+  async abandon({ offer, token }) {
+    const order = orders.get(token);
+    if (!order) return { status: 'pending' };
+    assert.equal(order.offer, offer);
+    if (!order.submissions && order.status === 'pending') order.status = 'expired';
+    return { status: order.status };
   },
   async status({ offer, token }) {
     const order = orders.get(token);
@@ -239,7 +263,7 @@ async function install(context) {
   });
 }
 
-async function preview(frame) {
+async function preview(frame, captions = false) {
   await frame.waitForFunction(() => document.querySelector('#download')?.target.startsWith('stream-file-'));
   assert.equal(await frame.locator('#purchase').isHidden(), true);
   await frame.locator('video').evaluate(video => { video.muted = true; });
@@ -253,6 +277,25 @@ async function preview(frame) {
       ready: video.readyState, duration: video.duration, paused: video.paused, error: video.error?.code
     }));
     throw new Error('Preview did not start: ' + JSON.stringify(state), { cause });
+  }
+  if (captions) {
+    const menu = frame.getByRole('combobox', { name: 'Subtitles' });
+    await menu.selectOption('s2');
+    await frame.waitForFunction(() => [...document.querySelector('video').textTracks]
+      .some(track => track.mode === 'showing' && track.cues?.length === 1 && track.cues[0].endTime === 10));
+    await frame.locator('video').evaluate(video => { video.pause(); video.currentTime = 4; });
+    await menu.selectOption('s3');
+    await frame.waitForFunction(() => {
+      const video = document.querySelector('video');
+      return video.currentSrc.endsWith('?subtitle=s3') && video.readyState >= 2 && video.currentTime >= 4 && video.paused;
+    });
+    await menu.selectOption('');
+    await frame.waitForFunction(() => {
+      const video = document.querySelector('video');
+      return video.currentSrc.endsWith('/preview.mp4') && video.readyState >= 2 && video.currentTime >= 4;
+    });
+    await menu.selectOption('s2');
+    await frame.locator('video').evaluate(video => video.play());
   }
   const length = await frame.locator('video').evaluate(video => { video.currentTime = 9.7; return video.duration; });
   assert.ok(Math.abs(length - 10) < .1);
@@ -422,7 +465,7 @@ try {
   assert.ok(sendBox.y - (fieldBox.y + fieldBox.height) >= 8);
   assert.ok(feedbackBox.y - (sendBox.y + sendBox.height) >= 8);
   await renter.getByText('Restore access', { exact: true }).click();
-  await preview(renter);
+  await preview(renter, true);
   await preview(buyer);
   await preview(neighbor);
   await preview(legacy);
@@ -464,16 +507,46 @@ try {
   await complete(renter, 'rent', { retry: true, sizes: [[320, 200], [375, 211], [390, 300], [900, 660], [390, 300]], beforeEntry(order) { assert.equal(order.amount, 149); } });
   await renter.locator('video').evaluate(video => { video.currentTime = 120; });
   await renter.waitForFunction(() => document.querySelector('video').currentTime > 120.25, null, { polling: 100 });
+  const subtitleMenu = renter.getByRole('combobox', { name: 'Subtitles' });
+  await subtitleMenu.selectOption('s2');
+  await renter.waitForFunction(() => [...document.querySelector('video').textTracks].some(track => track.activeCues?.[0]?.text === 'Paid caption'));
+  await subtitleMenu.selectOption('s3');
+  await waitFor(() => requests.some(request => request.url.endsWith('.ts?subtitle=s3')), 'Paid player requested the captioned segment');
+  await renter.waitForFunction(() => { const v = document.querySelector('video'); return !v.paused && v.currentTime >= 120; }, null, {timeout: 10000})
+    .catch(async cause => { throw new Error('Captioned rental seek: ' + JSON.stringify(await renter.evaluate(() => {
+      const v = document.querySelector('video');
+      return { time: v.currentTime, duration: v.duration, paused: v.paused, ready: v.readyState, selection: document.querySelector('#subtitles').value,
+        status: document.querySelector('#status').textContent, modes: [...v.textTracks].map(t => [t.label, t.mode]) };
+    })), { cause }); });
+  await subtitleMenu.selectOption('');
   assert.equal(await renter.locator('#ownership').isHidden(), true);
-  await complete(buyer, 'buy', { sizes: [[375, 211]] });
+  interruptNext = true;
+  await buyer.locator('#buy').click();
+  await buyer.getByText('Checkout could not open.', { exact: false }).waitFor();
+  await buyer.getByText('Support Stream (optional)', { exact: true }).click();
+  await buyer.getByRole('slider').fill('10');
+  assert.match(await buyer.locator('#buy').textContent(), /3\.29/);
+  await complete(buyer, 'buy', { sizes: [[375, 211]], async beforeEntry(order) {
+    assert.deepEqual([order.filmAmount, order.tipAmount, order.amount], [299, 30, 329]);
+    assert.equal(await buyer.locator('#order-tip').textContent(), 'Film $2.99 + Dust Wave tip $0.30');
+  } });
+  await buyer.getByRole('combobox', { name: 'Subtitles' }).selectOption('s2');
+  await buyer.waitForFunction(() => [...document.querySelector('video').textTracks].some(track => track.mode === 'showing' && track.cues?.length === 2));
   assert.equal(await legacy.locator('video').evaluate(video => video.ended && video.duration < 10.1), true);
   await (await legacy.frameElement()).evaluate(iframe => { iframe.width = 320; iframe.height = 200; });
+  await legacy.locator('#rent').click();
+  await legacy.frameLocator('iframe[title="Legacy test card form"]').getByRole('button', { name: 'Submit legacy payment' }).waitFor();
+  await legacy.getByRole('button', { name: 'Back to film' }).click();
+  await legacy.getByText('Support Stream (optional)', { exact: true }).click();
+  await legacy.getByRole('slider').fill('15');
   await complete(legacy, 'rent');
   assert.equal(await legacy.locator('#ownership').isHidden(), true);
   assert.equal(await neighbor.locator('video').evaluate(video => video.ended && video.duration < 10.1), true);
   assert.equal(context.pages().length, 1);
   assert.equal(page.url(), host + '/');
-  assert.equal(orders.size, 4);
+  assert.equal(orders.size, 6);
+  assert.deepEqual([...orders.values()].filter(o => o.tipAmount && o.status === 'paid').map(o => [o.kind, o.tipAmount]), [['buy', 30], ['rent', 15]]);
+  assert.equal([...orders.values()].filter(o => o.status === 'expired').length, 2);
   assert.equal(new Set([...orders.values()].filter(o => o.offer.id === 'second').map(o => o.kind)).size, 2);
 
   const [download] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }),
@@ -492,7 +565,7 @@ try {
   await renter.getByRole('button', { name: 'Play rental' }).waitFor();
   assert.equal(await neighbor.locator('#purchase').isHidden(), true);
 
-  const [legacyToken] = [...orders].find(([, order]) => order.offer.id === 'legacy');
+  const [legacyToken] = [...orders].find(([, order]) => order.offer.id === 'legacy' && order.status === 'paid');
   const bookmark = await context.newPage();
   await bookmark.goto(app + '/pay/legacy#' + legacyToken);
   await bookmark.getByRole('button', { name: 'Play rental' }).waitFor();
@@ -525,4 +598,5 @@ try {
   await browser.close();
   await Promise.all([player, publisher].map(server => new Promise(resolve => server.close(resolve))));
   film.close();
+  await rm(directory, { recursive: true, force: true });
 }

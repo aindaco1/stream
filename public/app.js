@@ -1,8 +1,13 @@
+import { attachSubtitles } from './subtitles.js';
+
 const video = document.querySelector('video');
 const play = document.querySelector('#play');
 const status = document.querySelector('#status');
 const filmId = location.pathname.split('/')[2] || 'clock';
 const prefix = '/film/' + encodeURIComponent(filmId);
+const subtitles = attachSubtitles(video, prefix, switchRendition);
+let rendition = '', playbackGeneration = 0;
+const renditionQuery = () => rendition ? '?subtitle=' + encodeURIComponent(rendition) : '';
 const fragment = new URLSearchParams(location.hash.slice(1));
 let receipt = fragment.get('receipt');
 if (location.hash) history.replaceState(history.state, '', location.pathname + location.search);
@@ -72,7 +77,10 @@ if (!receipt && document.body.dataset.checkout === 'true') {
 }
 
 function fail(message) {
+  playbackGeneration++;
   clearTimeout(renewal);
+  subtitles.clear();
+  playGrant = undefined;
   stream?.destroy();
   stream = undefined;
   video.removeAttribute('src');
@@ -111,6 +119,7 @@ async function startVideo() {
 }
 
 async function rental(resumeAt = 0, autoplay = true) {
+  const generation = ++playbackGeneration;
   // The first session can use the receipt just confirmed by the order check.
   // A new play after a pause or a ten-minute grant renewal rechecks the sale.
   if (purchase && Date.now() - purchaseCheckedAt > 30000) {
@@ -122,6 +131,7 @@ async function rental(resumeAt = 0, autoplay = true) {
   }), loadLibrary()]);
   if (!response.ok) throw new Error(purchase ? 'This purchase is unavailable.' : 'This rental is unavailable or has expired.');
   const { grant, expiresAt, rentalExpiresAt } = await response.json();
+  if (generation !== playbackGeneration) return;
   playGrant = grant;
   if (!window.Hls?.isSupported()) throw new Error('Open this prototype in a browser with Media Source playback.');
   stream?.destroy();
@@ -145,13 +155,15 @@ async function rental(resumeAt = 0, autoplay = true) {
     }
   });
   player.on(window.Hls.Events.MANIFEST_PARSED, () => {
+    if (stream !== player) return;
+    subtitles.show('play', grant);
     play.hidden = true;
     play.disabled = false;
     status.textContent = '';
     if (autoplay) startVideo();
   });
   player.attachMedia(video);
-  player.loadSource(new URL('index.m3u8', base).href);
+  player.loadSource(new URL('index.m3u8' + renditionQuery(), base).href);
   // Reattach with a new grant and encryption key while preserving the viewer's position.
   clearTimeout(renewal);
   const remaining = expiresAt * 1000 - Date.now();
@@ -164,12 +176,35 @@ async function rental(resumeAt = 0, autoplay = true) {
   }
 }
 
+function switchRendition(next) {
+  if (next === rendition) return;
+  rendition = next;
+  const position = video.currentTime;
+  const playing = !video.paused && !video.ended;
+  if (paid && stream) {
+    subtitles.suspend();
+    rental(position, playing).catch(error => fail(error.message));
+  } else if (!paid && video.currentSrc && !video.ended) {
+    const generation = ++playbackGeneration;
+    subtitles.suspend();
+    video.addEventListener('loadedmetadata', () => {
+      if (generation !== playbackGeneration) return;
+      subtitles.resume();
+      video.currentTime = Math.min(position, video.duration);
+      if (playing) startVideo();
+    }, { once: true });
+    video.src = prefix + '/preview.mp4' + renditionQuery();
+    video.load();
+  }
+}
+
 play.addEventListener('click', async () => {
   play.disabled = true;
   status.textContent = 'Loading…';
   try {
     if (receipt) {
       if (paid && stream) { await startVideo(); return; }
+      subtitles.clear();
       if (!video.paused) video.pause();
       paid = true;
       counted = false;
@@ -179,7 +214,9 @@ play.addEventListener('click', async () => {
       if (!previewSeconds) return;
       counted = false;
       viewId = crypto.randomUUID();
-      video.src = prefix + '/preview.mp4';
+      playbackGeneration++;
+      video.src = prefix + '/preview.mp4' + renditionQuery();
+      subtitles.show('preview');
       await video.play();
       play.hidden = true;
       play.disabled = false;

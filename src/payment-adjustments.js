@@ -80,7 +80,7 @@ export function adjustmentReader(key, account, fetchImpl) {
         if (!disputeStatus && (charge.disputed || hint?.type === 'dispute' || order.disputeStatus)) throw Error('Incomplete dispute information.');
         if (hint?.type === 'dispute' && !referenced) throw Error('Incomplete dispute information.');
       }
-      const revocationReason = refundedAmount === order.amount ? 'refund' :
+      const revocationReason = refundedAmount === charge.amount ? 'refund' :
         disputeStatus && !closed.has(disputeStatus) ? 'dispute' : null;
       return { chargeId:charge.id, refundedAmount, disputeStatus, revocationReason };
     }

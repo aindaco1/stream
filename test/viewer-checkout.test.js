@@ -104,7 +104,11 @@ async function context(t, { legacy = false } = {}) {
     }
     if (method === 'POST') {
       assert.equal(url.pathname, '/v1/checkout/sessions');
-      const amount = Number(form.get('line_items[0][price_data][unit_amount]'));
+      const filmAmount = Number(form.get('line_items[0][price_data][unit_amount]'));
+      const tipAmount = Number(form.get('line_items[1][price_data][unit_amount]'));
+      const amount = filmAmount + tipAmount;
+      assert.equal(form.get('payment_intent_data[application_fee_amount]'), tipAmount ? String(tipAmount) : null);
+      if (tipAmount) assert.equal(form.get('line_items[1][price_data][product_data][name]'),'Optional tip to Dust Wave');
       assert.equal(headers.get('Stripe-Version'), '2026-10-28.endive');
       const uiMode = form.get('ui_mode');
       if (uiMode === 'embedded_page') {
@@ -126,10 +130,17 @@ async function context(t, { legacy = false } = {}) {
         const suffix = randomBytes(8).toString('hex');
         const order = form.get('client_reference_id');
         const markers = Object.fromEntries(['order','flow','product','scope','kind','amount'].map(k => [k,form.get('metadata[' + k + ']')]));
+        for (const k of ['film_amount','tip_amount','tip_percent']) if (tipAmount) markers[k] = form.get('metadata['+k+']');
         assert.equal(markers.order,order);
         assert.equal(markers.amount,String(amount));
         for (const [k,v] of Object.entries(markers)) assert.equal(v,form.get('payment_intent_data[metadata][' + k + ']'));
         id = addSession(suffix, amount, markers, uiMode, methods.length ? methods : null);
+        if (tipAmount) {
+          const intent = intents.get(sessions.get(id).payment_intent);
+          intent.application_fee_amount = tipAmount;
+          intent.latest_charge.application_fee_amount = tipAmount;
+          intent.latest_charge.application_fee = 'fee_' + suffix;
+        }
         requests.set(key, id);
       }
       if (behavior.lose) { behavior.lose=false; throw new Error('Interrupted after creating session'); }
@@ -138,7 +149,7 @@ async function context(t, { legacy = false } = {}) {
     }
     const id = url.pathname.split('/').at(-1);
     if (sessions.has(id)) return Response.json(sessions.get(id));
-    assert.equal(url.searchParams.get('expand[0]'),'latest_charge');
+    assert.ok(['latest_charge','latest_charge.balance_transaction'].includes(url.searchParams.get('expand[0]')));
     return Response.json(intents.get(id));
   }
   const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_fixture', STRIPE_CONNECT_PUBLISHABLE_KEY:'pk_test_fixture', STRIPE_CONNECT_WEBHOOK_SECRET: secret };
@@ -163,6 +174,69 @@ async function priorOrder(c,kind,uiMode = 'elements') {
   db.close();
   return order;
 }
+
+test('a voluntary tip travels as a direct application fee and reconciles independently of the film price', async t => {
+  for (const kind of ['rent','buy']) {
+    const c=await context(t), connection={offer:c.offer,token:c.token,origin,kind,tipPercent:10};
+    const [opened,retried] = await Promise.all([c.checkout.start(connection),c.checkout.start(connection)]);
+    assert.deepEqual(opened,retried);
+    const subtotal=c.offer.prices[kind], tip=kind==='rent'?10:50, total=subtotal+tip;
+    assert.deepEqual([opened.filmAmount,opened.tipAmount,opened.amount,opened.tipPercent],[subtotal,tip,total,10]);
+    assert.equal(c.sessions.size,1);
+    assert.equal(c.calls.find(row=>row.method==='POST').recipient,c.offer.account);
+    await assert.rejects(c.checkout.start({...connection,tipPercent:5}),{statusCode:409});
+    c.pay();
+    const intent=c.intents.get(c.first().payment_intent), charge=intent.latest_charge;
+    intent.application_fee_amount=tip-1;
+    await assert.rejects(c.status(),{statusCode:409});
+    intent.application_fee_amount=tip;
+    charge.application_fee_amount=0;
+    await assert.rejects(c.checkout.webhook(...c.sign(c.event())),{statusCode:409});
+    charge.application_fee_amount=tip;
+    // The buyer can watch before the asynchronous balance transaction is ready.
+    await c.checkout.webhook(...c.sign(c.event()));
+    const paid=await c.status();
+    assert.equal(paid.status,'paid');
+    assert.equal(paid.kind,kind);
+    assert.ok((await c.offer.authority.exchange(paid.receipt,{film:c.offer.scope,revision:c.offer.revision})).grant);
+    assert.equal(c.store.viewerOrderById(opened.orderId).stripeFeeCents,null);
+    charge.balance_transaction={id:'txn_fixture',object:'balance_transaction',type:'charge',status:'pending',
+      source:charge.id,amount:total,fee:tip+33,net:subtotal-33,currency:'usd',fee_details:[
+        {type:'application_fee',application:'ca_platform',amount:tip,currency:'usd'}, {type:'stripe_fee',amount:33,currency:'usd'}]};
+    await c.status();
+    const recorded=c.store.viewerOrderById(opened.orderId);
+    assert.deepEqual([recorded.amount,recorded.tipAmount,recorded.stripeFeeCents],[subtotal,tip,33]);
+    charge.balance_transaction=null;
+    await c.status();
+    assert.equal(c.store.viewerOrderById(opened.orderId).stripeFeeCents,33);
+    // A full refund is measured against the amount the viewer actually paid.
+    const refund={object:'refund',id:'re_filmonly',charge:charge.id,payment_intent:intent.id,amount:subtotal,currency:'usd',status:'succeeded'};
+    c.refunds.push(refund);
+    charge.amount_refunded=subtotal;
+    assert.equal((await c.status()).status,'paid');
+    c.refunds.push({...refund,id:'re_tiptoo',amount:tip});
+    Object.assign(charge,{amount_refunded:total,refunded:true});
+    assert.equal((await c.status()).status,'revoked');
+  }
+});
+
+test('editing a tip closes the old form and preserves an order that settles during the change', async t => {
+  const c=await context(t);
+  const first={offer:c.offer,token:c.token,origin,kind:'rent',tipPercent:5};
+  const opened=await c.checkout.start(first);
+  assert.deepEqual(await c.checkout.abandon(first),{status:'expired'});
+  await assert.rejects(c.checkout.start(first),{statusCode:410});
+  const second={...first,token:viewerToken(),tipPercent:0};
+  const next=await c.checkout.start(second);
+  assert.equal(next.amount,99);
+  assert.notEqual(opened.orderId,next.orderId);
+  c.behavior.completeDuringExpire=c.store.viewerOrderById(next.orderId).sessionId;
+  assert.deepEqual(await c.checkout.abandon(second),{status:'paid'});
+  assert.equal(c.store.viewerOrderById(next.orderId).status,'paid');
+  for (const percent of [-1,16,2.5,'1']) {
+    await assert.rejects(c.checkout.start({...first,token:viewerToken(),tipPercent:percent}),{statusCode:400});
+  }
+});
 
 test('switching the connected seller preserves original purchases, recovery and receipts and routes only new sales to the replacement', async t => {
   const c = await context(t);
@@ -218,7 +292,7 @@ test('switching the connected seller preserves original purchases, recovery and 
   Object.assign(charge,{refunded:true,amount_refunded:bought.amount});
   await c.checkout.webhook(...c.sign({...c.event(),id:'evt_return',type:'charge.refunded',data:{object:charge}}));
   assert.equal(c.checkout.accessAllowed({offer:existing,orderId:bought.orderId,kind:'buy'}),false);
-  assert.equal(c.store.dashboardFilms(owner)[0].stats.refunded,bought.amount);
+  assert.equal(c.store.viewerOrderById(bought.orderId).refundedAmount,bought.amount);
   assert.equal(c.store.viewerOrderById(reopened.orderId).withdrawalState,null);
 });
 
@@ -253,9 +327,10 @@ test('normal HTTP checkout, order, renewal, media and original routes keep the p
   const base='http://127.0.0.1:'+server.address().port;
   c.behavior.origin = base;
   const post=(action,body,filmId=id)=>fetch(base+'/film/'+filmId+'/'+action,{method:'POST',headers:{Origin:base,'Content-Type':'text/plain'},body});
-  const open = await post('buy',c.token);
+  const open = await post('buy',c.token+' 10');
   assert.equal(open.status,200);
-  assert.equal((await open.json()).account,c.offer.account);
+  const tipped = await open.json();
+  assert.deepEqual([tipped.account,tipped.tipAmount,tipped.amount],[c.offer.account,50,549]);
   c.pay();
   const receipt = (await (await post('order',c.token)).json()).receipt;
   const grant = (await (await post('session',receipt)).json()).grant;
@@ -285,6 +360,10 @@ test('normal HTTP checkout, order, renewal, media and original routes keep the p
   const replacement = await post('buy',viewerToken());
   assert.equal(replacement.status,200);
   assert.equal((await replacement.json()).account,'acct_next');
+  const unfinished = viewerToken();
+  assert.equal((await post('checkout',unfinished+' 15')).status,200);
+  assert.deepEqual(await (await post('abandon',unfinished)).json(),{status:'expired'});
+  assert.equal((await post('checkout',unfinished+' 15')).status,410);
   await access();
   assert.equal((await post('session',receipt,otherId)).status,403);
   assert.equal((await fetch(base+'/film/'+otherId+'/play/key',authenticated)).status,403);
@@ -298,7 +377,8 @@ test('a reload or concurrent click reuses Checkout Elements, polling and verifie
   const [a,b]=await Promise.all([c.start(),c.start()]);
   assert.deepEqual(a,b);
   assert.deepEqual(a,{clientSecret:c.first().client_secret,publishableKey:'pk_test_fixture',account:c.offer.account,
-    uiMode:'elements',orderId:c.first().client_reference_id,title:c.offer.title,kind:'rent',amount:99,currency:'usd',rentalHours:48});
+    uiMode:'elements',orderId:c.first().client_reference_id,title:c.offer.title,kind:'rent',amount:99,
+    filmAmount:99,tipPercent:0,tipAmount:0,currency:'usd',rentalHours:48});
   assert.equal(c.calls.filter(x=>x.method==='POST').length,1);
   assert.deepEqual(c.calls.find(x=>x.method==='POST').allowedMethods,['card']);
   const order=c.store.viewerOrderBySession(c.first().id);
@@ -517,6 +597,8 @@ test('a rental settled after three days receives 48 hours from its signed paymen
   await c.start();
   const session = c.first(), intent = c.intents.get(session.payment_intent);
   intent.latest_charge.payment_method_details = {type:'us_bank_account'};
+  intent.latest_charge.balance_transaction = {id:'txn_bank',object:'balance_transaction',type:'payment',source:intent.latest_charge.id,
+    amount:99,fee:1,net:98,status:'pending',currency:'usd',fee_details:[{type:'stripe_fee',amount:1,currency:'usd'}]};
   session.status = 'complete';
   intent.status = 'processing';
   const began = Math.floor(Date.now()/1000);
@@ -530,6 +612,7 @@ test('a rental settled after three days receives 48 hours from its signed paymen
   const success = { ...c.event(), id:'evt_settled', type:'checkout.session.async_payment_succeeded', created:paidAt };
   await c.checkout.webhook(...c.sign(success));
   assert.equal(c.store.viewerOrderBySession(session.id).paidAt,paidAt);
+  assert.equal(c.store.viewerOrderBySession(session.id).stripeFeeCents,1);
   const restoredStore = openSetupStore(c.folder);
   t.after(() => restoredStore.close());
   const restored = createViewerCheckout({store:restoredStore,env:c.env,fetchImpl:c.fetchImpl});

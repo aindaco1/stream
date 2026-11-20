@@ -26,6 +26,15 @@ body[data-checkout]:not(.paying) main { display: grid; gap: var(--section-gap); 
 body[data-checkout]:not(.paying) main > :not(video) { min-width: 0; margin-inline: var(--gutter); }
 #purchase, #restore-form { display: grid; gap: .75rem; }
 #status:empty, #rental-end:empty { display: none; }
+#subtitle-status:empty { display: none; }
+#subtitle-control { display: inline-flex; align-items: center; gap: .4rem; font-size: .875rem; }
+#subtitles { max-width: 12rem; min-height: 2.75rem; font: inherit; }
+#tip-choice { font-size: .875rem; }
+#tip-choice summary { cursor: pointer; }
+#tip-choice label { display: block; margin-top: .5rem; }
+#tip-percent { display: block; width: min(100%, 16rem); min-height: 2.75rem; }
+#order-tip { color: var(--pay-muted); font-size: .875rem; }
+body.paying :is(#tip-choice, #subtitle-control, #subtitle-status) { display: none; }
 #stripe-checkout { min-width: 0; }
 summary { cursor: pointer; min-height: 2.75rem; padding-block: .625rem; }
 #access-tools label, #restore-tools label { display: block; font-size: .875rem; }
