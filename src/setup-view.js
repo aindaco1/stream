@@ -1,5 +1,6 @@
 import { filmPrices, previewSeconds, rentalHours, usdInput } from './prices.js';
 import { stripeBusinessCountries } from './setup-stripe.js';
+import { faqLink, siteFooter } from './site-frame.js';
 import { renderSetupCosts } from './filmmaker-help.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
@@ -20,7 +21,7 @@ export function renderStripeCountryForm(csrf, mode) {
         <option value="" selected disabled>Choose a country or region</option>${options}</select></label>
       <button type="submit">Continue to Stripe</button>
     </form>
-    <p><a href="/setup#payments">Back to payments</a></p>`;
+    <p><a href="/setup/settings#payments">Back to payments</a></p>`;
 }
 
 function stripeCard(stripe, csrf) {
@@ -61,7 +62,7 @@ export function renderStripeReset(csrf, mode, state, confirmation) {
     <p>New sales pause until you connect Stripe again. Earlier payments stay with their original account, and viewers keep access to paid rentals and purchases.</p>
     <p>Your Stripe account stays open. Stream keeps the connection needed to verify earlier payments.</p>
     <form method="post" action="/setup/stripe/reset">${hidden('csrf', csrf)}${hidden('confirmation', confirmation)}
-      <div class="film-actions"><button type="submit">Reset Stripe connection</button><a href="/setup#payments">Cancel</a></div></form>`;
+      <div class="film-actions"><button type="submit">Reset Stripe connection</button><a href="/setup/settings#payments">Cancel</a></div></form>`;
 }
 
 const uploadOptions = { storageAccess: 'uploads', uploadConsent: 'I authorize Stream to encrypt and store this bucket key for video and thumbnail uploads.' };
@@ -69,7 +70,7 @@ const uploadOptions = { storageAccess: 'uploads', uploadConsent: 'I authorize St
 export function renderBucketAccess(csrf, location, error, action = '/setup/r2/access') {
   return (error ? `<p class="feedback error" role="alert">${escapeHtml(error)}</p>` : '') +
     renderR2TokenForm({ ...location, ...uploadOptions, csrfToken: csrf, action }) +
-    '<p><a href="/setup#storage">Choose another bucket</a></p>';
+    '<p><a href="/setup/settings#storage">Choose another bucket</a></p>';
 }
 
 function storageCard(r2, draft, csrf) {
@@ -125,7 +126,7 @@ function priceEditor(film, csrf) {
 export function filmSection({ r2, rights, draft, csrf }) {
   const fields = hidden('csrf', csrf) + hidden('draftId', draft.id);
   if (r2.status !== 'ready') {
-    return '<p>Connect your <a href="/setup#storage">storage bucket</a> to add your first film.</p>';
+    return '<p>Connect your <a href="/setup/settings#storage">storage bucket</a> to add your first film.</p>';
   }
   if (!rights.accepted) {
     return `<p>Confirm your distribution rights before uploading or selecting this film.</p>
@@ -147,7 +148,7 @@ export function filmSection({ r2, rights, draft, csrf }) {
         <p class="hint">MP4, up to 1 GiB.</p>
         <p data-upload-status role="status" aria-live="polite"></p><progress data-upload-progress value="0" max="1" hidden></progress>
         <button class="secondary" type="button" data-cancel-upload hidden>Discard unfinished upload</button></div>` :
-        '<p><a href="/setup/r2/uploads">Enable uploads in Storage setup</a> to choose a video from this device.</p>'}
+        '<p><a href="/setup/r2/uploads">Enable uploads in Storage settings</a> to choose a video from this device.</p>'}
       <details class="film-guide"${!r2.uploads ? ' open' : ''}><summary>Use an existing file</summary>
         <label>Object key<input id="object-key" name="objectKey" type="text" maxlength="1024" spellcheck="false"
           autocapitalize="none" value="${escapeHtml(draft.objectKey)}"></label>
@@ -165,13 +166,13 @@ function sectionTabs(label, initial, sections) {
     <nav class="tab-bar subtabs" aria-label="${label}">${links}</nav>${panels}</div>`;
 }
 
-export function renderSetupPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, draft = {}, error, notice, initialSection }) {
+export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, draft = {}, error, notice, initialSection }) {
   const initial = initialSection || (stripe.status === 'ready' ? 'storage' : 'payments');
-  return workspacePage('Setup', csrf, `<div class="workspace-intro"><h1>Setup</h1>
+  return workspacePage('Settings', csrf, `<div class="workspace-intro"><h1>Settings</h1>
       ${filmmaker.name ? `<p class="account">Signed in as ${escapeHtml(filmmaker.name)}</p>` : ''}</div>
       ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
       ${notice ? `<div class="feedback" role="status">${escapeHtml(notice)}</div>` : ''}
-      ${sectionTabs('Setup sections', initial, [
+      ${sectionTabs('Settings sections', initial, [
         { id: 'payments', name: 'Payments', content: renderSetupCosts('stripe') + stripeCard(stripe, csrf) +
           (['ready', 'pending'].includes(stripe.status) ? (r2.status === 'ready' ? '<a href="/setup/dashboard#films">Go to films</a>' : '<a href="#storage">Continue to storage</a>') : '') },
         { id: 'storage', name: 'Storage', content: renderSetupCosts('r2') + storageCard(r2, draft, csrf) +
@@ -179,12 +180,12 @@ export function renderSetupPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, dr
       ])}`);
 }
 
-export function workspacePage(title, csrf, content, { dashboard = false, settings = false, builder = false, filmUpload = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false } = {}) {
   const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="same-origin">
-    <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/setup/style.css">
+    <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/setup/style.css">
     <link rel="stylesheet" href="/setup/dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
     <script src="/setup/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
     ${csrf ? '<script type="module" src="/setup/navigation.js"></script>' : '<script src="/setup/sign-in.js" defer></script>'}
@@ -192,18 +193,18 @@ export function workspacePage(title, csrf, content, { dashboard = false, setting
     ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>
     <body><a class="skip" href="#main">Skip to content</a>
     <header class="masthead"><div class="bar"><strong class="brand">Stream</strong>
-      <label class="appearance">Appearance<select data-appearance-select>
+      ${faqLink()}
+      <label class="appearance" title="Appearance"><span aria-hidden="true">🌓</span><select aria-label="Appearance" data-appearance-select>
         <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
       </select></label>
       ${csrf ? `<form method="post" action="/setup/sign-out">${hidden('csrf', csrf)}
         <button class="sign-out" type="submit">Sign out</button></form>` : ''}</div>
       ${csrf ? `<nav class="workspace-nav" aria-label="Filmmaker workspace"><div class="tab-bar">
         <a href="/setup/dashboard"${dashboard ? current : ''}>Dashboard</a>
-        <a href="/setup"${dashboard || settings ? '' : current}>Setup</a>
-        <a href="/setup/settings"${settings ? current : ''}>Settings</a>
+        <a href="/setup/settings"${dashboard ? '' : current}>Settings</a>
       </div></nav>` : ''}</header>
     <main class="setup-shell" id="main" tabindex="-1">${content}</main>
-    <footer class="workspace-footer"><a href="/faq">Filmmaker FAQ</a></footer></body></html>`;
+    ${siteFooter('/setup/dashboard')}</body></html>`;
 }
 
 const statsLabels = { previews: 'Preview starts', plays: 'Paid plays', rentals: 'Rentals', purchases: 'Purchases',
@@ -254,13 +255,14 @@ export function renderDashboard({ csrf, owner, error, films, origin, previewOrig
     const preview = previewSeconds(film.previewSeconds) ? `<a class="primary-link secondary" href="/setup/preview/${escapeHtml(film.id)}">Watch private preview</a>` : '';
     const terms = film.published ? 'Unpublishing closes the preview and new sales. Existing viewers retain paid access.' :
       'Publishing makes this film available to viewers and allows other sites to embed it.';
-    return `<article class="film-card dashboard-film" id="${escapeHtml(film.id)}">
-      <header><h3>${escapeHtml(film.title)}</h3><p>${film.published ? 'Published' : 'Private'} · ${formatDuration(film.duration)}</p>${preview}</header>
+    return `<details class="dashboard-film" name="films" id="${escapeHtml(film.id)}"${selectionFilm === film.id ? ' open' : ''}>
+      <summary><span class="film-title">${escapeHtml(film.title)}</span><span class="film-meta">${film.published ? 'Published' : 'Private'} · ${formatDuration(film.duration)}</span></summary>
+      <div class="film-panel">${preview}
       ${statsList(film.stats)}${thumbnailEditor(film, csrf)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, infoSaved && selectionFilm === film.id)}
       ${film.published ? embedBuilder(film, origin + path, previewOrigin + path, fields) : ''}
       <form class="film-publication" action="/setup/dashboard/publication" method="post">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
         <p class="hint">${terms}</p><button type="submit" class="${film.published ? 'secondary' : 'primary'}" name="visibility" value="${film.published ? 'private' : 'public'}">
-          ${film.published ? 'Unpublish film' : 'Publish film'}</button></form></article>`;
+          ${film.published ? 'Unpublish film' : 'Publish film'}</button></form></div></details>`;
   }).join('');
   const add = films.some(film => film.id === draft.id)
     ? `<form method="post" action="/setup/next">${hidden('csrf', csrf)}${hidden('draftId', draft.id)}<button>Add a film</button></form>`
@@ -270,7 +272,7 @@ export function renderDashboard({ csrf, owner, error, films, origin, previewOrig
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
     <section class="film-card" id="overview"><h2>Overview</h2>${statsList(totals)}
       <p class="hint">Counts include repeat viewings. Sales are final. Test payments show settled viewer orders before fees and refunds.</p>
-      <a href="/setup#payments">Payment settings</a></section>
+      <a href="/setup/settings#payments">Payment settings</a></section>
     <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2>${add}</header>
       ${cards || '<p>You have no saved films yet.</p>'}</section>`, { dashboard: true, builder: true });
 }

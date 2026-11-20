@@ -1,5 +1,6 @@
 :root {
   color-scheme: dark;
+  --footer-logo-filter: none;
   --ink: #f0f0f0;
   --muted: #bcbcbc;
   --line: #484848;

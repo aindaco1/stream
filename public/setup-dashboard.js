@@ -1,5 +1,17 @@
 import { embedLayout, iframeCode, selectedFields } from './film-embed.js';
 
+function openFilmAtFragment() {
+  const target = document.getElementById(location.hash.slice(1));
+  const card = target?.closest('details.dashboard-film');
+  if (card && !card.open) {
+    card.open = true;
+    target.scrollIntoView({ block: 'start' });
+  }
+}
+
+openFilmAtFragment();
+window.addEventListener('hashchange', openFilmAtFragment);
+
 for (const builder of document.querySelectorAll('.film-sharing')) {
   const populated = builder.dataset.populated.split(',');
   const form = builder.querySelector('form');

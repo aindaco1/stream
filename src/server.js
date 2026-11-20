@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
 import { openFilm } from './media.js';
+import { faqLink, siteFooter } from './site-frame.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
 import { escapeHtml, renderFilmInfo, selectedFields } from './film-embed.js';
@@ -16,6 +17,8 @@ const assets = new Map([
   ['/payment.js', ['../public/payment.js', 'text/javascript']],
   ['/filmmaker.css', ['../public/setup.css', 'text/css']],
   ['/filmmaker-dark.css', ['../public/setup-dark.css', 'text/css']],
+  ['/dust-wave-square.webp', ['../public/dust-wave-square.webp', 'image/webp']],
+  ['/site-frame.css', ['../public/site-frame.css', 'text/css']],
   ['/screening.css', ['../public/screening.css', 'text/css']],
   ['/style.css', ['../public/style.css', 'text/css']],
   ['/hls.js', ['../node_modules/hls.js/dist/hls.light.min.js', 'text/javascript']]
@@ -169,13 +172,13 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       const read = req.method === 'GET' || req.method === 'HEAD';
       if (path === '/faq') {
         if (!read) return fail(405);
-        const back = setup ? '<a href="/setup">Filmmaker workspace</a>' : '<a href="/screening">Screening room</a>';
+        const back = setup ? '<a href="/setup/dashboard">Filmmaker workspace</a>' : '<a href="/screening">Screening room</a>';
         return send(200, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1"><title>Filmmaker FAQ · Stream</title>
-          <link rel="stylesheet" href="/filmmaker.css"><link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)"></head>
-          <body><a class="skip" href="#main">Skip to content</a><header class="masthead"><div class="bar"><strong class="brand">Stream</strong>${back}</div></header>
-          <main id="main" tabindex="-1" class="filmmaker-help">${renderFilmmakerFaq()}</main></body></html>`,
-          { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
+          <link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css"><link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)"></head>
+          <body><a class="skip" href="#main">Skip to content</a><header class="masthead"><div class="bar"><strong class="brand">Stream</strong>${back}${faqLink(true)}</div></header>
+          <main id="main" tabindex="-1" class="filmmaker-help">${renderFilmmakerFaq()}</main>${siteFooter(setup ? '/setup/dashboard' : '/screening')}</body></html>`,
+          { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
       if (read && staticFiles.has(path)) {
         const { type, data } = staticFiles.get(path);
@@ -185,8 +188,8 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const embeds = catalog.list().map(({ id, title }) =>
           '<iframe src="/embed/' + encodeURIComponent(id) + '" title="' + escapeHtml(title) +
           '" loading="lazy" allow="autoplay; fullscreen; encrypted-media; payment" allowfullscreen></iframe>').join('\n');
-        return send(200, 'text/html; charset=utf-8', screening.replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
-          { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
+        return send(200, 'text/html; charset=utf-8', screening.replace('{{faqLink}}', faqLink()).replace('{{footer}}', siteFooter('/screening')).replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
+          { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
       }
       if (checkout && path === '/checkout/webhook') {
         if (req.method !== 'POST') return fail(405);
