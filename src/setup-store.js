@@ -518,9 +518,14 @@ export function openSetupStore(directory) {
     },
     saveDraft(owner, draft) { sql('UPDATE makers SET draft=? WHERE id=?').run(JSON.stringify(draft), owner); },
     nextDraft(owner) { store.saveDraft(owner, newDraft()); },
-    saveFilm(owner, bucket, film) {
+    saveFilm(owner, bucket, film, programId) {
       transaction(() => {
         sql('INSERT INTO films VALUES(?,?,?,?)').run(film.id, owner, connectionId(owner, bucket), JSON.stringify(film));
+        if (programId) {
+          const assigned = sql('INSERT INTO program_videos(filmId,programId) SELECT ?,id FROM programs WHERE id=? AND owner=?')
+            .run(film.id, programId, owner);
+          if (!assigned.changes) throw new Error('Program unavailable.');
+        }
         store.clearUpload(owner, film.id);
       });
     },
@@ -604,13 +609,13 @@ export function openSetupStore(directory) {
       return new Map(rows.map(row => [row.key, row.title]));
     },
     films(owner) {
-      const rows = sql("SELECT id,json_extract(metadata,'$.title') AS title,json_extract(metadata,'$.prices') AS prices,json_extract(metadata,'$.rentalHours') AS hours,json_extract(metadata,'$.previewSeconds') AS seconds FROM films WHERE owner=? ORDER BY rowid DESC").all(owner);
+      const rows = sql("SELECT id,json_extract(metadata,'$.title') AS title,json_extract(metadata,'$.prices') AS prices,json_extract(metadata,'$.rentalHours') AS hours,json_extract(metadata,'$.previewSeconds') AS seconds FROM films WHERE owner=? AND id NOT IN (SELECT filmId FROM program_videos) ORDER BY rowid DESC").all(owner);
       return rows.map(({ id, title, prices, hours, seconds }) => ({ id, title, prices: prices === null ? undefined : JSON.parse(prices),
         rentalHours: hours ?? undefined, previewSeconds: seconds ?? undefined }));
     },
     film(owner, id) {
-      const row = sql('SELECT f.metadata, b.config FROM films f JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner WHERE f.id=? AND f.owner=?').get(id, owner);
-      return row && { ...JSON.parse(row.metadata), bucket: JSON.parse(row.config) };
+      const row = sql('SELECT f.metadata,b.config,v.programId,v.retired FROM films f JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner LEFT JOIN program_videos v ON v.filmId=f.id WHERE f.id=? AND f.owner=?').get(id, owner);
+      return row && { ...JSON.parse(row.metadata), ...(row.programId && {programId:row.programId, retired:Boolean(row.retired)}), bucket: JSON.parse(row.config) };
     },
     close() { if (db.isOpen) db.close(); }
   };

@@ -62,7 +62,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
   function savedRecord(owner, id, entitled = false) {
     if (!owner || !sandbox()) return;
     const film = store.film(owner, id);
-    if (film?.id !== id || !film.bucket || !film.objectKey || !/^[A-Za-z0-9_-]{43}$/.test(film.revision) ||
+    if (film?.id !== id || film.programId || !film.bucket || !film.objectKey || !/^[A-Za-z0-9_-]{43}$/.test(film.revision) ||
         typeof film.title !== 'string' || !film.title.trim() || film.title.length > 160 || !validRights(film.rights)) return;
     const prices = filmPrices(film.prices);
     const seconds = previewSeconds(film.previewSeconds), hours = rentalHours(film.rentalHours);

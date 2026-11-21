@@ -29,17 +29,25 @@ if (form) {
     form.querySelector('[data-empty-order]').hidden = Boolean(lineup.length);
     choices.hidden = Boolean(available && !available.querySelector('li:not([hidden])'));
     for (const [menu, other] of [[opening, closing], [closing, opening]]) {
+      const role = menu.name, slot = menu.closest('[data-slot]');
+      const input = form.elements[role + 'Title'], titleFor = form.elements[role + 'TitleFor'];
+      input.placeholder = menu.value ? menu.selectedOptions[0].textContent : '';
+      if (titleFor.value !== menu.value) { input.value = input.placeholder; titleFor.value = menu.value; }
+      input.closest('.extra-title').hidden = !menu.value;
+      slot.querySelector('[value="remove-' + role + '"]').hidden = !menu.value;
+      slot.querySelector('[value="upload-' + role + '"]').textContent = menu.value ? 'Replace ' + role + ' video' : 'Add a new ' + role + ' video';
       for (const option of menu.options) option.disabled = Boolean(option.value && (selected.has(option.value) || option.value === other.value));
     }
     for (const option of previewFilmId.options) {
       option.hidden = option.disabled = Boolean(option.value && !selected.has(option.value) && !extras.has(option.value));
     }
     if (previewFilmId.selectedOptions[0]?.disabled) previewFilmId.value = '';
-    const source = rows().find(row => row.dataset.id === previewFilmId.value) || lineup[0];
+    const source = previewFilmId.value ? previewFilmId.selectedOptions[0] : lineup[0];
     const max = source ? Math.min(30, Math.max(0, Math.ceil(Number(source.dataset.duration)) - 1)) : 30;
     previewSeconds.max = String(max);
     if (!editedPreview && Number(previewSeconds.value) > max) previewSeconds.value = String(max);
-    const seconds = Math.round(rows().reduce((sum, row) => sum + ((selected.has(row.dataset.id) || extras.has(row.dataset.id)) ? Number(row.dataset.duration) : 0), 0));
+    const seconds = Math.round([...lineup, opening.selectedOptions[0], closing.selectedOptions[0]]
+      .reduce((sum, item) => sum + Number(item?.dataset.duration || 0), 0));
     runtime.textContent = lineup.length + (lineup.length === 1 ? ' film' : ' films') + ' · ' +
       Math.floor(seconds / 60) + ' min ' + seconds % 60 + ' sec total';
   }

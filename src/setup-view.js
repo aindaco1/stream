@@ -113,7 +113,7 @@ export function filmSection({ r2, rights, draft, csrf }) {
       <p>Choose an MP4, MOV or MKV up to 10 GB and four hours long. Supported video formats are H.264, H.265 (HEVC), AV1 and VP9. Include subtitle tracks in the file if you want viewers to be able to turn them on.</p>
     </details>
     <form method="post" action="/setup/film" data-film-form>${fields}
-      <label>Film title<input id="film-title" name="title" type="text" maxlength="160" required value="${escapeHtml(draft.title)}"></label>
+      <label>${draft.programTarget ? 'Video title' : 'Film title'}<input id="film-title" name="title" type="text" maxlength="160" required value="${escapeHtml(draft.title)}"></label>
       ${r2.uploads ? `<div class="video-upload">
         <label>Video file<input type="file" accept=".mp4,.mov,.mkv,video/mp4,video/quicktime,video/x-matroska" data-video></label>
         <p class="hint">MP4, MOV or MKV, up to 10 GB.</p>
@@ -271,7 +271,7 @@ function embedBuilder(film, url, previewUrl, selection, program = false) {
     </section>`;
 }
 
-export function renderDashboard({ csrf, owner, error, films, programs = [], origin, previewOrigin = origin, draft, selectionFilm, selection = '', infoSaved = false }) {
+export function renderDashboard({ csrf, owner, error, films, programs = [], origin, previewOrigin = origin, draft, completedDraft = films.some(film => film.id === draft.id), selectionFilm, selection = '', infoSaved = false }) {
   const totals = sumFilmStats([...films, ...programs]);
   const cards = films.map(film => {
     const path = '/embed/' + encodeURIComponent(film.id);
@@ -305,9 +305,11 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
         <button class="secondary" name="action" value="unpublish">Unpublish program</button></form>` : ''}
       </div></details>`;
   }).join('');
-  const add = films.some(film => film.id === draft.id)
+  const pendingProgramVideo = !completedDraft && draft.programTarget;
+  const continueVideo = pendingProgramVideo ? `<a class="primary-link" href="/setup/dashboard/new">Continue ${escapeHtml(draft.programTarget.role)} video</a>` : '';
+  const add = completedDraft
     ? `<form method="post" action="/setup/next">${hidden('csrf', csrf)}${hidden('draftId', draft.id)}<button>Add a film</button></form>`
-    : `<a class="primary-link" href="/setup/dashboard/new">${draft.programTarget ? 'Continue ' + escapeHtml(draft.programTarget.role) + ' video' : draft.title || draft.rights ? 'Continue film draft' : 'Add a film'}</a>`;
+    : pendingProgramVideo ? '' : `<a class="primary-link" href="/setup/dashboard/new">${draft.title || draft.rights ? 'Continue film draft' : 'Add a film'}</a>`;
   return workspacePage('Dashboard', csrf, `<div class="workspace-intro"><h1>Dashboard</h1>
     <p class="account">Signed in as ${escapeHtml(owner)}</p></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
@@ -317,6 +319,6 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
     <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2><div class="film-actions">${add}
       <form action="/setup/program/create" method="post">${hidden('csrf', csrf)}<button class="secondary">Create program</button></form></div></header>
       ${cards || '<p>You have no saved films yet.</p>'}</section>
-    <section class="film-list" id="programs"><h2>Programs</h2>
+    <section class="film-list" id="programs"><header class="film-list-header"><h2>Programs</h2>${continueVideo}</header>
       ${programCards || '<p>Group your films into one screening with one embed and one checkout.</p>'}</section>`, { dashboard: true, builder: true });
 }

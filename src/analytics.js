@@ -15,7 +15,8 @@ export function sumFilmStats(films) {
 function filmStats(filter = '') {
   const estimated = 'stream_fee_estimate(COALESCE(o.chargedTotalCents,o.amount + o.tipAmount))';
   return `SELECT f.owner, f.id, json_extract(f.metadata, '$.title') AS title,
-    COALESCE(c.previews,0) AS previews, COALESCE(c.plays,0) AS plays,
+    COALESCE(c.previews,0) + COALESCE((SELECT SUM(ec.previews) FROM program_videos v JOIN film_counts ec ON ec.filmId=v.filmId WHERE v.programId=f.id),0) AS previews,
+    COALESCE(c.plays,0) + COALESCE((SELECT SUM(ec.plays) FROM program_videos v JOIN film_counts ec ON ec.filmId=v.filmId WHERE v.programId=f.id),0) AS plays,
     COUNT(*) FILTER (WHERE o.kind='rent') AS rentals, COUNT(*) FILTER (WHERE o.kind='buy') AS purchases,
     COALESCE(SUM(o.amount),0) AS revenue, COALESCE(SUM(o.tipAmount - COALESCE(o.tipTaxCents,0) - (COALESCE(o.taxBasicFeeCents,0) - o.filmTaxFeeCents)),0) AS platformTips,
     COALESCE(SUM(o.filmTaxFeeCents),0) AS filmTaxFees,
@@ -27,7 +28,7 @@ function filmStats(filter = '') {
     COUNT(*) FILTER (WHERE o.taxPolicy='marketplace-v1' AND COALESCE(o.transferId,'')!='no_proceeds' AND
       (o.refundedAmount>0 OR o.revocationReason IS NOT NULL OR o.disputeStatus NOT IN ('won','prevented','warning_closed'))) AS transfersToReview,
     COALESCE(SUM(o.amount - MIN(o.amount,o.refundedAmount) - COALESCE(o.cardProcessingCents, ${estimated}) - o.filmTaxFeeCents),0) AS netRevenue
-    FROM (SELECT id,owner,metadata FROM films UNION ALL SELECT id,owner,metadata FROM programs) f LEFT JOIN film_counts c ON c.filmId=f.id
+    FROM (SELECT id,owner,metadata FROM films WHERE id NOT IN (SELECT filmId FROM program_videos) UNION ALL SELECT id,owner,metadata FROM programs) f LEFT JOIN film_counts c ON c.filmId=f.id
     LEFT JOIN viewer_test_orders o ON o.filmId=f.id AND o.owner=f.owner AND o.paidAt IS NOT NULL AND o.intentId IS NOT NULL
     ${filter} GROUP BY f.id`;
 }

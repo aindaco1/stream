@@ -25,7 +25,7 @@ export function programCatalog({
       throw invalid('Give the program a title and choose at least two films.');
     if (publishing && (!validRights(p.rights) || (!p.prices.rent && !p.prices.buy)))
       throw invalid('Confirm your program rights and enable a rental or purchase price.');
-    const lineup = p.members.map(({ filmId, role }) => {
+    const lineup = p.members.map(({ filmId, role, title }) => {
       const f = store.film(owner, filmId);
       if (!f || !validRights(f.rights) || !f.objectKey || !f.bucket || !f.revision || !(f.duration > 0))
         throw unavailable();
@@ -33,7 +33,7 @@ export function programCatalog({
       return {
         id: filmId,
         role,
-        title: f.title,
+        title: title || f.title,
         duration: f.duration,
         revision: f.revision,
         extension: f.extension || 'mp4',

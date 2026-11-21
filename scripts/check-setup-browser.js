@@ -478,7 +478,7 @@ async function checkProgramEditor(page) {
   await page.getByRole('button', {name:'Confirm rights and continue'}).click();
   await page.getByRole('link', {name:'Back to program'}).click();
   await form.getByRole('button', {name:'Add a new opening video'}).click();
-  await page.getByLabel('Film title').fill('Meet the director');
+  await page.getByLabel('Video title').fill('Meet the director');
   await page.getByLabel('Video file').setInputFiles({name:'opening.mp4',mimeType:'video/mp4',buffer:await readFile(fixture)});
   await page.getByRole('button', {name:'Add video to program'}).click();
   await form.waitFor();
@@ -488,12 +488,14 @@ async function checkProgramEditor(page) {
   assert.equal(await form.locator('.program-library li:visible').filter({hasText:'Meet the director'}).count(), 0);
   // Reassign an extra. It should appear in exactly one slot and never as a selectable main film.
   await form.getByLabel('Opening video', {exact:true}).selectOption('');
+  assert.equal(await form.locator('.program-choices').getByText('Meet the director').count(),0);
   await form.getByLabel('Closing video', {exact:true}).selectOption(intro);
   assert.equal(await form.locator('select[name=closing] option:checked').textContent(), 'Meet the director');
   assert.equal(await form.locator('.program-library li:visible').filter({hasText:'Meet the director'}).count(), 0);
   await form.getByLabel('Closing video', {exact:true}).selectOption('');
   await form.getByLabel('Opening video', {exact:true}).selectOption(intro);
   await form.getByLabel('Preview video').selectOption({label:'Meet the director'});
+  await form.getByLabel('Opening title in this program').fill('Before the screening');
   const img = await sharp({create:{width:320,height:180,channels:3,background:'#898989'}}).jpeg().toBuffer();
   await page.getByLabel('Thumbnail image').setInputFiles({name:'program.jpg',mimeType:'image/jpeg',buffer:img});
   await page.locator('.thumbnail-editor canvas').waitFor();
@@ -502,7 +504,7 @@ async function checkProgramEditor(page) {
   await form.getByRole('button', {name:'Save and preview'}).click();
   await page.waitForFunction(() => document.querySelector('video')?.duration === 4);
   const entry = page.locator('.private-lineup li').first();
-  assert.equal(await entry.locator('h3').innerText(), 'Meet the director');
+  assert.equal(await entry.locator('h3').innerText(), 'Before the screening');
   assert.match(await entry.locator('.program-runtime').innerText(), /^Opening · /);
   assert.equal(await page.locator('.private-lineup details').count(),0);
   await page.getByRole('link',{name:'Back to program'}).click();
@@ -510,6 +512,17 @@ async function checkProgramEditor(page) {
   await form.getByRole('button',{name:'Publish program',exact:true}).click();
   const card = page.locator('#programs details.dashboard-film').first();
   await card.getByRole('heading',{name:'Embed this program'}).waitFor();
+  for (const header of [page.locator('#films .dashboard-film > summary').first(), card.locator(':scope > summary')]) {
+    await header.hover();
+    const corners = await header.evaluate(el => {
+      const style = getComputedStyle(el), parent = getComputedStyle(el.parentElement);
+      return { top:parseFloat(style.borderTopLeftRadius), bottom:parseFloat(style.borderBottomLeftRadius),
+        inside:parseFloat(parent.borderTopLeftRadius) - parseFloat(parent.borderLeftWidth), open:el.parentElement.open };
+    });
+    assert.ok(corners.inside > 0);
+    assert.equal(corners.top,corners.inside);
+    assert.equal(corners.bottom,corners.open ? 0 : corners.inside);
+  }
   const preview = card.locator('.film-sharing iframe');
   assert.match(await preview.getAttribute('src'),/show=synopsis%2Ccredits%2Cmessage/);
   for (const input of await card.getByRole('checkbox').all()) await input.uncheck();
@@ -518,9 +531,29 @@ async function checkProgramEditor(page) {
     await page.setViewportSize({width,height:840});
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   }
+  assert.equal(await page.locator('#films .film-title').allTextContents().then(names => names.includes('Meet the director')), false);
+  await page.getByRole('button',{name:'Add a film',exact:true}).waitFor();
+  await card.getByRole('link',{name:'Edit program'}).click();
+  assert.equal(await form.getByLabel('Opening title in this program').inputValue(), 'Before the screening');
+  await form.getByRole('button',{name:'Replace opening video'}).click();
+  await page.locator('[name=rightsAccepted]').check();
+  await page.getByRole('button',{name:'Confirm rights and continue'}).click();
+  await page.getByLabel('Video title').fill('Replacement introduction');
+  await page.getByLabel('Video file').setInputFiles({name:'replacement.mp4',mimeType:'video/mp4',buffer:await readFile(fixture)});
+  await page.getByRole('button',{name:'Add video to program'}).click();
+  await form.waitFor();
+  assert.equal(await form.getByLabel('Preview video').locator('option:checked').textContent(), 'Replacement introduction');
+  assert.equal(await form.getByLabel('Opening video',{exact:true}).locator('option').filter({hasText:'Meet the director'}).count(),0);
+  await form.getByRole('button',{name:'Remove opening'}).click();
+  await page.getByText('Video removed from the draft. The original stays in your bucket.',{exact:true}).waitFor();
+  assert.equal(await form.getByLabel('Opening video',{exact:true}).inputValue(),'');
+  assert.equal(await form.getByLabel('Preview video').inputValue(),'');
+  assert.equal(await form.getByLabel('Opening video',{exact:true}).locator('option').filter({hasText:'Replacement introduction'}).count(),0);
+  await page.getByRole('link',{name:'Back to Dashboard'}).click();
+  await card.locator(':scope > summary').filter({hasText:'Published'}).waitFor();
   await card.getByRole('button',{name:'Unpublish program'}).click();
   await card.getByText(/Draft · 2 films/).waitFor();
-  report.programEditor = { orderedFilms:2, privateOpeningUpload:true, privatePreviewSeconds:4, programArtwork:true, publishedAndWithdrawn:true };
+  report.programEditor = { orderedFilms:2, privateOpeningUpload:true, renameReplaceRemove:true, roundedHover:true, privatePreviewSeconds:4, programArtwork:true, publishedAndWithdrawn:true };
 }
 
 async function checkLegacyBucketUpgrade(page, owner) {

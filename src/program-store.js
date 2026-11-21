@@ -29,6 +29,30 @@ export function programStore(db, transaction, filmFor) {
       programId TEXT NOT NULL, revision TEXT NOT NULL, metadata TEXT NOT NULL, PRIMARY KEY(programId,revision)
     );`);
   const query = q => db.prepare(q);
+  // Earlier program uploads were stored as private films with no offers or preview.
+  // Classify them once. A standalone sale, publication or main-title credit takes precedence.
+  transaction(() => {
+    if (query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='program_videos'").get()) return;
+    db.exec(`CREATE TABLE program_videos (filmId TEXT PRIMARY KEY, programId TEXT NOT NULL, retired INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX program_videos_by_program ON program_videos(programId);
+      INSERT INTO program_videos(filmId,programId,retired)
+      WITH uses(filmId,programId,role,current) AS (
+        SELECT m.value->>'$.filmId',p.id,m.value->>'$.role',1 FROM programs p,json_each(p.metadata,'$.members') m
+        UNION ALL
+        SELECT m.value->>'$.id',v.programId,m.value->>'$.role',0 FROM program_versions v,json_each(v.metadata,'$.lineup') m
+        UNION ALL
+        SELECT draft->>'$.id',draft->>'$.programTarget.id',draft->>'$.programTarget.role',1 FROM makers
+          WHERE json_type(draft,'$.programTarget')='object'
+      )
+      SELECT f.id,MIN(u.programId),1-MAX(u.current) FROM uses u JOIN films f ON f.id=u.filmId
+        JOIN programs p ON p.id=u.programId AND p.owner=f.owner
+        WHERE json_type(f.metadata,'$.prices.rent')='null' AND json_type(f.metadata,'$.prices.buy')='null'
+          AND f.metadata->>'$.previewSeconds'=0
+          AND NOT EXISTS (SELECT 1 FROM film_publication WHERE filmId=f.id)
+          AND NOT EXISTS (SELECT 1 FROM viewer_test_orders WHERE filmId=f.id)
+          AND NOT EXISTS (SELECT 1 FROM connected_test_orders WHERE filmId=f.id)
+        GROUP BY f.id HAVING COUNT(DISTINCT u.programId)=1 AND MIN(u.role IN ('opening','closing'))=1`);
+  });
   function row(owner, id) {
     return query(`SELECT p.*,b.config FROM programs p LEFT JOIN buckets b ON b.id=p.bucket_id AND b.owner=p.owner
       WHERE p.owner=? AND p.id=?`).get(owner, id);
@@ -66,6 +90,14 @@ export function programStore(db, transaction, filmFor) {
   return {
     program,
     programVersion,
+    programLibrary(owner, id) {
+      return query(`SELECT f.metadata,v.programId FROM films f LEFT JOIN program_videos v ON v.filmId=f.id
+        WHERE f.owner=? AND (v.filmId IS NULL OR (v.programId=? AND v.retired=0)) ORDER BY f.rowid DESC`)
+        .all(owner,id).map(({metadata,programId}) => {
+          const {id,title,duration,info,thumbnail} = JSON.parse(metadata);
+          return {id,title,duration,info,thumbnail,programId};
+        });
+    },
     programFilmDetails(owner, ids) {
       const rows =
         query(`SELECT id, json_extract(metadata,'$.info') AS info, json_extract(metadata,'$.thumbnail') AS thumbnail
@@ -115,10 +147,19 @@ export function programStore(db, transaction, filmFor) {
           data.members.length > 128
         )
           throw invalid('Check the program title and lineup.');
-        const members = data.members.map(m => ({ filmId: m?.filmId, role: m?.role }));
+        const members = data.members.map(m => {
+          const member = {filmId:m?.filmId, role:m?.role};
+          if (m?.title !== undefined) {
+            if (member.role === 'film' || typeof m.title !== 'string' || m.title.length > 160 || /[\u0000-\u001f\u007f]/u.test(m.title))
+              throw invalid('Enter a program video title up to 160 characters.');
+            if (m.title.trim()) member.title = m.title.trim();
+          }
+          return member;
+        });
         if (new Set(members.map(m => m.filmId)).size !== members.length) throw invalid('Choose each title once.');
         for (const [i, m] of members.entries()) {
-          if (!filmId.test(m.filmId) || !filmFor(owner, m.filmId))
+          const film = filmId.test(m.filmId) && filmFor(owner, m.filmId);
+          if (!film || (film.programId && (film.programId !== id || film.retired || m.role === 'film')))
             throw invalid('Choose a film from your own library.');
           if (!(
             m.role === 'film' ||
@@ -147,6 +188,12 @@ export function programStore(db, transaction, filmFor) {
         };
         if (current.thumbnail) updated.thumbnail = current.thumbnail;
         if (current.unavailableTitle) updated.unavailableTitle = current.unavailableTitle;
+        // Keep old source records for immutable editions, but retire removed uploads from this editor.
+        const retained = new Set(members.map(m => m.filmId));
+        for (const previous of current.members) {
+          if (previous.role !== 'film' && !retained.has(previous.filmId))
+            query('UPDATE program_videos SET retired=1 WHERE programId=? AND filmId=?').run(id, previous.filmId);
+        }
         query(`UPDATE programs SET metadata=?, bucket_id=COALESCE(bucket_id,(SELECT bucket_id FROM makers WHERE id=?)),
           version=version+1 WHERE id=? AND owner=?`).run(JSON.stringify(updated), owner, id, owner);
         return program(owner, id);

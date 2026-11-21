@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import test from 'node:test';
 import { revisionFor } from '../src/media.js';
@@ -25,7 +26,7 @@ async function workspace(t) {
   const owner = 'First maker',
     account = 'acct_first';
   const originals = new Map();
-  function film(owner, title) {
+  function film(owner, title, programId) {
     const id = 'f-' + randomUUID(),
       objectKey = id + '.mov',
       bytes = Buffer.from('original ' + id);
@@ -41,7 +42,7 @@ async function workspace(t) {
       duration: 45,
       extension: 'mov',
       rights
-    });
+    }, programId);
     return id;
   }
   store.invite(owner);
@@ -115,6 +116,8 @@ async function workspace(t) {
     save,
     catalog,
     originals,
+    directory,
+    film,
     id: created.id,
     data,
     enablePayments
@@ -328,3 +331,71 @@ for (const failure of ['missing','replaced']) {
     assert.equal(catalog.get(id).revision, repaired, 'reading a retired broken title cannot pause the repaired lineup');
   });
 }
+
+test('program uploads have one editor, keep their original edition, and count toward the program', async t => {
+  const {store,owner,film,catalog,id,data,save,enablePayments} = await workspace(t);
+  const clip = film(owner, 'Director introduction', id);
+  const other = store.createProgram(owner);
+  const intro = {filmId:clip, role:'opening', title:'A few words before the screening'};
+  const members = [intro,...data.members.slice(1)];
+  save({members, previewFilmId:clip});
+  assert.ok(store.programLibrary(owner,id).some(f => f.id === clip));
+  assert.ok(!store.programLibrary(owner,other.id).some(f => f.id === clip));
+  assert.ok(!store.dashboardFilms(owner).some(f => f.id === clip));
+  assert.throws(() => store.saveProgram(owner,other.id,{...data,members},other.version),/own library/);
+  assert.throws(() => save({members:[{filmId:clip,role:'film'}],previewFilmId:clip}), /own library/);
+  assert.throws(() => save({members:[{...intro,title:'x'.repeat(161)}]}), /160 characters/);
+  enablePayments();
+  await assert.rejects(catalog.publish(owner,clip));
+  await catalog.publish(owner,id);
+  const original = catalog.get(id);
+  assert.equal(original.lineup[0].title,intro.title);
+  assert.ok(catalog.recordView(id,'preview',randomUUID()));
+  const order = store.reserveViewerOrder({...original,tokenHash:'original-cut',kind:'buy',amount:800,
+    platform:'acct_platform',origin:'http://localhost'});
+  store.bindViewerSession(order.orderId,'cs_test_originalcut');
+  save({members:data.members.slice(1),previewFilmId:null});
+  assert.ok(!store.programLibrary(owner,id).some(f => f.id === clip));
+  assert.throws(() => save({members,previewFilmId:clip}),/own library/);
+  assert.equal(catalog.get(id).revision,original.revision);
+  await catalog.publish(owner,id);
+  assert.ok(catalog.get(id).lineup.every(m => m.id !== clip));
+  const historical = catalog.get(id,{revision:original.revision,entitled:true});
+  assert.deepEqual(historical.lineup[0],original.lineup[0]);
+  const source = await catalog.programFile(id,original.revision,clip);
+  assert.equal(Buffer.concat(await Array.fromAsync(source.stream())).toString(),'original '+clip);
+  assert.equal(store.programs(owner).find(p=>p.id===id).stats.previews,1);
+  const report = store.platformReport(owner);
+  assert.equal(report.total.previews,1);
+  assert.equal(report.total.films,3);
+  assert.ok(report.rows.every(r => r.id !== clip));
+});
+
+test('legacy program uploads are classified once without reclassifying a standalone film used as an extra', async t => {
+  const {store,owner,id,data,opening,film,directory,save} = await workspace(t);
+  const standalone = film(owner, 'Another closing');
+  const asExtra = (filmId,role) => ({filmId,role});
+  const noOffer = {prices:{rent:null,buy:null},rentalHours:48,previewSeconds:0};
+  for (const f of [opening,standalone]) store.setFilmSettings(owner,f,noOffer);
+  store.setFilmPublication(owner,standalone,false); // An existing standalone listing, currently private.
+  const lineup = [...data.members,asExtra(standalone,'closing')];
+  save({members:lineup});
+  const db = new DatabaseSync(join(directory,'setup.sqlite'));
+  db.exec('DROP TABLE program_videos'); // Reopen the exact pre-feature schema.
+  db.close();
+  const upgraded = openSetupStore(directory);
+  t.after(()=>upgraded.close());
+  assert.deepEqual(upgraded.program(owner,id).members,lineup);
+  assert.equal(upgraded.film(owner,opening).programId,id);
+  assert.equal(upgraded.film(owner,standalone).programId,undefined);
+  assert.ok(upgraded.dashboardFilms(owner).some(f=>f.id===standalone));
+  assert.ok(!upgraded.dashboardFilms(owner).some(f=>f.id===opening));
+  const later = film(owner,'New private standalone');
+  store.setFilmSettings(owner,later,noOffer);
+  save({members:[asExtra(later,'opening'),...data.members.slice(1)],previewFilmId:later});
+  const reopened = openSetupStore(directory);
+  try {
+    assert.ok(reopened.dashboardFilms(owner).some(f=>f.id===later));
+    assert.ok(!reopened.programLibrary(owner,id).some(f=>f.id===opening));
+  } finally { reopened.close(); }
+});

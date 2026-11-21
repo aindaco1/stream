@@ -202,9 +202,10 @@ export async function createSetup({
     if (get && path === '/setup/settings') return display();
     const owner = session.owner;
     const step = (title, inner, options) => workspacePage(title, session.csrf, '<h1>' + escapeHtml(title) + '</h1>' + inner, options);
+    const draftLocation = draft => draft.programTarget ? '/setup/program/' + draft.programTarget.id : '/setup/dashboard#' + draft.id;
     const newFilm = (status = 200, feedback = {}) => {
       const { r2, draft } = store.maker(owner);
-      if (store.film(owner, draft.id)) return feedback.error ? dashboard(status, feedback.error) : redirect('/setup/dashboard#' + draft.id);
+      if (store.film(owner, draft.id)) return feedback.error ? dashboard(status, feedback.error) : redirect(draftLocation(draft));
       const message = feedback.error ? `<p class="feedback error" role="alert">${escapeHtml(feedback.error)}</p>` :
         feedback.notice ? `<p class="feedback" role="status">${escapeHtml(feedback.notice)}</p>` : '';
       const target = draft.programTarget;
@@ -219,7 +220,8 @@ export async function createSetup({
       const viewer = viewerOrigin(env, origin);
       const port = localPreviewPort(env);
       const previewOrigin = port && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin) ? 'http://127.0.0.1:' + port : viewer;
-      return html(status, renderDashboard({ csrf: session.csrf, owner, error, draft: store.maker(owner).draft,
+      const {draft} = store.maker(owner);
+      return html(status, renderDashboard({ csrf: session.csrf, owner, error, draft, completedDraft: Boolean(store.film(owner, draft.id)),
         origin: viewer, previewOrigin, selectionFilm, infoSaved: searchParams.get('saved') === 'details',
         selection: searchParams.getAll('include').join(','),
         programs: store.programs(owner),
@@ -229,9 +231,12 @@ export async function createSetup({
     const programPath = /^\/setup\/program\/(p-[a-f0-9-]{36})$/.exec(path);
     const program = programPath ? store.program(owner, programPath[1]) : null;
     if (programPath && !program) return reject(404, 'Program unavailable.');
+    const removedRole = searchParams.get('removed');
+    const programNotice = ['opening','closing'].includes(removedRole) ? 'Video removed from the draft. The original stays in your bucket.' :
+      searchParams.has('uploaded') ? 'Your video is ready. The program changed during upload. Choose the video under Opening or Closing.' :
+      searchParams.has('saved') ? 'Program draft saved.' : '';
     const editProgram = (saved, status = 200, message) => html(status,
-      workspacePage(saved.title || 'Create program', session.csrf, renderProgramEditor(saved, store.dashboardFilms(owner), session.csrf, message,
-        searchParams.has('uploaded') ? 'Video added to your library. The program changed during upload. Choose the new video in the lineup below.' : searchParams.has('saved') ? 'Program draft saved.' : ''),
+      workspacePage(saved.title || 'Create program', session.csrf, renderProgramEditor(saved, store.programLibrary(owner, saved.id), session.csrf, message, programNotice),
         { dashboard: true, programEditor: true }), { 'Content-Security-Policy': csp.replace("img-src 'self'", "img-src 'self' blob:") + "; connect-src 'self'" });
     if (program && get) return editProgram(program);
     const ownedItem = id => isProgramId(id) ? store.program(owner, id) : store.film(owner, id);
@@ -300,7 +305,7 @@ export async function createSetup({
       if (!saved) return reject(404, 'Program unavailable.');
       try {
         const offer = publications.programPreview(owner, saved.id);
-        if (!preview[2]) return html(200, step(saved.title, renderPrivateProgram(saved, store.dashboardFilms(owner), path), { dashboard: true, programPreview: true }));
+        if (!preview[2]) return html(200, step(saved.title, renderPrivateProgram(saved, store.programLibrary(owner, saved.id), path), { dashboard: true, programPreview: true }));
         if (!offer.previewSeconds) return reject(404, 'This program opens directly at its offers.');
         const key = saved.id + '/' + saved.version;
         if (!activePreviews.has(key)) {
@@ -417,10 +422,13 @@ export async function createSetup({
           }
           return redirect('/setup/dashboard#' + program.id);
         }
-        if (!['save','publish','preview','upload-opening','upload-closing'].includes(data.action)) throw new SetupError('Choose a program action.');
+        if (!['save','publish','preview','upload-opening','upload-closing','remove-opening','remove-closing'].includes(data.action)) throw new SetupError('Choose a program action.');
         const rights = data.rightsAccepted === 'yes' ? { version:'program-distribution-v1', statement: programRights, acceptedAt: new Date().toISOString() } : null;
+        const removing = data.action.startsWith('remove-');
+        const removedId = removing ? data[data.action.slice(7)] : undefined;
         const saved = store.saveProgram(owner, program.id, { title:data.title || '', members:submittedLineup(data),
-          ...settingsForm(data, {}), previewFilmId:data.previewFilmId || null, rights }, version);
+          ...settingsForm(data, {}), previewFilmId:data.previewFilmId === removedId ? null : data.previewFilmId || null,
+          rights:removing ? null : rights }, version);
         if (data.action === 'publish') {
           const result = await provider.refresh(store.stripeContext(owner, mode));
           if (result.status !== 'ready') throw new SetupError('Connect your Stripe account in Payments before publishing.', 422);
@@ -437,12 +445,12 @@ export async function createSetup({
           const role = data.action.slice(7);
           const resuming = draft.programTarget?.id === saved.id && draft.programTarget.role === role;
           if (!resuming && (draft.title || draft.rights || draft.objectKey || store.upload(owner, draft.id))) {
-            throw new SetupError('Your program draft is saved. Finish the current film draft from the Dashboard before starting another upload.', 409);
+            throw new SetupError('Your program draft is saved. Finish the current upload from the Dashboard before starting another upload.', 409);
           }
           store.saveDraft(owner, { ...draft, previewSeconds:0, prices:{ rent:null, buy:null }, programTarget:{ id:saved.id, role, version:saved.version } });
           return redirect('/setup/dashboard/new');
         }
-        return redirect('/setup/program/' + saved.id + '?saved=1');
+        return redirect('/setup/program/' + saved.id + (removing ? '?removed=' + data.action.slice(7) : '?saved=1'));
       }
       if (path === '/setup/sign-out') { store.signOut(sessionId); return redirect('/setup/sign-in', { 'Set-Cookie': cookie('', 0) }); }
       const { r2, draft } = store.maker(owner);
@@ -494,7 +502,7 @@ export async function createSetup({
       }
       if (['/setup/film/prices', '/setup/dashboard/settings', '/setup/dashboard/publication', '/setup/dashboard/info'].includes(path)) {
         const saved = store.film(owner, data.filmId || '');
-        if (!saved) throw new SetupError('Saved film unavailable.', 404);
+        if (!saved || saved.programId) throw new SetupError('Saved film unavailable.', 404);
         editedFilm = saved.id;
         if (path === '/setup/dashboard/info') {
           const info = {};
@@ -536,7 +544,7 @@ export async function createSetup({
         if (!completed) throw new SetupError('Finish the current film before starting another.');
         store.nextDraft(owner);
       } else if (completed) {
-        return redirect('/setup/dashboard#' + draft.id);
+        return redirect(draftLocation(draft));
       } else if (path === '/setup/rights') {
         if (data.rightsAccepted !== 'yes') throw new SetupError('Confirm your distribution rights before adding this film.');
         draft.rights ??= { version: rightsVersion, statement: rightsStatement, acceptedAt: new Date().toISOString() };
@@ -563,18 +571,19 @@ export async function createSetup({
           if (error instanceof SetupError) throw error;
           throw new SetupError('Stream could not read this film. Check bucket access and the supported video settings, or choose another video.', 422);
         }
-        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitles });
+        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitles }, draft.programTarget?.id);
       }
       if (path === '/setup/film' && draft.programTarget) {
         const { id, role, version } = draft.programTarget;
         const target = store.program(owner, id);
         if (target && target.version === version) {
+          const previous = target.members.find(member => member.role === role);
           const members = target.members.filter(member => member.role !== role);
           const extra = {filmId:draft.id, role};
           if (role === 'opening') members.unshift(extra);
           else members.push(extra);
           store.saveProgram(owner, id, { ...target, members, rights:null,
-            previewFilmId: members.some(member => member.filmId === target.previewFilmId) ? target.previewFilmId : null }, version);
+            previewFilmId: previous && previous.filmId === target.previewFilmId ? draft.id : target.previewFilmId }, version);
         }
         if (target) return redirect('/setup/program/' + id + (target.version === version ? '?saved=1' : '?uploaded=1'));
       }
