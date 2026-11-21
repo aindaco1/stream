@@ -29,6 +29,7 @@ test('two independent embeds can redeem the same rental with distinct playback k
   const key = await authority.keyForGrant(a.grant, film);
   assert.equal(key.length, 16);
   assert.deepEqual(key, await authority.keyForGrant(a.grant, film));
+  assert.notDeepEqual(await authority.keyForGrant(a.grant, film, 'opening'), await authority.keyForGrant(a.grant, film, 'closing'));
   assert.notDeepEqual(key, await authority.keyForGrant(b.grant, film));
   assert.deepEqual(await authority.verifyGrant(a.grant, film), {
     ...film, expiresAt: purchasedAt + 600, rentalExpiresAt: rentalEnd

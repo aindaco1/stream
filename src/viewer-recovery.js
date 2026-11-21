@@ -53,19 +53,19 @@ export function recoveryStore(db, key) {
       const now = Date.now();
       const row = db.prepare(`UPDATE viewer_recovery SET codeHash=?,sentAt=?,used=0
         WHERE orderId=(SELECT o.orderId FROM viewer_claimed_orders o JOIN viewer_recovery r USING(orderId)
-          WHERE o.owner=? AND o.filmId=? AND o.account=coalesce(?,o.account) AND o.revision=? AND r.emailHash=? AND ${active}
+          WHERE o.owner=? AND o.filmId=? AND o.account=coalesce(?,o.account) AND o.revision=coalesce(?,o.revision) AND r.emailHash=? AND ${active}
           ORDER BY (o.kind='buy') DESC,o.paidAt+o.rentalHours*3600 DESC LIMIT 1)
         AND (sentAt IS NULL OR sentAt<?)
         AND (SELECT count(*) FROM viewer_recovery WHERE sentAt>=?)<60
-        RETURNING orderId`).get(digest(code), now, offer.owner, offer.id, offer.account, offer.revision,
+        RETURNING orderId`).get(digest(code), now, offer.owner, offer.id, offer.account, offer.type === 'program' ? null : offer.revision,
           fingerprint('checkout-email', email), now - minute, now - minute);
       if (row) return { code, email };
     },
     redeemRecovery(offer, code) {
       if (!/^[\w-]{43}$/.test(code)) return;
       const row = db.prepare(`UPDATE viewer_recovery SET used=1 WHERE codeHash=? AND used=0 AND sentAt>?
-        AND orderId IN (SELECT o.orderId FROM viewer_claimed_orders o WHERE o.owner=? AND o.filmId=? AND o.account=coalesce(?,o.account) AND o.revision=? AND ${active})
-        RETURNING orderId`).get(digest(code), Date.now() - 15 * minute, offer.owner, offer.id, offer.account, offer.revision);
+        AND orderId IN (SELECT o.orderId FROM viewer_claimed_orders o WHERE o.owner=? AND o.filmId=? AND o.account=coalesce(?,o.account) AND o.revision=coalesce(?,o.revision) AND ${active})
+        RETURNING orderId`).get(digest(code), Date.now() - 15 * minute, offer.owner, offer.id, offer.account, offer.type === 'program' ? null : offer.revision);
       return row && accessToken(row.orderId);
     }
   };

@@ -7,11 +7,13 @@
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" type="module"></script>
 </head>
-<body data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
+<body data-program="{{program}}" data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
   <main aria-labelledby="film-title">
     <div class="video-stage">
       <video controls playsinline preload="none"{{poster}} aria-label="{{title}}"></video>
       <div class="video-tools" role="group" aria-label="Video options">
+        <button id="previous-title" class="video-tool" type="button" aria-label="Previous title" title="Previous title" hidden><span class="skip-title-icon previous" aria-hidden="true"></span></button>
+        <button id="next-title" class="video-tool" type="button" aria-label="Next title" title="Next title" hidden><span class="skip-title-icon" aria-hidden="true"></span></button>
         <label id="subtitle-control" class="video-tool" title="Subtitles" hidden>
           <span class="caption-icon" aria-hidden="true">CC</span>
           <select id="subtitles" aria-label="Subtitles"><option value="">Off</option></select>
@@ -20,7 +22,7 @@
       </div>
     </div>
     <div class="details">
-      <div><h1 id="film-title">{{title}}</h1></div>
+      <div><h1 id="film-title">{{title}}</h1><p id="program-summary" hidden></p><p id="program-now" role="status" hidden></p></div>
       <button type="button" id="play">Play {{preview}}-second preview</button>
     </div>
     <section id="purchase" aria-label="Film offers" hidden>
@@ -34,6 +36,7 @@
       <div class="actions">
         <button type="button" id="rent" hidden>Rent</button>
         <button type="button" id="buy" hidden>Buy</button>
+        <button type="button" id="refresh-program" hidden>Refresh program</button>
         <button type="button" id="check-payment" class="secondary" hidden>Check payment</button>
       </div>
     </section>
@@ -84,6 +87,10 @@
     </section>
     <section id="ownership" aria-label="Your purchase" hidden>
       <form id="download" method="post"><input type="hidden" name="receipt"><button>Download film</button></form>
+    </section>
+    <section id="program-lineup" aria-labelledby="lineup-heading" hidden>
+      <h2 id="lineup-heading">In this program</h2>
+      <ol></ol>
     </section>
     <section id="access-tools" aria-label="Your access" hidden>
       <p id="rental-end"></p>

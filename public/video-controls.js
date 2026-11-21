@@ -36,7 +36,6 @@ export function attachVideoControls(video, status) {
     } catch { status.textContent = 'Picture-in-picture could not open in this browser.'; }
     finally { button.disabled = false; updatePip(); }
   });
-  video.addEventListener('ended', exitPictureInPicture);
   for (const event of ['loadedmetadata','resize','emptied','ended','play','enterpictureinpicture','leavepictureinpicture','webkitpresentationmodechanged']) {
     video.addEventListener(event, updatePip);
   }

@@ -440,6 +440,59 @@ async function checkFilmUpload(page, movies) {
   report.filmUpload = { parts: 2, bytes: object.data.length, privatePreviewSeconds: 10, thumbnailIsolated: true };
 }
 
+async function checkProgramEditor(page) {
+  await page.getByRole('button', { name:'Create program' }).click();
+  const form = page.locator('.program-editor');
+  await form.getByLabel('Program title').fill('Two projections');
+  await page.setViewportSize({width:320,height:780});
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'program editor fits a narrow phone');
+  await page.setViewportSize({width:1024,height:840});
+  const first = 'Projection test <first cut>', second = 'Uploaded second screening';
+  await form.getByRole('checkbox', {name:first,exact:true}).check();
+  await form.getByRole('checkbox', {name:second,exact:true}).check();
+  await form.getByRole('button', {name:'Move ' + second + ' up'}).click();
+  assert.equal(await form.locator('.program-library li').first().locator('label span').innerText(), second);
+  await form.getByLabel('Rental price (USD)').fill('4');
+  await form.getByLabel('Download purchase').fill('8');
+  await form.getByLabel('Free preview (seconds)').fill('4');
+  await form.getByRole('button', {name:'Add a new opening video'}).click();
+  await page.getByRole('heading', {name:'Add opening video'}).waitFor();
+  await page.locator('[name=rightsAccepted]').check();
+  await page.getByRole('button', {name:'Confirm rights and continue'}).click();
+  await page.getByRole('link', {name:'Back to program'}).click();
+  await form.getByRole('button', {name:'Add a new opening video'}).click();
+  await page.getByLabel('Film title').fill('Meet the director');
+  await page.getByLabel('Video file').setInputFiles({name:'opening.mp4',mimeType:'video/mp4',buffer:await readFile(fixture)});
+  await page.getByRole('button', {name:'Add video to program'}).click();
+  await form.waitFor();
+  assert.equal(await form.locator('select[name=opening] option:checked').textContent(), 'Meet the director');
+  await form.getByLabel('Preview video').selectOption({label:'Meet the director'});
+  const img = await sharp({create:{width:320,height:180,channels:3,background:'#898989'}}).jpeg().toBuffer();
+  await page.getByLabel('Thumbnail image').setInputFiles({name:'program.jpg',mimeType:'image/jpeg',buffer:img});
+  await page.locator('.thumbnail-editor canvas').waitFor();
+  await page.getByRole('button',{name:'Save thumbnail'}).click();
+  await page.getByText('Thumbnail saved.',{exact:true}).waitFor();
+  await form.getByRole('button', {name:'Save and preview'}).click();
+  await page.waitForFunction(() => document.querySelector('video')?.duration === 4);
+  assert.match(await page.locator('.private-lineup li').first().textContent(),/Opening · Meet the director/);
+  await page.getByRole('link',{name:'Back to program'}).click();
+  await form.getByLabel('I own these videos', {exact:false}).check();
+  await form.getByRole('button',{name:'Publish program',exact:true}).click();
+  const card = page.locator('#programs details.dashboard-film').first();
+  await card.getByRole('heading',{name:'Embed this program'}).waitFor();
+  const preview = card.locator('.film-sharing iframe');
+  assert.match(await preview.getAttribute('src'),/show=synopsis%2Ccredits%2Cmessage/);
+  for (const input of await card.getByRole('checkbox').all()) await input.uncheck();
+  assert.match(await card.getByLabel('Embed code').inputValue(),/show=none/);
+  for (const width of [320, 1024]) {
+    await page.setViewportSize({width,height:840});
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  }
+  await card.getByRole('button',{name:'Unpublish program'}).click();
+  await card.getByText(/Draft · 2 films/).waitFor();
+  report.programEditor = { orderedFilms:2, privateOpeningUpload:true, privatePreviewSeconds:4, programArtwork:true, publishedAndWithdrawn:true };
+}
+
 async function checkLegacyBucketUpgrade(page, owner) {
   // Before uploads, a saved bucket configuration had no upload flag.
   setup.store.saveBucket(owner, { accountId, bucket, jurisdiction: 'default',
@@ -707,6 +760,7 @@ try {
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         report.filmmakerDashboard = 'create film, private preview, publish, copy independent embed selections, update saved details, change prices, unpublish';
         await checkFilmUpload(page, movies);
+        await checkProgramEditor(page);
       }
       if (mode === 'reuse') await checkLegacyBucketUpgrade(page, owner);
       report.scenarios.push({ stripe: mode, cloudflare: storage, savedPreviewSeconds: 10, resumed: true, previewWithoutPayments });

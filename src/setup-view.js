@@ -1,5 +1,6 @@
 import { sumFilmStats } from './analytics.js';
-import { filmPrices, previewSeconds, rentalHours, usdInput } from './prices.js';
+import { previewSeconds } from './prices.js';
+import { formatDuration, hidden, priceFields } from './offer-fields.js';
 import { payoutCountryOptions } from './payout-countries.js';
 import { faqLink, siteFooter } from './site-frame.js';
 import { firstSale, renderSetupCosts } from './filmmaker-help.js';
@@ -7,8 +8,6 @@ import { thumbnailEditor } from './thumbnail-view.js';
 import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
 import { embedLayout, escapeHtml, iframeCode, infoFields, selectedFields } from './film-embed.js';
-
-const hidden = (name, value) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`;
 
 export function renderStripeCountryForm(csrf, mode) {
   const options = payoutCountryOptions.map(({ code, label }) => `<option value="${code}">${escapeHtml(label)}</option>`).join('');
@@ -88,33 +87,6 @@ function storageCard(r2, draft, csrf) {
   });
 }
 
-function formatDuration(duration) {
-  if (!Number.isFinite(duration) || duration <= 0) return '';
-  const seconds = Math.round(duration);
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor(seconds / 60) % 60;
-  return [hours && `${hours} h`, minutes && `${minutes} min`, seconds % 60 && `${seconds % 60} sec`]
-    .filter(Boolean).join(' ');
-}
-
-function priceFields(film) {
-  const prices = filmPrices(film.prices) ?? { rent: null, buy: null };
-  const maxPreview = film.duration > 0 ? Math.min(30, Math.ceil(film.duration) - 1) : 30;
-  return `<fieldset class="price-fields"><legend>Prices and playback</legend>
-    <div class="field-stack">
-      <p class="hint">Rental time starts at payment. Buyers can save the original film file. Leave a price blank to turn off that offer for new viewers.</p>
-      <div class="price-grid">
-        <label>Rental price (USD) <input type="number" name="rentPrice" min="0.50" max="999999.99" step="0.01" inputmode="decimal" value="${usdInput(prices.rent)}"></label>
-        <label>Rental duration (hours) <input type="number" name="rentalHours" min="1" max="720" step="1" required value="${rentalHours(film.rentalHours)}"></label>
-        <label>Download purchase (USD) <input type="number" name="buyPrice" min="0.50" max="999999.99" step="0.01" inputmode="decimal" value="${usdInput(prices.buy)}"></label>
-        <label>Free preview (seconds) <input type="number" name="previewSeconds" min="0" max="${maxPreview}" step="1" required value="${previewSeconds(film.previewSeconds)}"></label>
-      </div>
-      <p class="hint">${maxPreview ? `Choose up to ${maxPreview} seconds. Set 0 to show the offers immediately. The preview must end before the film does.` :
-        'This film is too short for a free preview. Set 0 to show the offers immediately.'}</p>
-    </div>
-  </fieldset>`;
-}
-
 function priceEditor(film, csrf) {
   return `<form class="price-editor" aria-label="Edit prices and playback for ${escapeHtml(film.title)}" method="post" action="/setup/dashboard/settings">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
       ${priceFields(film)}<button type="submit">Save settings</button>
@@ -150,8 +122,8 @@ export function filmSection({ r2, rights, draft, csrf }) {
         <label>Object key<input id="object-key" name="objectKey" type="text" maxlength="1024" spellcheck="false"
           autocapitalize="none" value="${escapeHtml(draft.objectKey)}"></label>
         <p class="hint">Enter the exact path of a film already in your connected bucket.</p></details>
-      ${priceFields(draft)}
-      <div class="film-actions"><button type="submit">Check film and create preview</button>
+      ${draft.programTarget ? '' : priceFields(draft)}
+      <div class="film-actions"><button type="submit">${draft.programTarget ? 'Add video to program' : 'Check film and create preview'}</button>
         <button class="secondary" type="submit" name="intent" value="save" formnovalidate>Save draft</button></div>
     </form>`;
 }
@@ -177,7 +149,7 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
       ])}`);
 }
 
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, admin = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, admin = false } = {}) {
   const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -188,6 +160,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     <script type="module" src="/select-focus.js"></script>
     ${!csrf ? '<script src="/setup/sign-in.js" defer></script>' : !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}
     ${builder ? '<script type="module" src="/setup/dashboard.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
+    ${programEditor ? '<script type="module" src="/setup/program-editor.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>
     <body><a class="skip" href="#main">Skip to content</a>
     <header class="masthead"><div class="bar"><strong class="brand">Stream</strong>
@@ -205,10 +178,11 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     ${siteFooter(admin ? '/setup/admin' : '/setup/dashboard')}</body></html>`;
 }
 
-const statsLabels = {
-  previews: 'Preview starts', plays: 'Paid plays', rentals: 'Rentals', purchases: 'Purchases',
+const salesLabels = {
+  rentals: 'Rentals', purchases: 'Purchases',
   revenue: 'Revenue', netRevenue: 'Net Revenue', estimatedFees: 'Estimated card fees', filmTaxFees: 'Film share of Stripe Tax fees', taxCollected: 'Tax charged'
 };
+const statsLabels = { previews: 'Preview starts', plays: 'Paid plays', ...salesLabels };
 const platformLabels = { ...statsLabels, platformTips: 'Platform tips after tax and fees', tipTaxFees: 'Tip share of Stripe Tax fees', transfersToReview: 'Transfers to review' };
 const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'filmTaxFees', 'tipTaxFees', 'platformTips', 'taxCollected']);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -247,10 +221,10 @@ export function renderPlatformDashboard(csrf, report) {
   return workspacePage('Platform analytics', csrf, `
     <div class="workspace-intro">${platform ? '' : '<a href="/setup/admin">All filmmakers</a>'}
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
-      <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films</p></div>
+      <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films${total.programs ? ' · ' + total.programs + ' programs' : ''}</p></div>
     <section class="film-card"><h2>Overview</h2>${statsList(total, platformLabels)}${revenueNote(total)}
       ${total.transfersToReview ? '<p class="hint">Review refunded or disputed marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
-    <section class="film-list"><h2>${platform ? 'Filmmakers' : 'Films'}</h2>
+    <section class="film-list"><h2>${platform ? 'Filmmakers' : total.programs ? 'Films and programs' : 'Films'}</h2>
       ${tableRows ? `<div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
         <th scope="col">${platform ? 'Filmmaker' : 'Film'}</th>${platform ? '<th scope="col">Films</th>' : ''}${headers}</tr></thead><tbody>${tableRows}</tbody></table></div>` : '<p>No results yet.</p>'}
       ${paging}</section>`, { admin: true });
@@ -267,15 +241,15 @@ function filmInfoEditor(film, csrf, selection, saved) {
     ${saved ? '<span role="status">Film details saved.</span>' : ''}</div></form>`;
 }
 
-function embedBuilder(film, url, previewUrl, selection) {
+function embedBuilder(film, url, previewUrl, selection, program = false) {
   const fields = selectedFields(selection);
-  const populated = infoFields.filter(({ name }) => film.info?.[name]).map(field => field.name);
-  const layout = embedLayout(url, fields, populated);
+  const populated = infoFields.filter(({ name }) => program || film.info?.[name]).map(field => field.name);
+  const layout = embedLayout(url, fields, populated, program);
   const code = iframeCode(layout, film.title);
   const options = infoFields.map(field =>
     `<label><input type="checkbox" name="include" value="${field.name}"${fields.includes(field) ? ' checked' : ''}> ${field.label}</label>`).join('');
-  return `<section class="film-sharing" id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}" data-preview="${escapeHtml(previewUrl)}" data-populated="${populated.join(',')}">
-    <div class="embed-controls"><h4>Embed this film</h4>
+  return `<section class="film-sharing"${program ? ' data-program' : ''} id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}" data-preview="${escapeHtml(previewUrl)}" data-populated="${populated.join(',')}">
+    <div class="embed-controls"><h4>Embed this ${program ? 'program' : 'film'}</h4>
       <form method="get" action="/setup/dashboard#embed-${escapeHtml(film.id)}">${hidden('film', film.id)}
         <fieldset class="embed-options"><legend>Include in this embed</legend><div class="embed-checks">${options}</div><p class="hint">Only fields with saved text will appear.</p></fieldset>
         <noscript><button>Update preview and code</button></noscript></form>
@@ -284,12 +258,12 @@ function embedBuilder(film, url, previewUrl, selection) {
       <div class="film-actions"><button class="secondary copy-embed" type="button">Copy embed code</button><span class="copy-status" role="status"></span></div>
     </div>
     <div class="embed-preview"><div class="preview-heading"><h5>Live preview</h5><a class="public-player" href="${escapeHtml(layout.src)}">Open public player</a></div>
-      ${iframeCode(embedLayout(previewUrl, fields, populated), film.title, false)}</div>
+      ${iframeCode(embedLayout(previewUrl, fields, populated, program), film.title, false)}</div>
     </section>`;
 }
 
-export function renderDashboard({ csrf, owner, error, films, origin, previewOrigin = origin, draft, selectionFilm, selection = '', infoSaved = false }) {
-  const totals = sumFilmStats(films);
+export function renderDashboard({ csrf, owner, error, films, programs = [], origin, previewOrigin = origin, draft, selectionFilm, selection = '', infoSaved = false }) {
+  const totals = sumFilmStats([...films, ...programs]);
   const cards = films.map(film => {
     const path = '/embed/' + encodeURIComponent(film.id);
     const fields = selectionFilm === film.id ? selection : '';
@@ -306,15 +280,34 @@ export function renderDashboard({ csrf, owner, error, films, origin, previewOrig
         <p class="hint">${terms}</p><button type="submit" class="${film.published ? 'secondary' : 'primary'}" name="visibility" value="${film.published ? 'private' : 'public'}">
           ${film.published ? 'Unpublish film' : 'Publish film'}</button></form></div></details>`;
   }).join('');
+  const programCards = programs.map(program => {
+    const id = escapeHtml(program.id), path = '/embed/' + id;
+    const fields = selectionFilm === program.id ? selection : infoFields.map(field => field.name).join(',');
+    const count = program.members.filter(item => item.role === 'film').length;
+    const status = program.published ? 'Published' : program.unavailableTitle ? 'Sales paused' : 'Draft';
+    return `<details class="dashboard-film" name="programs" id="${id}"${selectionFilm === program.id ? ' open' : ''}>
+      <summary><span class="film-title">${escapeHtml(program.title || 'Untitled program')}</span><span class="film-meta">${status} · ${count} ${count === 1 ? 'film' : 'films'}</span></summary>
+      <div class="film-panel">${program.unavailableTitle ? `<p class="feedback error">Sales are paused because the original file for <strong>${escapeHtml(program.unavailableTitle)}</strong> changed or is missing. Restore the original in storage, or edit the lineup to replace or remove this title. Publish the program again to reopen sales.</p>` : ''}
+      <div class="film-actions"><a class="primary-link" href="/setup/program/${id}">Edit program</a>
+      ${count >= 2 ? `<a href="/setup/preview/${id}">Private program preview</a>` : ''}</div>
+      ${statsList(program.stats, salesLabels)}
+      ${program.published ? embedBuilder(program, origin + path, previewOrigin + path, fields, true) +
+        `<form method="post" action="/setup/program/${id}">${hidden('csrf', csrf)}${hidden('version', program.version)}
+        <button class="secondary" name="action" value="unpublish">Unpublish program</button></form>` : ''}
+      </div></details>`;
+  }).join('');
   const add = films.some(film => film.id === draft.id)
     ? `<form method="post" action="/setup/next">${hidden('csrf', csrf)}${hidden('draftId', draft.id)}<button>Add a film</button></form>`
-    : `<a class="primary-link" href="/setup/dashboard/new">${draft.title || draft.rights ? 'Continue film draft' : 'Add a film'}</a>`;
+    : `<a class="primary-link" href="/setup/dashboard/new">${draft.programTarget ? 'Continue ' + escapeHtml(draft.programTarget.role) + ' video' : draft.title || draft.rights ? 'Continue film draft' : 'Add a film'}</a>`;
   return workspacePage('Dashboard', csrf, `<div class="workspace-intro"><h1>Dashboard</h1>
     <p class="account">Signed in as ${escapeHtml(owner)}</p></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
     <section class="film-card" id="overview"><h2>Overview</h2>${statsList(totals)}
       ${revenueNote(totals)}
       <a href="/setup/settings#payments">Payment settings</a></section>
-    <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2>${add}</header>
-      ${cards || '<p>You have no saved films yet.</p>'}</section>`, { dashboard: true, builder: true });
+    <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2><div class="film-actions">${add}
+      <form action="/setup/program/create" method="post">${hidden('csrf', csrf)}<button class="secondary">Create program</button></form></div></header>
+      ${cards || '<p>You have no saved films yet.</p>'}</section>
+    <section class="film-list" id="programs"><h2>Programs</h2>
+      ${programCards || '<p>Group your films into one screening with one embed and one checkout.</p>'}</section>`, { dashboard: true, builder: true });
 }

@@ -85,6 +85,13 @@ export function renderFilmmakerFaq() {
     <section><h2>How do I put a film on my site?</h2>
       <p>Open your published film in the Dashboard. Choose the details you want alongside the player and check the live preview. You can include a synopsis, credits or a personal message. Copy the embed code and paste it into your site. Each film has its own checkout, even when several share a page.</p>
     </section>
+    <section><h2>How do I offer a double feature or a program of shorts?</h2>
+      <p>Choose <strong>Create program</strong> on your Dashboard. Pick at least two of your films, put them in screening order, and add an opening or closing video if you like. Choose the program image, preview and price, then publish and copy its embed code.</p>
+      <p>Viewers pay once in the player and can move between titles with Previous title and Next title. The player remembers their caption choice when a matching track is available. One rental window covers the lineup. A purchase includes the original videos, in order, in a ZIP.</p>
+    </section>
+    <section><h2>Can a program save on card fees?</h2>
+      <p>Yes, when the same viewer would otherwise pay for each film separately. Two separate $2 rentals cost about 72¢ in card fees at Stripe’s standard U.S. domestic card rate. One $4 double feature costs about 42¢, leaving about 30¢ more for the filmmaker at the same price. This example assumes no tax or tip. Your actual fees depend on the payment and your pricing. <a href="https://stripe.com/us/pricing">Stripe pricing</a></p>
+    </section>
     <section><h2>Can someone save a rental?</h2>
       <p>Rentals use a private video stream, and viewers never see your Cloudflare link. Someone who can watch a film can still record their screen. Buyers get a download button.</p>
     </section>
@@ -92,9 +99,9 @@ export function renderFilmmakerFaq() {
       <p>Save the private access link after checkout. Open it on your other device and keep it private. If email recovery is available, choose <strong>Restore access</strong> in the player and enter the email you used to pay. A rental ends at the same time on every device.</p>
     </section>
     <section><h2>What do the numbers in my dashboard mean?</h2>
-      <p>See preview starts, paid plays, rentals and purchases for each film. Repeat plays count. Revenue shows film prices before refunds. Tax and optional tips are tracked separately. Net revenue deducts card fees, your share of confirmed Stripe Tax fees, and recorded refunds up to the film price. The Dashboard marks payments awaiting a tax fee.</p>
+      <p>The Dashboard shows rentals and purchases for each film or program. A program sale counts once in the Overview. Preview starts and paid plays appear on the film someone watched, including when they watched it in a program. Repeat plays count. Revenue shows film prices before refunds. Tax and optional tips are tracked separately. Net revenue deducts card fees, your share of confirmed Stripe Tax fees, and recorded refunds up to the film price. The Dashboard marks payments awaiting a tax fee.</p>
     </section>
-    <section><h2>What if I take my film offline?</h2>
-      <p>Unpublishing stops free previews and new sales. People who bought the film or have time left on a rental can still watch. Keep the original in your bucket so their access keeps working.</p>
+    <section><h2>What if I take my film or program offline?</h2>
+      <p>Unpublishing stops free previews and new sales. People who bought the film or have time left on a rental can still watch. Keep the original files in your bucket so their access keeps working. Publishing a new lineup preserves the edition earlier viewers paid for.</p>
     </section>`;
 }

@@ -2,6 +2,7 @@ import { sha256Hex } from '@dustwave/worker-core/crypto';
 import { verifyStripeSignature } from '@dustwave/worker-core/stripe';
 import { connectedClient, paymentClient, platformAccount, verifyReadySeller } from './connected-test-rental.js';
 import { rentalScope } from './rental.js';
+import { programPresentation } from './program-delivery.js';
 import { isPrice } from './prices.js';
 import { adjustmentEvents, adjustmentReader, adjustmentReference } from './payment-adjustments.js';
 import { orderTotal, processingFee, tipFor } from './checkout-tips.js';
@@ -360,8 +361,14 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return adjustment ? fresh() : shared(checking,order.orderId,fresh);
   }
 
-  async function status({ offer, token }) {
+  function orderedOffer(offer, order, resolveEdition) {
+    if (offer.type !== 'program' || !resolveEdition || !order || order.filmId !== offer.id || order.owner !== offer.owner) return offer;
+    return resolveEdition(order.revision) || offer;
+  }
+
+  async function status({ offer, token, resolveEdition }) {
     const order = store.viewerOrderForAccess(await viewerHash(token));
+    offer = orderedOffer(offer, order, resolveEdition);
     if (!order || !existingOrderMatches(order, offer)) return { status: 'pending' };
     // Older versions marked partial refunds expired without recording a reason.
     // Recheck a settled, still-current order under the current refund policy.
@@ -376,6 +383,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const receipt = order.kind === 'buy' ? await offer.authority.issuePurchaseReceipt(result.intent,film,options) :
       await offer.authority.issueReceipt(result.intent,film,{...options,paidAt:result.paidAt,rentalHours:order.rentalHours});
     return { status:'paid',kind:order.kind,receipt,title:order.title,position:order.position || 0,
+      ...(offer.type === 'program' && {program:programPresentation(offer),revision:offer.revision,memberId:order.positionMember || offer.lineup[0].id}),
       expiresAt:expiresAt({...order,paidAt:result.paidAt}),...(order.kind === 'rent' && {rentalHours:order.rentalHours}) };
   }
 
@@ -395,11 +403,16 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return (await reconcile(order)).status === 'paid';
   }
 
-  async function position({offer,token,seconds}) {
+  async function position({offer,token,seconds,memberId}) {
     const order = store.viewerOrderForAccess(await viewerHash(token));
     if (!order || !Number.isSafeInteger(seconds) || seconds < 0 ||
         !accessAllowed({offer,orderId:order.orderId,kind:order.kind})) throw new ViewerCheckoutError('Playback unavailable.',403);
-    store.setViewerPosition(order.orderId, seconds >= offer.duration ? 0 : seconds);
+    if (offer.type === 'program') {
+      const member = offer.lineup.find(item => item.id === memberId);
+      if (!member || !store.setProgramPosition(order.orderId, memberId, seconds >= member.duration ? 0 : seconds)) {
+        throw new ViewerCheckoutError('Title unavailable.',403);
+      }
+    } else store.setViewerPosition(order.orderId, seconds >= offer.duration ? 0 : seconds);
     return {saved:true};
   }
 
@@ -410,8 +423,9 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return (await reconcile(order)).status === 'paid';
   }
 
-  async function abandon({ offer, token }) {
+  async function abandon({ offer, token, resolveEdition }) {
     const order = store.viewerOrderForToken(await viewerHash(token));
+    offer = orderedOffer(offer, order, resolveEdition);
     if (!order || !existingOrderMatches(order,offer)) return {status:'pending'};
     store.withdrawViewerOrder(order.orderId);
     await closeWithdrawnSession(order);

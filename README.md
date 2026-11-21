@@ -2,6 +2,12 @@
 
 An open-source film player for filmmakers who keep their originals in their own storage. Each test filmmaker connects a private Cloudflare R2 object, chooses the preview length and sets prices for a timed rental, a one-time purchase, or both. Viewers pay and watch in the filmmaker’s embed. A purchase also includes the original file. The setup and viewer services bind to loopback and can sit behind HTTPS. Stream reads the original from the filmmaker’s bucket and creates each playable segment on demand.
 
+## Film programs
+
+In **Dashboard → Create program**, choose at least two films, arrange their screening order, and optionally add an opening, closing video, and cover image. Choose one preview excerpt and set a rental price, purchase price, or both. The dashboard shows a private preview and a single embed code.
+
+Viewers pay once in the embed. **Previous title** and **Next title** move through the lineup. Captions follow the viewer’s language when a matching track is available. A purchased program includes a ZIP of the original files in order, plus individual downloads. Later lineup and price changes apply to new orders. Existing viewers keep their purchased edition while its source files remain available.
+
 ## Guided filmmaker setup
 
 Start Stream with `npm start` and give each pilot filmmaker their own sign-in link. In a second terminal, run:

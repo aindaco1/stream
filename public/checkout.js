@@ -45,7 +45,11 @@ async function postToken(film, path, token) {
     credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer',
     signal: AbortSignal.timeout(json ? 35000 : 15000)
   });
-  if (!response.ok) throw new Error('Request unavailable');
+  if (!response.ok) {
+    const error = new Error('Request unavailable');
+    if (response.status === 409 && json) error.code = (await response.json().catch(() => null))?.code;
+    throw error;
+  }
   return response.json();
 }
 
@@ -65,7 +69,7 @@ function viewerSlot(film) {
   return 'stream:order:' + film + ':' + publisher + ':' + position.join('.');
 }
 
-export function attachViewerCheckout(film, returnedToken, onPaid) {
+export function attachViewerCheckout(film, returnedToken, onPaid, currentRevision) {
   const byId = id => document.getElementById(id);
   const panel = byId('purchase');
   const payment = byId('payment');
@@ -73,6 +77,10 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   const status = byId('status');
   const statusHome = status.parentElement;
   const hours = Number(document.body.dataset.rentalHours) || 48;
+  const publishedRevision = currentRevision?.();
+  const program = document.body.classList.contains('is-program');
+  const refresh = byId('refresh-program');
+  refresh.addEventListener('click', () => location.reload());
   const rentalLength = value => value + (value === 1 ? ' hour' : ' hours');
   const accessTools = byId('access-tools');
   const restoreTools = byId('restore-tools');
@@ -131,7 +139,10 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
 
   function startOrder(kind, attempt, percent, viewingAddress) {
     if (starts.has(attempt)) return starts.get(attempt);
-    const data = viewingAddress ? { token: attempt, tipPercent: percent, viewingAddress } : attempt + (percent ? ' ' + percent : '');
+    const programRevision = currentRevision?.();
+    const data = programRevision || viewingAddress
+      ? { token: attempt, tipPercent: percent, viewingAddress: viewingAddress || undefined, programRevision }
+      : attempt + (percent ? ' ' + percent : '');
     const opening = postToken(film, kind === 'rent' ? 'checkout' : 'buy', data)
       .then(result => {
         if (attempts[kind] === attempt) {
@@ -198,9 +209,10 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
   changeLocation.addEventListener('click', () => open(activeFormKind, true));
 
   function showOffer() {
-    const available = offers.filter(kind => !unlocked || (unlocked.kind === 'rent' && kind === 'buy'));
+    const canUpgrade = unlocked?.kind === 'rent' && (!program || publishedRevision === unlocked.revision);
+    const available = refresh.hidden ? offers.filter(kind => !unlocked || (canUpgrade && kind === 'buy')) : [];
     check.hidden = !payment.hidden || !token || token === unlocked?.token;
-    panel.hidden = !available.length && check.hidden;
+    panel.hidden = !available.length && check.hidden && refresh.hidden;
     byId('tip-choice').hidden = !available.length;
     byId('tip-value').textContent = tip.value + '%';
     tip.setAttribute('aria-valuetext', tip.value + ' percent');
@@ -208,7 +220,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
       const button = byId(kind);
       button.hidden = !available.includes(kind);
       if (!button.hidden) {
-        const action = kind === 'buy' ? 'Buy' : 'Rent';
+        const action = kind === 'buy' ? (program ? 'Buy program' : 'Buy') : (program ? 'Rent program' : 'Rent');
         const price = Number(document.body.dataset[kind]);
         button.textContent = action + ' · ' + currency.format((price + calculatePlatformTip(price, Number(tip.value))) / 100);
         button.disabled = !payment.hidden;
@@ -216,7 +228,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     }
     const terms = [];
     if (available.includes('rent')) terms.push('Rent for ' + rentalLength(hours) + ' from payment.');
-    if (available.includes('buy')) terms.push('Buy to watch and download.');
+    if (available.includes('buy')) terms.push(program ? 'Buy to watch and download every title in one ZIP.' : 'Buy to watch and download.');
     byId('terms').textContent = available.length ? 'Test checkout. ' + terms.join(' ') + ' Applicable film tax is added at checkout.' : '';
   }
 
@@ -241,7 +253,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
         const changed = unlocked?.token !== attempt;
         const watchNow = startPlayback || !payment.hidden;
         closeForm();
-        unlocked = { token: attempt, kind: result.kind };
+        unlocked = { token: attempt, kind: result.kind, revision: result.program?.revision };
         attempts[result.kind] = attempt;
         attempts.active = result.kind;
         persist();
@@ -409,11 +421,18 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
           byId('checkout-scroll').scrollTop = 0;
         }
       }
-    } catch {
+    } catch (error) {
       if (run !== generation) return;
       closeForm();
-      showOffer();
-      status.textContent = 'Checkout could not open. Select your offer to try again or check an earlier payment.';
+      if (program && error.code === 'program_revision_changed') {
+        refresh.hidden = false;
+        showOffer();
+        status.textContent = 'This program has changed. Refresh to review the current lineup and price.';
+        refresh.focus();
+      } else {
+        showOffer();
+        status.textContent = 'Checkout could not open. Select your offer to try again or check an earlier payment.';
+      }
     }
   }
 
@@ -439,16 +458,15 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     return order.receipt;
   }
 
-  download.action = '/film/' + encodeURIComponent(film) + '/download';
   target.name = 'stream-file-' + newToken().slice(0, 16);
   download.target = target.name;
-  download.addEventListener('submit', async event => {
-    event.preventDefault();
-    const button = download.querySelector('button');
+  async function downloadFile(url, button) {
     if (button.disabled) return;
     button.disabled = true;
     try {
-      download.elements.receipt.value = await purchaseReceipt();
+      const receipt = await purchaseReceipt();
+      download.action = url;
+      download.elements.receipt.value = receipt;
       if (!target.isConnected) ownership.append(target);
       HTMLFormElement.prototype.submit.call(download);
       status.textContent = 'Your file download is starting.';
@@ -458,10 +476,14 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
       download.elements.receipt.value = '';
       button.disabled = false;
     }
+  }
+  download.addEventListener('submit', event => {
+    event.preventDefault();
+    downloadFile(download.dataset.path || '/film/' + encodeURIComponent(film) + '/download', download.querySelector('button'));
   });
   target.addEventListener('load', () => {
     if (target.contentDocument?.URL.startsWith(location.origin + '/film/')) {
-      status.textContent = 'The file is unavailable. Try Download film again.';
+      status.textContent = 'The file is unavailable. Please try the download again.';
     }
   });
   byId('copy-link').addEventListener('click', async () => {
@@ -490,14 +512,14 @@ export function attachViewerCheckout(film, returnedToken, onPaid) {
     showOffer();
     inspect(true, Boolean(returnId));
   }
-  return { showOffer, purchaseReceipt, checkAccess: () => inspect(true),
+  return { showOffer, purchaseReceipt, downloadFile, checkAccess: () => inspect(true),
     async restoreAttempt(attempt) {
       if (!validToken(attempt)) throw new Error('Invalid link');
       token = attempt;
       await inspect(true, true);
     },
-    savePosition(seconds) {
-      if (unlocked) fetch('/film/' + encodeURIComponent(film) + '/position', {
+    savePosition(seconds, mediaPrefix = '/film/' + encodeURIComponent(film)) {
+      if (unlocked) fetch(mediaPrefix + '/position', {
         method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: unlocked.token + ' ' + seconds,
         credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: true
       }).catch(() => {});

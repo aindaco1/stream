@@ -13,6 +13,7 @@ import { chromium } from 'playwright';
 import { openFilm } from '../src/media.js';
 import { createRentalAuthority, rentalScope } from '../src/rental.js';
 import { makeServer } from '../src/server.js';
+import { checkProgramPlayer, programFixture } from './program-player-rehearsal.js';
 import { createFileSource } from '../src/source.js';
 
 const clock = fileURLToPath(new URL('../.local/clock.mp4', import.meta.url));
@@ -33,9 +34,13 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const expectedHash = hash(await readFile(path));
 const offers = new Map(['first', 'second', 'legacy'].map(id => [id, { id, title: 'Test film ' + id, scope: 'test/' + id,
   prices: { rent: 99, buy: 299 }, revision: film.revision, authority: createRentalAuthority(randomBytes(32)) }]));
+const program = await programFixture({ clock, directory, text, picture, path, duration:film.duration });
+offers.set(program.offer.id, program.offer);
 const catalog = {
-  get: id => offers.get(id), verify: id => offers.get(id), list: () => [...offers.values()],
-  open: () => openFilm(source),
+  get: (id, options) => id === program.offer.id && program.withdrawn && !options?.entitled ? undefined : offers.get(id),
+  verify: id => offers.get(id), list: () => [...offers.values()],
+  open: (id, options) => id === program.offer.id ? program.open(options?.memberId) : openFilm(source),
+  programFile: (_id, _revision, memberId) => program.file(memberId),
   async download(id) { return { title: offers.get(id).title, size: fileHead.size, extension: 'mkv', contentType: 'video/x-matroska', stream: (start, end, signal) => createReadStream(path, { start, end: end - 1, signal }) }; }
 };
 const orders = new Map();
@@ -85,7 +90,15 @@ const checkout = {
     const order = orders.get(token);
     if (!order || order.offer !== offer) return { status: 'pending' };
     if (order.submissions && order.status === 'pending') order.pendingChecks++;
-    return { status: order.status, kind: order.kind, receipt: order.receipt };
+    const details = order.offer.type === 'program' ? {program: {title:offer.title, revision:offer.revision, lineup:offer.lineup}, memberId:order.memberId, position:order.position} : {};
+    return { status: order.status, kind: order.kind, receipt: order.receipt, ...details };
+  },
+  position({ offer, token, memberId, seconds }) {
+    const order = orders.get(token);
+    if (order?.offer !== offer || order.status !== 'paid') return false;
+    order.memberId = memberId;
+    order.position = seconds;
+    return true;
   },
   accessAllowed({ offer, orderId, kind }) {
     const order = sessions.get(orderId);
@@ -129,7 +142,7 @@ player.on('request', (req, res) => {
 await new Promise(resolve => player.listen(0, '127.0.0.1', resolve));
 const app = 'http://127.0.0.1:' + player.address().port;
 const publisher = createServer((req, res) => {
-  const frames = [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660]]
+  const frames = [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660], [program.offer.id + '?show=synopsis', 480, 640]]
     .map(([id, width, height]) => `<iframe allow="autoplay; payment; picture-in-picture ${id === 'legacy' ? "'none'" : '*'}" width="${width}" height="${height}" src="${app}/embed/${id}"></iframe>`);
   res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Publisher</title>' +
     '<style>body{margin:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px}iframe{border:0}</style>' + frames.join('\n'));
@@ -750,11 +763,18 @@ try {
   await nm.getByRole('heading', { name:'Billing address' }).waitFor();
   await nm.close();
 
+  checkout.manualNmEnabled = false;
+  const programPage = await context.newPage();
+  await programPage.goto(host);
+  const programFrame = programPage.frame({url:url=>url.pathname === '/embed/' + program.offer.id});
+  const adjacent = programPage.frames().filter(frame => frame.url() === app + '/embed/first')[1];
+  await checkProgramPlayer({ frame:programFrame, neighbor:adjacent, app, fixture:program, preview, complete, context, requests });
+  await programPage.close();
   for (const [token, order] of orders) {
     assert.ok(!requests.some(({ url, referrer }) => [url, referrer].some(address =>
       address.includes(token) || (order.receipt && address.includes(order.receipt)))), 'A private credential appeared in a URL or referrer');
   }
-  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: location-based tax, inclusive and zero tips, visible Pay, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, download and recovery.');
+  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: location-based tax, inclusive and zero tips, visible Pay, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, program order, previous/next, caption carryover, ZIP, download and recovery.');
 } finally {
   await browser.close();
   await Promise.all([player, publisher].map(server => new Promise(resolve => server.close(resolve))));

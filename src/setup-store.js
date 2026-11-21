@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { programStore, isProgramId } from './program-store.js';
 import { analyticsReports } from './analytics.js';
 import { bucketReader } from './r2-write.js';
 import { DatabaseSync } from 'node:sqlite';
@@ -118,6 +119,7 @@ export function openSetupStore(directory) {
     const columns = new Set(sql('PRAGMA table_xinfo(viewer_test_orders)').all().map(row => row.name));
     if (!columns.has('verifiedAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN verifiedAt INTEGER');
     if (!columns.has('position')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('positionMember')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN positionMember TEXT');
     if (!columns.has('kind')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'rent'");
     if (!columns.has('amount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN amount INTEGER NOT NULL DEFAULT 99');
     if (!columns.has('tipPercent')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipPercent INTEGER NOT NULL DEFAULT 0');
@@ -172,6 +174,7 @@ export function openSetupStore(directory) {
     return { ...JSON.parse(row.config), ...JSON.parse(clear.toString('utf8')) };
   }
   const store = {
+    ...programStore(db, transaction, (owner,id) => store.film(owner,id)),
     ...recoveryStore(db, key),
     ...analyticsReports(db),
     invite(owner, audience = 'filmmaker') {
@@ -302,9 +305,11 @@ export function openSetupStore(directory) {
         if (!['none', 'marketplace-v1'].includes(taxPolicy)) throw new Error('Unsupported order tax policy.');
         const maker = store.maker(owner);
         const seller = maker && stripeSetupStateForMode(maker.stripe, 'test');
-        const film = store.film(owner, id);
+        const program = isProgramId(id) && store.program(owner,id);
+        const film = program ? program.published && program.revision === revision && store.programVersion(id,revision) : store.film(owner,id);
+        const currentRevision = program ? program.revision : film?.revision;
         const tipAmount = tipFor(amount,tipPercent);
-        if (tipAmount === null || store.filmPublication(id)?.published === 0 || !store.ownsTestAccount(owner, account) || seller?.accountId !== account || film?.revision !== revision ||
+        if (tipAmount === null || store.filmPublication(id)?.published === 0 || !store.ownsTestAccount(owner, account) || seller?.accountId !== account || !film || currentRevision !== revision ||
             filmPrices(film.prices)?.[kind] !== amount ||
             (kind === 'rent' && (rentalHours(film.rentalHours) !== hours || !Number.isInteger(hours)))) {
           const error = new Error('The film offer changed.');
@@ -533,16 +538,17 @@ export function openSetupStore(directory) {
     },
     beginThumbnailEdit(owner, id) {
       const lock = randomUUID(), now = Date.now();
-      const acquired = sql(`INSERT INTO thumbnail_edits SELECT id,?,? FROM films WHERE owner=? AND id=?
+      const table = isProgramId(id) ? 'programs' : 'films';
+      const acquired = sql(`INSERT INTO thumbnail_edits SELECT id,?,? FROM ${table} WHERE owner=? AND id=?
         ON CONFLICT(filmId) DO UPDATE SET lock=excluded.lock, expires=excluded.expires WHERE expires < ?`)
         .run(lock, now + 120000, owner, id, now).changes;
       return acquired ? lock : null;
     },
     markThumbnailPending(owner, id) {
-      sql("UPDATE films SET metadata=json_set(metadata,'$.thumbnail','pending') WHERE owner=? AND id=?").run(owner, id);
+      sql(`UPDATE ${isProgramId(id) ? 'programs' : 'films'} SET metadata=json_set(metadata,'$.thumbnail','pending') WHERE owner=? AND id=?`).run(owner, id);
     },
     reconcileThumbnail(owner, id, version) {
-      sql(`UPDATE films SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?
+      sql(`UPDATE ${isProgramId(id) ? 'programs' : 'films'} SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?
         AND json_extract(metadata,'$.thumbnail')='pending'
         AND NOT EXISTS (SELECT 1 FROM thumbnail_edits WHERE filmId=? AND expires>=?)`)
         .run(version, owner, id, id, Date.now());
@@ -550,7 +556,7 @@ export function openSetupStore(directory) {
     finishThumbnailEdit(owner, id, lock, version) {
       transaction(() => {
         if (sql('DELETE FROM thumbnail_edits WHERE filmId=? AND lock=?').run(id, lock).changes && version !== undefined) {
-          sql("UPDATE films SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?").run(version, owner, id);
+          sql(`UPDATE ${isProgramId(id) ? 'programs' : 'films'} SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?`).run(version, owner, id);
         }
       });
     },
@@ -561,6 +567,7 @@ export function openSetupStore(directory) {
           .run(published ? 1 : 0, id, owner).changes === 1;
         if (changed && !published) {
           sql("UPDATE viewer_test_orders SET withdrawalState='requested' WHERE owner=? AND filmId=? AND status='pending' AND withdrawalState IS NULL").run(owner,id);
+          store.withdrawProgramsContaining(owner,id);
         }
         return changed;
       });
@@ -586,6 +593,9 @@ export function openSetupStore(directory) {
           .run(id, kind === 'preview' ? 1 : 0, kind === 'paid' ? 1 : 0);
         return true;
       });
+    },
+    programs(owner) {
+      return store.programStats(owner).map(({id,stats}) => ({ ...store.program(owner,id), stats }));
     },
     films(owner) {
       const rows = sql("SELECT id,json_extract(metadata,'$.title') AS title,json_extract(metadata,'$.prices') AS prices,json_extract(metadata,'$.rentalHours') AS hours,json_extract(metadata,'$.previewSeconds') AS seconds FROM films WHERE owner=? ORDER BY rowid DESC").all(owner);

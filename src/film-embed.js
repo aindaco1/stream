@@ -10,13 +10,14 @@ export function selectedFields(value = '') {
   return infoFields.filter(field => names.includes(field.name));
 }
 
-export function embedLayout(base, fields, populated) {
+export function embedLayout(base, fields, populated, program = false) {
   const url = new URL(base);
   const selection = fields.map(field => field.name).join(',');
   if (selection) url.searchParams.set('show', selection);
+  else if (program) url.searchParams.set('show', 'none');
   else url.searchParams.delete('show');
   const populatedCount = fields.filter(field => populated.includes(field.name)).length;
-  return { src: url.href, height: 480 + populatedCount * 48, populatedCount };
+  return { src: url.href, height: (program ? 680 : 480) + populatedCount * 48, populatedCount };
 }
 
 const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
