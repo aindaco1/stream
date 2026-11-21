@@ -114,12 +114,65 @@ async function signIn(page, origin, owner) {
   await page.getByRole('heading', { name: 'Settings', exact: true }).waitFor();
 }
 
+async function checkFieldHelp(section) {
+  const missing = await section.locator('input:not([type=hidden]), textarea, select').evaluateAll(fields =>
+    fields.filter(field => !(field.getAttribute('aria-describedby') || '').split(' ').some(id =>
+      document.getElementById(id)?.getAttribute('role') === 'tooltip')).map(field => field.name || field.type));
+  assert.deepEqual(missing, [], 'Every field, including optional fields, has its own description');
+}
+
+async function checkOverviewHelp(page) {
+  const overview = page.locator('#overview');
+  const buttons = overview.getByRole('button', {name:/^Help for /});
+  assert.equal(await buttons.count(), await overview.locator('dt').count());
+  const button = overview.getByRole('button', {name:'Help for Net Revenue',exact:true});
+  const tip = page.getByRole('tooltip');
+  await button.hover();
+  await tip.waitFor();
+  assert.match(await tip.innerText(), /card fees/);
+  await page.keyboard.press('Escape');
+  await tip.waitFor({state:'hidden'});
+  await button.click();
+  await tip.waitFor();
+  await page.getByRole('heading', {name:'Overview',exact:true}).click();
+  await tip.waitFor({state:'hidden'});
+  await button.focus();
+  await page.keyboard.press('Tab');
+  await tip.waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-expanded')), 'true');
+  await page.keyboard.press('Escape');
+  await tip.waitFor({state:'hidden'});
+  assert.equal(await overview.getByRole('link',{name:'How these numbers are calculated'}).getAttribute('href'), '/faq#dashboard-analytics');
+}
+
+async function checkTouchHelp(page) {
+  const context = await page.context().browser().newContext({hasTouch:true, viewport:{width:320,height:568},
+    storageState:await page.context().storageState()});
+  try {
+    const phone = await context.newPage();
+    await phone.goto(page.url());
+    const overview = phone.locator('#overview');
+    const trigger = overview.getByRole('button', {name:'Help for Estimated card fees',exact:true});
+    const tip = phone.getByRole('tooltip');
+    await trigger.tap();
+    await tip.waitFor();
+    const bounds = await tip.boundingBox();
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 320 && bounds.y >= 0 && bounds.y + bounds.height <= 568);
+    await trigger.tap();
+    await tip.waitFor({state:'hidden'});
+    await overview.getByRole('link', {name:'How these numbers are calculated'}).tap();
+    await phone.locator('#dashboard-analytics h2').waitFor();
+    assert.ok(phone.url().endsWith('/faq#dashboard-analytics'));
+  } finally { await context.close(); }
+}
+
 async function checkThumbnails(page, publicUrl, fixtureBucket) {
   const image = await sharp({ create: { width: 480, height: 480, channels: 3, background: '#526582' } }).png().toBuffer();
   const posterUrl = publicUrl.replace('/embed/', '/film/') + '/thumbnail.jpg';
   const privateRoute = '/setup/thumbnail/' + publicUrl.split('/').pop();
   const form = page.getByRole('form', { name: 'Thumbnail for Projection test <first cut>', exact: true });
   const section = form.locator('..');
+  await checkFieldHelp(form);
   const save = form.getByRole('button', { name: 'Save thumbnail' });
   assert.equal(await form.locator('input[type=password]').count(), 0);
   assert.ok(await section.getByText(/1920 × 1080/).isVisible());
@@ -308,6 +361,7 @@ async function checkBucketTokenLinks(page) {
 async function connectBucket(page, method, recover) {
   await openSection(page, 'storage');
   const card = page.locator('#storage');
+  await checkFieldHelp(card);
   if (method !== 'manual') {
     const dashboard = await card.getByRole('link', { name: 'Open Cloudflare R2' }).getAttribute('href');
     assert.equal(new URL(dashboard).origin, 'https://dash.cloudflare.com');
@@ -316,6 +370,7 @@ async function connectBucket(page, method, recover) {
     const token = page.getByLabel('R2 token value');
     await token.waitFor();
     await checkBucketTokenLinks(page);
+    await checkFieldHelp(page.locator('main'));
     assert.equal(await token.getAttribute('type'), 'password');
     if (method === 'selected keys') {
       await page.getByText('Use an existing access key pair', { exact: true }).click();
@@ -497,6 +552,7 @@ async function checkProgramEditor(page) {
   assert.equal(await page.locator('#films').getByRole('button', {name:'Create program'}).count(), 0);
   await page.locator('#programs button.primary').filter({hasText:'Create program'}).click();
   const form = page.locator('.program-editor');
+  await checkFieldHelp(form);
   const previewLength = form.getByLabel('Free preview (seconds)');
   assert.equal(await previewLength.getAttribute('max'), '180');
   await previewLength.fill('180');
@@ -594,6 +650,7 @@ async function checkProgramEditor(page) {
   assert.equal(await publishedBuy(),'1000','an existing embed gets the published download price');
   assert.equal(await pricing.count(),0,'no pending prices after publication');
   for (const input of await card.getByRole('checkbox').all()) await input.uncheck();
+  await checkFieldHelp(card);
   assert.match(await card.getByLabel('Embed code').inputValue(),/show=none/);
   for (const width of [320, 1024]) {
     await page.setViewportSize({width,height:840});
@@ -808,6 +865,9 @@ try {
           const films = await page.getByRole('heading', { name: 'Films' }).boundingBox();
           assert.ok(overview && films && overview.y < films.y);
         }
+        await checkOverviewHelp(page);
+        await checkTouchHelp(page);
+        await checkFieldHelp(page.locator('#films'));
         assert.equal(await page.locator('.dashboard-film[open]').count(), 0);
         const mainWidth = await page.locator('main').boundingBox();
         assert.ok(mainWidth.width > 920, 'Use the desktop width for the dashboard');

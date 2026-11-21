@@ -136,7 +136,11 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.equal(platform.total.estimatedFees, 79);
   assert.deepEqual(platform.rows.map(row => [row.name, row.revenue]), [['Alice', 600], ['Benny', 0]]);
   assert.deepEqual(store.platformReport('Benny').rows.map(row => row.title), ['Other private title']);
-  assert.match(await ada.get(), /\$6\.00/);
+  const overview = (await ada.get()).split('id="overview"')[1].split('</section>')[0];
+  assert.match(overview, /\$6\.00/);
+  assert.match(overview, /data-field-help="[^"]*estimated for 1 payment\."[^>]*>Net Revenue</);
+  assert.match(overview, /data-field-help="[^"]*reported \$0\.60 in processing fees on 1 payment\."[^>]*>Estimated card fees</);
+  assert.match(overview, /href="\/faq#dashboard-analytics"/);
   assert.equal((await ada.post('settings', { ...settings, previewSeconds: '0' })).status, 303);
   assert.equal(catalog.recordView(ada.id, 'preview', randomUUID()), false);
   env.STREAM_PUBLIC_FILMS = JSON.stringify([{ owner: 'Alice', id: ada.id }]);

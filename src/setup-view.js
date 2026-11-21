@@ -169,6 +169,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     ${programPreview ? '<link rel="stylesheet" href="/program-lineup.css">' : ''}
     <script src="/setup/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
     <script type="module" src="/select-focus.js"></script>
+    ${csrf ? '<script type="module" src="/setup/field-help.js"></script>' : ''}
     ${!csrf ? '<script src="/setup/sign-in.js" defer></script>' : !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}
     ${builder ? '<script type="module" src="/setup/dashboard.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${programEditor ? '<script type="module" src="/setup/program-editor.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
@@ -199,17 +200,31 @@ const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'filmTaxF
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const displayStat = (stats, key) => moneyFields.has(key) ? usd.format(stats[key] / 100) : String(stats[key]);
 function statsList(stats, labels = statsLabels) {
+  const reported = stats.rentals + stats.purchases - stats.estimatedOrders;
+  const payments = n => n + (n === 1 ? ' payment' : ' payments');
+  const explanations = {
+    previews: 'How many times a free preview started. Someone can watch more than once.',
+    plays: 'How many times a rented or purchased video started playing. Watching another title in a program can count as another play.',
+    rentals: 'Completed rental payments. Renting a whole program counts once.',
+    purchases: 'Completed purchases that include a download. Buying a whole program counts once.',
+    revenue: 'The film and program prices viewers paid, before fees or refunds. Tips and sales tax are counted separately.',
+    netRevenue: 'What filmmakers keep after card fees, their share of confirmed Stripe Tax fees, and any recorded refunds up to the film price.' +
+      (stats.estimatedOrders ? ' Card fees are still estimated for ' + payments(stats.estimatedOrders) + '.' : '') +
+      (stats.pendingTaxFees ? ' The Stripe Tax fee is still pending for ' + payments(stats.pendingTaxFees) + '.' : ''),
+    estimatedFees: 'Stream estimates card fees at the U.S. domestic rate of 2.9% plus 30¢ per payment, including tips and tax.' +
+      (reported ? ' Stripe has reported ' + usd.format(stats.reportedFees / 100) + ' in processing fees on ' + payments(reported) + '.' : ''),
+    filmTaxFees: 'The filmmaker’s share of the fee Stripe charges to calculate tax. When a payment includes a tip, Dust Wave covers the tip’s share.',
+    taxCollected: 'Tax charged at checkout, including any tax already included in a platform tip. This shows the original tax at the time of sale.',
+    platformTips: 'Optional tips left for Dust Wave, after any tax included in the tip and the tip’s share of confirmed Stripe Tax fees.',
+    tipTaxFees: 'The part of the confirmed Stripe Tax fee paid from Dust Wave’s tip.',
+    transfersToReview: 'Payments with refunds or disputes that may need a transfer adjustment. Open Stripe to review them.'
+  };
   return '<dl class="film-stats">' + Object.entries(labels).map(([key, label]) =>
-    `<div><dt>${label}</dt><dd>${displayStat(stats, key)}</dd></div>`
+    `<div><dt data-field-help="${escapeHtml(explanations[key])}">${label}</dt><dd>${displayStat(stats, key)}</dd></div>`
   ).join('') + '</dl>';
 }
-function revenueNote(stats) {
-  const reported = stats.rentals + stats.purchases - stats.estimatedOrders;
-  const fees = reported ? `Stripe has reported ${usd.format(stats.reportedFees / 100)} in processing fees on ${reported} ${reported === 1 ? 'payment' : 'payments'}. ` : '';
-  const estimated = stats.estimatedOrders ? 'Net revenue uses the estimate while Stripe confirms the remaining fees. ' : '';
-  const pending = stats.pendingTaxFees ? `Net revenue is provisional for ${stats.pendingTaxFees} ${stats.pendingTaxFees === 1 ? 'payment' : 'payments'} awaiting the Stripe Tax fee. ` : '';
-  return `<p class="hint">Sandbox amounts in USD. Revenue counts film prices before refunds. Net revenue deducts card fees, the film’s confirmed share of Stripe Tax fees and recorded refunds up to the film price. Tax charged includes any tax within the tip and is shown at purchase. The fee estimate uses the standard U.S. domestic card rate on the full charge. ${fees}${estimated}${pending}See Stripe for payouts and dispute adjustments.</p>`;
-}
+
+const analyticsGuide = '<p class="hint">Sandbox amounts in USD. <a href="/faq#dashboard-analytics">How these numbers are calculated</a></p>';
 
 export function renderPlatformDashboard(csrf, report) {
   const { owner, rows, page, pages, total, makers } = report;
@@ -233,7 +248,7 @@ export function renderPlatformDashboard(csrf, report) {
     <div class="workspace-intro">${platform ? '' : '<a href="/setup/admin">All filmmakers</a>'}
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
       <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films${total.programs ? ' · ' + total.programs + ' programs' : ''}</p></div>
-    <section class="film-card"><h2>Overview</h2>${statsList(total, platformLabels)}${revenueNote(total)}
+    <section class="film-card"><h2>Overview</h2>${statsList(total, platformLabels)}${analyticsGuide}
       ${total.transfersToReview ? '<p class="hint">Review refunded or disputed marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
     <section class="film-list"><h2>${platform ? 'Filmmakers' : total.programs ? 'Films and programs' : 'Films'}</h2>
       ${tableRows ? `<div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
@@ -328,7 +343,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
     <p class="account">Signed in as ${escapeHtml(owner)}</p></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
     <section class="film-card" id="overview"><h2>Overview</h2>${statsList(totals)}
-      ${revenueNote(totals)}
+      ${analyticsGuide}
       <a href="/setup/settings#payments">Payment settings</a></section>
     <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2><div class="film-actions">${add}</div></header>
       ${cards || '<p>You have no saved films yet.</p>'}</section>

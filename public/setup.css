@@ -139,8 +139,9 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
   .film-meta { grid-area: 2 / 1; }
   .dashboard-film > summary::after { grid-area: 1 / 2 / span 2; }
 }
-.film-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 6rem), 1fr)); gap: 1rem .75rem; }
-.film-stats dt { color: var(--muted); font-size: .875rem; }
+.film-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.25rem), 1fr)); gap: 1rem .75rem; }
+.film-stats > div { display: grid; grid-template-rows: subgrid; grid-row: span 2; row-gap: .125rem; }
+.film-stats dt { display: flex; align-items: baseline; gap: .125rem; width: fit-content; max-width: 100%; color: var(--muted); font-size: .875rem; }
 .film-stats dd { font-weight: 650; font-variant-numeric: tabular-nums; }
 .price-editor, .film-info-editor, .film-sharing, .film-publication { border-block-start: 1px solid var(--line); padding-block-start: 1.25rem; }
 .price-fields { min-width: 0; border: 0; padding: 0; container-type: inline-size; }
@@ -252,3 +253,30 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 
 .file-picker select { width: 100%; min-width: 0; }
 .file-picker video { max-width: 28rem; margin-block-start: var(--space-3, .75rem); }
+
+/* Field help follows the same ink and focus colors as the workspace. */
+.help-heading { display: flex; align-items: baseline; gap: .25rem; min-width: 0; }
+.help-heading > label { min-width: 0; }
+.price-grid .help-field { display: flex; flex-direction: column; justify-content: end; }
+.price-grid .help-heading { max-width: 22ch; }
+.watermark-setting .help-field { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem .75rem; }
+.thumbnail-sliders .help-field { display: grid; grid-template-columns: minmax(8rem, 11rem) minmax(0, 1fr); align-items: center; }
+.thumbnail-sliders .help-heading label { display: block; }
+.program-library .help-heading { flex: 1; }
+.program-library .help-heading label { min-width: 0; flex: initial; }
+.help-field small { display: block; color: var(--muted); }
+button.info-button, .provider-card button.info-button {
+  display: inline-grid; place-items: center; vertical-align: middle; align-self: baseline; flex: none;
+  width: 1.5rem; height: 1.5rem; min-height: 0; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--muted); touch-action: manipulation;
+}
+button.info-button:is(:hover, [aria-expanded=true]) { background: var(--subtle); color: var(--ink); }
+.info-caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.info-button svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.info-tooltip {
+  position: fixed; z-index: 10; width: max-content; max-width: min(30ch, calc(100vw - 1rem)); max-height: calc(100dvh - .5rem);
+  overflow: auto; padding: .625rem .825rem; border-radius: .45rem;
+  color: var(--paper); background: var(--ink); font-size: .875rem; font-weight: 450; line-height: 1.45;
+}
+@media (pointer: coarse) { button.info-button, .provider-card button.info-button { width: 2rem; height: 2rem; } }
+@media (forced-colors: active) { .info-tooltip { border: 1px solid CanvasText; } }

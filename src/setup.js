@@ -108,6 +108,7 @@ export async function createSetup({
     '/setup/appearance.js': new URL(import.meta.resolve('@dustwave/admin-shell/appearance-browser')),
     '/setup/film-embed.js': new URL('./film-embed.js', import.meta.url),
     '/setup/program-editor.js': new URL('../public/program-editor.js', import.meta.url),
+    '/setup/field-help.js': new URL('../public/field-help.js', import.meta.url),
     '/setup/dashboard.js': new URL('../public/setup-dashboard.js', import.meta.url),
     '/setup/thumbnail.js': new URL('../public/thumbnail.js', import.meta.url),
     '/setup/thumbnail-frame.js': new URL('./thumbnail-frame.js', import.meta.url),
