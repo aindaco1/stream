@@ -1,15 +1,24 @@
 import { Readable, addAbortSignal } from 'node:stream';
 import yazl from 'yazl';
-import { infoFields } from './film-embed.js';
+import { creditText, infoFields } from './film-embed.js';
 
 // Only display metadata crosses the iframe boundary. Source bindings stay in the catalog.
 export function programPresentation(spec, fields = infoFields) {
+  function selectedInfo(info) {
+    const selected = Object.fromEntries(fields.filter(field => info?.[field.name]).map(field => [field.name, info[field.name]]));
+    if (Array.isArray(selected.credits)) {
+      // Already-open players can still read the original plain-text field.
+      selected.creditEntries = selected.credits;
+      selected.credits = creditText(selected.creditEntries);
+    }
+    return selected;
+  }
   return {
     ...(spec.curator && fields.some(field => field.name === 'byline') && {curator: spec.curator}),
     title: spec.title, revision: spec.revision, previewId: spec.previewId,
     lineup: spec.lineup.map(({ id, role, title, duration, info, thumbnail, size, extension }) => ({
       id, role, title, duration, size, extension, thumbnail: Boolean(thumbnail),
-      info: Object.fromEntries(fields.filter(field => info?.[field.name]).map(field => [field.name, info[field.name]]))
+      info: selectedInfo(info)
     }))
   };
 }

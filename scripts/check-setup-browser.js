@@ -120,6 +120,17 @@ async function checkFieldHelp(section) {
   assert.deepEqual(missing, [], 'Every field, including optional fields, has its own description');
 }
 
+async function checkBillingWidth(frame) {
+  const billing = frame.locator('.film-credits').first();
+  await billing.waitFor();
+  const fits = await billing.evaluate(block => {
+    const width = element => element.getBoundingClientRect().width;
+    return Math.abs(width(block) - width(block.closest('.program-entry, .details'))) <= 2 &&
+      getComputedStyle(block).whiteSpace === 'normal';
+  });
+  assert.ok(fits, 'Credits wrap across the full available width of the film or program entry');
+}
+
 async function checkOverviewHelp(page) {
   const overview = page.locator('#overview');
   const breakdown = overview.locator('.analytics-breakdown');
@@ -657,6 +668,7 @@ async function checkProgramEditor(page) {
   await programFrame.locator('body[data-poster=broadside] .poster-head #film-title').waitFor();
   await programFrame.getByText('Curated by Maya & Lee', {exact:true}).waitFor();
   await programFrame.getByText('A film by Ada & Jo', {exact:true}).waitFor();
+  await checkBillingWidth(programFrame);
   await card.getByRole('checkbox', {name:'Bylines'}).uncheck();
   await programFrame.getByText('Curated by Maya & Lee', {exact:true}).waitFor({state:'detached'});
   assert.equal(await programFrame.locator('.member-byline').count(), 0);
@@ -913,7 +925,9 @@ try {
         const summary = page.locator('.dashboard-film > summary');
         await summary.focus();
         await summary.press('Enter');
-        const credits = page.getByRole('textbox', { name: 'Credits', exact: true });
+        const billing = page.locator('.credit-editor');
+        const rows = billing.locator('.credit-row');
+        const credits = rows.first().getByRole('textbox', { name: 'Name or credit', exact: true });
         await credits.fill('Directed by <Ada>');
         await summary.press('Space');
         assert.ok(await credits.isHidden());
@@ -958,18 +972,30 @@ try {
         await page.getByRole('button', { name: 'Copy embed code' }).click();
         await page.locator('.copy-status').filter({ hasText: /copied|selected/ }).waitFor();
         await page.getByRole('textbox', { name: 'A film by', exact: true }).fill('Ada & Jo');
-        await page.getByRole('textbox', { name: 'Credits', exact: true }).fill('Camera and sound by Bea');
+        await credits.fill('Bea');
+        await rows.first().getByLabel('Role').fill('Camera and sound by');
+        await billing.getByRole('button', {name:'Add credit'}).click();
+        await rows.last().getByLabel('Role').fill('Desert field recordings');
+        await rows.last().getByLabel('Name or credit').fill('Mesa & Co.');
+        await rows.last().getByRole('button', {name:'Move credit up'}).click();
+        assert.equal(await credits.inputValue(), 'Mesa & Co.');
+        await billing.getByRole('button', {name:'Add credit'}).click();
+        await rows.last().getByRole('button', {name:'Remove'}).click();
+        assert.equal(await rows.count(), 2);
         await page.getByRole('button', { name: 'Save film details' }).click();
-        await frame.getByText('Camera and sound by Bea', { exact: true }).waitFor();
+        await frame.getByText('Mesa & Co.', {exact:true}).waitFor();
+        assert.deepEqual(await frame.locator('.credit-role').allTextContents(), ['Desert field recordings','Camera and sound by']);
+        assert.deepEqual(await rows.locator('input[name=creditName]').evaluateAll(inputs => inputs.map(i => i.value)), ['Mesa & Co.','Bea']);
         assert.equal(await sharing.locator('iframe').getAttribute('src'), embedUrl);
         await sharing.getByRole('checkbox', {name:'A film by'}).check();
         await frame.getByText('A film by Ada & Jo', {exact:true}).waitFor();
         await sharing.getByRole('checkbox', {name:'A film by'}).uncheck();
         await stylePicker.selectOption('marquee');
         await frame.locator('body[data-poster=marquee] .details #film-title').waitFor();
+        await checkBillingWidth(frame);
         if (evidence) await sharing.screenshot({ path: path.join(evidence, 'film-embed-builder.png') });
         await sharing.getByRole('checkbox', { name: 'Credits' }).uncheck();
-        await frame.getByText('Camera and sound by Bea').waitFor({state:'detached'});
+        await frame.locator('.film-credits').waitFor({state:'detached'});
         assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl + '?poster=marquee');
         const host = await context.newPage();
         try {
@@ -979,7 +1005,7 @@ try {
           assert.ok((await copies.first().boundingBox()).height >= 478, 'Copied code has a usable poster height');
           assert.equal(await copies.first().contentFrame().locator('body').getAttribute('data-poster'), 'broadside');
           assert.equal(await copies.last().contentFrame().locator('body').getAttribute('data-poster'), 'marquee');
-          await copies.nth(0).contentFrame().getByText('Camera and sound by Bea', { exact: true }).waitFor();
+          await copies.nth(0).contentFrame().getByText('Mesa & Co.', { exact: true }).waitFor();
           await copies.nth(1).contentFrame().getByRole('heading', { name: 'Projection test <first cut>' }).waitFor();
           assert.equal(await copies.nth(1).contentFrame().locator('.film-info').count(), 0);
         } finally { await host.close(); }

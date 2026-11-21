@@ -192,7 +192,7 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.match(await player('credits,message'), /For our crew/);
   assert.doesNotMatch(await player('credits,message'), /A desert film/);
   const details = (await player('synopsis,credits,message')).match(/<section class="film-info"[\s\S]*?<\/section>/)[0];
-  assert.match(details, /<p class="film-synopsis">A desert film\.<\/p><p class="film-message">For our crew\.<\/p><p class="film-credits">Camera &lt;A&gt; &amp; B<\/p>/);
+  assert.match(details, /<p class="film-synopsis">A desert film\.<\/p><p class="film-message">For our crew\.<\/p><p class="film-credits"><span class="credit"><span class="credit-name">Camera &lt;A&gt; &amp; B<\/span><\/span><\/p>/);
   assert.doesNotMatch(details, />Synopsis<|>Credits<|>Filmmaker message</);
   assert.doesNotMatch(await player('unknown'), /A desert film|For our crew|class="film-info"/);
   assert.doesNotMatch(await player(''), /class="film-info"/);
@@ -200,6 +200,15 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.match(await player('message'), /Updated message/);
   assert.equal((await ada.post('info', { ...info, message: '' })).status, 303);
   assert.doesNotMatch(await player('message'), /class="film-info"/);
+  assert.equal((await ada.post('info', {creditRole:'Sound',creditName:''})).status,422);
+  assert.equal((await ada.post('info', {creditRole:'A',creditName:'x'.repeat(1000)})).status,422);
+  assert.equal((await ada.post('info', {creditName:'no submitted role field'})).status,422);
+  assert.match(await player('credits'), /Camera &lt;A&gt;/);
+  assert.equal((await ada.post('info', {creditRole:'Foley & field recordings',creditName:'A <Studio>'})).status,303);
+  assert.equal((await ada.post('info', {message:'Separate edit.'})).status,303);
+  assert.match(await player('credits'), /class="credit-role">Foley &amp; field recordings<.*?class="credit-name">A &lt;Studio&gt;</);
+  assert.equal((await ada.post('info', {creditRole:'',creditName:''})).status,303);
+  assert.doesNotMatch(await player('credits'), /class="film-credits"/);
 });
 
 test('program editor protects private drafts, enforces ownership and rejects stale saves', async t => {

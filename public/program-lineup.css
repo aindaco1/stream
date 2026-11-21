@@ -11,7 +11,7 @@
 .program-entry .film-info p { margin: 0; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; }
 .program-entry .film-synopsis { max-width: 65ch; font-size: .875rem; line-height: 1.45; }
 .program-entry .film-message { max-width: 55ch; padding: 0; border: 0; font: italic 1rem/1.4 Georgia, serif; }
-.program-entry .film-info .film-credits { justify-self: start; color: var(--muted); text-align: start; text-wrap: pretty;
+.program-entry .film-info .film-credits { justify-self: start; color: var(--muted); text-align: start; text-wrap: pretty; white-space: normal;
   font: 600 .75rem/1.45 'Avenir Next Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: .06em; }
 .program-list li[aria-current] .program-row-title { text-decoration: underline; text-underline-offset: .2em; }
 @container (min-width: 25rem) {

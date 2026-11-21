@@ -21,7 +21,7 @@ import { isProgramId, validRights } from './program-store.js';
 import { programRights, renderPrivateProgram, renderProgramEditor, submittedLineup } from './program-editor.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { escapeHtml, infoFields, posterChoice, selectedFields } from './film-embed.js';
+import { creditProblem, escapeHtml, infoFields, posterChoice, selectedFields } from './film-embed.js';
 import { filmSection, renderBucketAccess, renderDashboard, renderPlatformDashboard, renderSettingsPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
@@ -52,7 +52,7 @@ function signInPage(message, admin, siteKey, error = false) {
     { admin, signIn: true, turnstile: Boolean(siteKey) });
 }
 
-async function readForm(req, limit = 8192) {
+async function readForm(req, limit = 8192, repeatable = []) {
   if (req.headers['content-type']?.split(';')[0] !== 'application/x-www-form-urlencoded') throw new SetupError('Use the setup form.', 415);
   const chunks = [];
   let size = 0;
@@ -62,8 +62,13 @@ async function readForm(req, limit = 8192) {
     chunks.push(chunk);
   }
   const fields = new URLSearchParams(Buffer.concat(chunks).toString());
+  const data = Object.fromEntries(fields);
+  for (const name of repeatable) {
+    if (fields.has(name)) data[name] = fields.getAll(name);
+    fields.delete(name);
+  }
   if ([...fields.keys()].length !== new Set(fields.keys()).size) throw new SetupError('Submit one value for each field.');
-  return Object.fromEntries(fields);
+  return data;
 }
 
 function priceForm(data) {
@@ -468,7 +473,8 @@ export async function createSetup({
     busy.add(owner);
     let editedFilm;
     try {
-      const data = callback ? {} : await readForm(req, path === '/setup/dashboard/info' ? 32768 : 8192);
+      const data = callback ? {} : path === '/setup/dashboard/info'
+        ? await readForm(req, 32768, ['creditRole', 'creditName']) : await readForm(req);
       if (!callback && data.csrf !== session.csrf) return reject(403, 'Reload the page before submitting this form.');
       if (path === '/setup/program/create') {
         if (store.programLibrary(owner, null).length < 2) return dashboard(422, 'Save at least two films to create a program.');
@@ -577,7 +583,21 @@ export async function createSetup({
         if (path === '/setup/dashboard/info') {
           const info = {};
           for (const { name, label, limit } of infoFields) {
-            const value = (data[name] ?? saved.info?.[name] ?? '').replace(/\r\n?/g, '\n').trim();
+            if (name === 'credits' && (data.creditRole || data.creditName)) {
+              if (data.credits !== undefined || data.creditRole?.length !== data.creditName?.length)
+                throw new SetupError('Submit one role and name field for each credit.', 422);
+              const entries = data.creditName.map((name, i) => ({role:data.creditRole[i].trim(), name:name.trim()}))
+                .filter(entry => entry.name || entry.role);
+              const problem = creditProblem(entries, limit);
+              if (problem) throw new SetupError(problem, 422);
+              info.credits = entries.length ? entries : '';
+              continue;
+            }
+            if (data[name] === undefined) {
+              info[name] = saved.info?.[name] ?? '';
+              continue;
+            }
+            const value = data[name].replace(/\r\n?/g, '\n').trim();
             if (value.length > limit || (name === 'byline' && /[\n\t]/u.test(value)) || /[\u0000-\u0008\u000b-\u001f\u007f]/u.test(value)) {
               throw new SetupError(`Enter up to ${limit} characters of plain text for ${label.toLowerCase()}.`, 422);
             }

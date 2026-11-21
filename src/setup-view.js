@@ -7,7 +7,7 @@ import { faqLink, siteFooter } from './site-frame.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
-import { embedLayout, escapeHtml, iframeCode, infoFields, posterChoice, posterStyles, selectedFields } from './film-embed.js';
+import { creditEntries, embedLayout, escapeHtml, iframeCode, infoFields, posterChoice, posterStyles, selectedFields } from './film-embed.js';
 
 export function renderStripeCountryForm(csrf, mode) {
   const options = payoutCountryOptions.map(({ code, label }) => `<option value="${code}">${escapeHtml(label)}</option>`).join('');
@@ -284,8 +284,27 @@ export function renderPlatformDashboard(csrf, report, metricsOnly = false) {
       ${paging}</section>`, { admin: true });
 }
 
+function creditEditor(film, limit) {
+  const helpId = 'credits-help-' + escapeHtml(film.id);
+  const entries = creditEntries(film.info?.credits);
+  function row({role, name}) {
+    return `<div class="credit-row">
+      <label>Role <small>(optional)</small><input name="creditRole" maxlength="${limit}" aria-describedby="${helpId}" value="${escapeHtml(role)}" placeholder="Music by"></label>
+      <label>Name or credit<input name="creditName" maxlength="${limit}" aria-describedby="${helpId}" value="${escapeHtml(name)}" placeholder="Name or names"></label>
+      <div class="credit-actions" hidden>
+        <button type="button" class="secondary" data-credit-action="up" aria-label="Move credit up" title="Move credit up">↑</button>
+        <button type="button" class="secondary" data-credit-action="down" aria-label="Move credit down" title="Move credit down">↓</button>
+        <button type="button" class="secondary" data-credit-action="remove">Remove</button>
+      </div></div>`;
+  }
+  return `<fieldset class="credit-editor" data-limit="${limit}"><legend data-help-id="${helpId}" data-field-help="Enter any role and the name, group or wording to credit. A role is optional. Credits appear in the order you choose and wrap to fit each poster. Up to ${limit} characters total.">Credits</legend>
+    <div class="credit-rows">${entries.map(row).join('')}${row({role:'',name:''})}</div>
+    <button type="button" class="secondary add-credit" hidden>Add credit</button>
+    <noscript>Save film details to add another credit. Clear both fields to remove one.</noscript></fieldset>`;
+}
+
 function filmInfoEditor(film, csrf, selection, style, saved) {
-  const fields = infoFields.map(({ name, label, limit }) =>
+  const fields = infoFields.map(({ name, label, limit }) => name === 'credits' ? creditEditor(film, limit) :
     `<div><label for="${escapeHtml(film.id)}-${name}">${label}</label>
       ${name === 'byline'
         ? `<input id="${escapeHtml(film.id)}-byline" name="byline" maxlength="${limit}" placeholder="Director’s name or names" value="${escapeHtml(film.info?.byline)}">`

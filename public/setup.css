@@ -188,6 +188,20 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
   .info-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .info-fields > :first-child, .info-fields > :last-child { grid-column: 1 / -1; }
 }
+.credit-editor { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 0; border: 0; container-type: inline-size; }
+.credit-editor legend { padding: 0; font-weight: 650; }
+.credit-rows { display: grid; gap: .75rem; margin: .4rem 0 .75rem; }
+.credit-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; align-items: end; gap: .5rem; }
+.credit-row label { min-width: 0; }
+.credit-row input { width: 100%; }
+.credit-row small { font-weight: 400; }
+.credit-editor [hidden] { display: none; }
+.credit-actions { display: flex; gap: .25rem; }
+.credit-actions button { padding-inline: .6rem; }
+@container (max-width: 34rem) {
+  .credit-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+  .credit-actions { grid-column: 1 / -1; }
+}
 .film-info-editor textarea { width: 100%; resize: vertical; }
 .embed-options { min-width: 0; padding: 0; border: 0; }
 .embed-options legend { padding: 0; font-weight: 650; }

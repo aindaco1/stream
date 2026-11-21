@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { streamProgramArchive, programPresentation } from '../src/program-delivery.js';
 import { buffer } from 'node:stream/consumers';
-import { renderProgramEntry, selectedFields } from '../src/film-embed.js';
+import { creditEntries, renderProgramEntry, selectedFields } from '../src/film-embed.js';
 
 function original(title, data) {
   return { title, extension:'mkv', size:data.length, async *stream() { yield Buffer.from(data); } };
@@ -41,6 +41,23 @@ test('the lineup exposes only display data and selected filmmaker details', () =
   ]},[{name:'synopsis'}]);
   assert.deepEqual(result.lineup[0].info,{synopsis:'a synopsis'});
   assert.ok(!JSON.stringify(result).includes('secret'));
+});
+
+test('existing credits recognize a billing label and keep unfamiliar text and punctuation intact', () => {
+  assert.deepEqual(creditEntries('Dir. by R. Barela\r\nDesert field recordings: Mesa: West & Co.\n\nStand By Me'), [
+    {role:'Dir. by', name:'R. Barela'}, {role:'Desert field recordings:', name:'Mesa: West & Co.'},
+    {role:'', name:'Stand By Me'}
+  ]);
+});
+
+test('program credits retain a text fallback and omit both forms when excluded', () => {
+  const credits = [{role:'Music by',name:'Ana & Jo'},{role:'',name:'Mesa Radio'}];
+  const program = {lineup:[{duration:30,info:{credits}}]};
+  const [entry] = programPresentation(program, selectedFields('credits')).lineup;
+  assert.equal(entry.info.credits, 'Music by Ana & Jo Mesa Radio');
+  assert.deepEqual(entry.info.creditEntries, credits);
+  assert.deepEqual(programPresentation(program, []).lineup[0].info, {});
+  assert.match(renderProgramEntry(entry, selectedFields('credits')), /class="credit-role">Music by<.*class="credit-name">Ana &amp; Jo</);
 });
 
 test('program entries display selected filmmaker text as escaped text and round partial seconds', () => {

@@ -48,11 +48,27 @@ body[data-poster=marquee] .details .film-info { justify-items: center; }
 body[data-poster] .details .film-synopsis { max-width: 43ch; font: 1.05rem/1.45 var(--serif); color: var(--ink); }
 body[data-poster=broadside] .details .film-synopsis { font: 700 1.16rem/1.25 var(--sans); letter-spacing: -.025em; }
 body[data-poster] .details .film-message { padding: 0; border: 0; font: italic .98rem/1.4 var(--serif); color: var(--muted); }
-body[data-poster] .details .film-credits {
-  justify-self: inherit; max-width: 52ch; padding-top: .55rem; border-top: 1px solid var(--rule);
-  color: var(--ink); font: 600 .8rem/1.45 "Arial Narrow", Arial, sans-serif; letter-spacing: .055em;
+/* A billing block uses the text width of the poster. Each role travels with
+   its names when space permits; unusually long credits can wrap inside. */
+body[data-poster] .film-info .film-credits {
+  width: 100%; min-width: 0; max-width: none; justify-self: stretch; padding-top: .65rem;
+  border-top: 1px solid var(--rule); color: var(--ink); white-space: normal;
+  text-align: center; text-wrap: balance; text-transform: uppercase;
+  font: 700 .95rem/1.4 "Avenir Next Condensed", "Arial Narrow", Arial, sans-serif; letter-spacing: .025em;
 }
-body[data-poster=broadside] .details .film-credits { width: 100%; max-width: none; text-align: start; border-top: 3px solid; }
+body[data-poster] .credit { display: inline-block; vertical-align: baseline; max-width: 100%; margin-inline: .16em; overflow-wrap: anywhere; }
+body[data-poster] .credit-role { color: var(--muted); font-size: .8em; font-weight: 500; letter-spacing: .055em; }
+body[data-poster=broadside] .film-info .film-credits {
+  border-top: 3px solid var(--ink); text-align: start; text-wrap: wrap;
+  font: 800 .875rem/1.55 var(--sans); letter-spacing: .015em;
+}
+body[data-poster=broadside] .credit { margin-inline: 0 .45em; }
+body[data-poster=broadside] .credit-role { font-size: .875em; text-transform: none; letter-spacing: normal; }
+body[data-poster] .program-entry:has(.film-credits) .film-info { display: contents; }
+body[data-poster] .program-entry .film-info > p { grid-column: 1 / -1; }
+@container (min-width: 25rem) {
+  body[data-poster] .program-entry:has(.program-still) .film-info > p:not(.film-credits) { grid-column: 1; }
+}
 body[data-poster]:not(.paying) :is(#play, #rent, #buy, #download button, #restore-form button, #redeem-link, #copy-link, #refresh-program, #check-payment) {
   border: 1px solid var(--ink); border-radius: 2px; color: var(--paper); background: var(--ink);
 }

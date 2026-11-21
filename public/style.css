@@ -231,6 +231,8 @@ body.paying #status { color: var(--pay-muted); padding: 0 0 .75rem; margin: 0; }
   font: 600 .8125rem/1.25 'Avenir Next Condensed', 'Arial Narrow', 'Roboto Condensed', sans-serif;
   text-transform: uppercase; letter-spacing: .055em; text-align: center; text-wrap: balance;
 }
+.film-info .film-credits { white-space: normal; }
+.credit-role { font-size: .85em; font-weight: normal; }
 @media (min-width: 34rem) {
   .film-info:has(.film-synopsis):has(.film-message) { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
   .film-synopsis + .film-message { padding-inline-start: .875rem; border-inline-start: 1px solid #666; }

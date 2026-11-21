@@ -37,11 +37,43 @@ export function iframeCode({ src, height }, title, responsive = true) {
   return `<iframe src="${escapeHtml(src)}" title="${escapeHtml(title)}" width="640" height="${height}" ${responsive ? `style="${posterFrameStyle(height)}" ` : ''}loading="lazy" allow="autoplay; payment; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
 }
 
+// Recognize explicit role labels in older free-form credits. Keep unfamiliar
+// wording in one piece so it can be edited without losing any part of a name.
+const legacyCredit = /^((?:dir\.|directed|written(?: and directed)?|produced|edited|music|sound|cinematography|photography) by|[^:]+:)\s+(.+)$/iu;
+export function creditEntries(credits) {
+  if (Array.isArray(credits)) return credits;
+  return (credits || '').split(/\r\n?|\n/).map(line => line.trim()).filter(Boolean)
+    .map(line => {
+      const match = legacyCredit.exec(line);
+      return match ? {role:match[1], name:match[2]} : {role:'', name:line};
+    });
+}
+
+export function creditText(entries) {
+  return entries.map(({role, name}) => role ? role + ' ' + name : name).join(' ');
+}
+
+export function creditProblem(entries, limit) {
+  if (entries.some(({role, name}) => /[\u0000-\u0008\u000a-\u001f\u007f]/u.test(role + name)))
+    return 'Enter each credit as plain text on one line.';
+  if (entries.some(({role, name}) => role && !name))
+    return 'Add a name or credit beside each role.';
+  return creditText(entries).length > limit ? `Use up to ${limit} characters across all credits.` : '';
+}
+
+function renderCredits(credits) {
+  const items = creditEntries(credits).map(({role, name}) => {
+    const label = role ? `<span class="credit-role">${escapeHtml(role)}</span> ` : '';
+    return `<span class="credit">${label}<span class="credit-name">${escapeHtml(name)}</span></span>`;
+  });
+  return items.length ? `<p class="film-credits">${items.join(' ')}</p>` : '';
+}
+
 export function renderFilmInfo(info, fields) {
   const visible = ['synopsis', 'message', 'credits'].filter(name =>
     info?.[name] && fields.some(field => field.name === name));
   if (!visible.length) return '';
-  const paragraphs = visible.map(name =>
+  const paragraphs = visible.map(name => name === 'credits' ? renderCredits(info.creditEntries ?? info.credits) :
     `<p class="film-${name}">${escapeHtml(info[name])}</p>`);
   return '<section class="film-info" aria-label="About the film">' + paragraphs.join('') + '</section>';
 }

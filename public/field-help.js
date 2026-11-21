@@ -5,7 +5,6 @@ const fieldHelp = {
   previewSeconds: 'How much viewers can watch for free before checkout. Try 10 seconds to start, or 0 to show the price right away. The limit is 180 seconds or one second less than the preview video, whichever is shorter.',
   screenerWatermark: 'Turn this on for a private screener to show a brief, anonymous rental code each minute. Leave it off for a clean picture.',
   synopsis: 'Give viewers a sense of the story. One or two sentences usually fit well beside the player.',
-  credits: 'List cast and crew with their roles. You can keep the director here or use “A film by” to show that name above the title.',
   byline: 'Enter the name or names to print after “A film by.” Leave this blank if the director is already listed in Credits.',
   curator: 'Enter the name or names to print after “Curated by” on the program poster. Each film keeps its own director credit.',
   poster: 'Choose Midnight Marquee for a dark theatrical poster or Festival Broadside for bold type on paper. The style applies to this embed.',
@@ -59,8 +58,7 @@ function explanation(control) {
 }
 
 let sequence = 0;
-function helpButton(name, text, control) {
-  const id = 'field-help-' + ++sequence;
+function helpButton(name, text, control, id = 'field-help-' + ++sequence) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'info-button';
@@ -90,7 +88,7 @@ for (const metric of document.querySelectorAll('[data-field-help]')) {
   const lastSpace = label.lastIndexOf(' ') + 1;
   const end = document.createElement('span');
   end.className = 'metric-label-end';
-  end.append(label.slice(lastSpace), helpButton(label, metric.dataset.fieldHelp));
+  end.append(label.slice(lastSpace), helpButton(label, metric.dataset.fieldHelp, null, metric.dataset.helpId));
   metric.replaceChildren(label.slice(0,lastSpace), end);
 }
 for (const control of document.querySelectorAll('main input:not([type=hidden]), main select, main textarea')) {
