@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
+import { streamSender, sendStreamEmail, mailbox } from './stream-email.js';
+import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { localPreviewPort } from './config.js';
@@ -31,15 +35,21 @@ class SetupError extends Error {
   constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; }
 }
 
-function signInPage(message = '', admin = false) {
+function signInPage(message, admin, siteKey, error = false) {
   const title = admin ? 'Super admin sign-in' : 'Filmmaker sign-in';
-  const feedback = message ? '<p role="alert">' + escapeHtml(message) + '</p>' : '';
-  const instructions = admin ? 'Open your private admin invitation or enter its one-time code.' :
-    'Open your private Stream invitation, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.';
-  return workspacePage(title, null, `<h1>${title}</h1>${feedback}<p>${instructions}</p>
-    <form method="post" action="${admin ? '/setup/admin/sign-in' : '/setup/sign-in'}"><label>Invitation code
-    <input name="code" type="password" required autocomplete="one-time-code" maxlength="64"></label>
-    <button type="submit">${admin ? 'Open platform analytics' : 'Open settings'}</button></form>`, { admin });
+  const path = admin ? '/setup/admin/sign-in' : '/setup/sign-in';
+  const feedback = message ? `<p class="feedback${error ? ' error' : ''}" role="${error ? 'alert' : 'status'}">${escapeHtml(message)}</p>` : '';
+  return workspacePage(title, null, `<section class="sign-in-panel"><h1>${title}</h1>${feedback}
+    <div data-request-link>${siteKey ? `<form method="post" action="${path}/request">
+      <p>Enter the email address linked to your ${admin ? 'admin account' : 'filmmaker account'}. We’ll email you a link that works once and expires in 15 minutes.</p>
+      <label>Email address<input type="email" name="email" autocomplete="email" inputmode="email" required maxlength="254"></label>
+      <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}" data-action="stream_${admin ? 'admin' : 'filmmaker'}" data-size="compact"></div>
+      <button type="submit">Email me a sign-in link</button></form>` : '<p>Email sign-in is currently unavailable. You can still open a private invitation.</p>'}</div>
+    <form method="post" action="${path}" data-exchange hidden><input type="hidden" name="code">
+      <p>Your private link is ready. Continue to open your ${admin ? 'platform analytics' : 'filmmaker workspace'}.</p>
+      <button type="submit">${admin ? 'Open platform analytics' : 'Open workspace'}</button></form>
+    <a href="${admin ? '/setup/sign-in' : '/setup/admin/sign-in'}">${admin ? 'Filmmaker sign-in' : 'Super admin sign-in'}</a></section>`,
+    { admin, signIn: true, turnstile: Boolean(siteKey) });
 }
 
 async function readForm(req, limit = 8192) {
@@ -100,11 +110,13 @@ function bucketForm(data) {
 
 export async function createSetup({
   directory = join(operatorDirectory(), 'filmmakers'), stripe, viewerCheckout, env = process.env,
-  sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm, thumbnailFetch = fetch, uploadFetch = fetch
+  sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm, thumbnailFetch = fetch, uploadFetch = fetch, verifyChallenge = verifyTurnstile, mailFetch = fetch
 } = {}) {
   const style = await readFile(new URL('../public/setup.css', import.meta.url));
   const darkStyle = await readFile(new URL('../public/setup-dark.css', import.meta.url));
   const scripts = new Map(await Promise.all(Object.entries({
+    '/setup/turnstile-size.js': new URL(import.meta.resolve('@dustwave/admin-shell/turnstile-browser')),
+    '/setup/sign-in.js': new URL('../public/sign-in.js', import.meta.url),
     '/setup/appearance.js': new URL(import.meta.resolve('@dustwave/admin-shell/appearance-browser')),
     '/setup/film-embed.js': new URL('./film-embed.js', import.meta.url),
     '/setup/program-editor.js': new URL('../public/program-editor.js', import.meta.url),
@@ -118,6 +130,8 @@ export async function createSetup({
     '/setup/tabs.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs')),
     '/setup/tabs-browser.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs-browser'))
   }).map(async ([route, file]) => [route, await readFile(file)])));
+  const from = streamSender(env);
+  const siteKey = from && env.STREAM_TURNSTILE_SECRET_KEY && env.STREAM_TURNSTILE_SITE_KEY;
   const store = openSetupStore(directory);
   const thumbnails = createThumbnails(store, thumbnailFetch);
   const uploads = createFilmUploads(store, { fetchImpl: uploadFetch });
@@ -173,17 +187,41 @@ export async function createSetup({
     if (get && path === '/setup/style.css') return send(200, 'text/css', style, commonHeaders);
     if (get && path === '/setup/dark.css') return send(200, 'text/css', darkStyle, commonHeaders);
     if (get && scripts.has(path)) return send(200, 'text/javascript', scripts.get(path), commonHeaders);
-    if (get && path === '/setup/sign-in.js') {
-      return send(200, 'text/javascript', "const code=location.hash.slice(1); if(code){history.replaceState(null,'',location.pathname); if(/^[\\w-]{43}$/.test(code)) document.querySelector('[name=code]').value=code;}", commonHeaders);
-    }
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
+    if (get && path === '/setup/home') return redirect(session ? '/setup/dashboard' : '/setup/faq');
+    if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(), { faq: true, admin }));
+    const signIn = (status, message = '', error = false) => html(status, signInPage(message, admin, siteKey, error), siteKey ? {
+      'Content-Security-Policy': csp.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com") +
+        "; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com"
+    } : {});
+    if (path === basePath + '/sign-in/request') {
+      if (method !== 'POST') return reject(405, 'Use the sign-in form.');
+      if (!siteKey) return signIn(503, 'Email sign-in is temporarily unavailable.', true);
+      let form;
+      try { form = await readForm(req); } catch { return signIn(400, 'Use the sign-in form.', true); }
+      if (!mailbox(form.email)) return signIn(400, 'Enter a valid email address.', true);
+      const challenge = await verifyChallenge(new Request(origin), env, form['cf-turnstile-response'],
+        { secretEnvNames: ['STREAM_TURNSTILE_SECRET_KEY'], action: 'stream_' + audience });
+      if (!challenge.ok) return signIn(challenge.status, 'The security check could not be verified. Please try again.', true);
+      const delivery = store.requestLogin(form.email, audience);
+      if (delivery) {
+        const home = env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + req.socket.localPort;
+        const link = home + basePath + '/sign-in#magic-link=' + delivery.code;
+        const payload = { from, to: [delivery.email], subject: admin ? 'Sign in to Stream administration' : 'Sign in to Stream',
+          text: 'Open this private link within 15 minutes to sign in to Stream.\n\n' + link + '\n\nIf you didn’t request this link, you can ignore this email.' };
+        void sendStreamEmail({ key: env.RESEND_API_KEY, payload, fetchImpl: mailFetch,
+          idempotencyKey: 'stream-login-' + createHash('sha256').update(delivery.code).digest('hex') })
+          .then(response => { if (!response.ok) throw new Error(); }).catch(() => console.error('Stream sign-in email delivery failed.'));
+      }
+      return signIn(200, 'If this email is linked to an account, a sign-in link will arrive shortly. Check your spam folder, too.');
+    }
     if (path === basePath + '/sign-in') {
-      if (get) return html(200, signInPage('', admin));
+      if (get) return signIn(200);
       if (method !== 'POST') return reject(405, 'Use the sign-in form.');
       try {
         const { code } = await readForm(req);
         const id = store.signIn(code || '', audience);
-        if (!id) return html(401, signInPage('This invitation has expired or was used. Request a fresh link from Stream.', admin));
+        if (!id) return signIn(401, 'This link has expired or was used. Request a fresh sign-in link.', true);
         return redirect(admin ? basePath : '/setup/settings', { 'Set-Cookie': cookie(id, admin ? 12 * 3600 : 14 * 86400) });
       } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
     }
@@ -210,7 +248,7 @@ export async function createSetup({
     const preview = previewPattern.exec(path);
     if (!session) {
       if (get && (path === '/setup' || path === '/setup/dashboard' || path === '/setup/settings' || path === '/setup/dashboard/new')) return redirect('/setup/sign-in');
-      if (get && callbackPattern.test(path)) return html(401, signInPage('Your Stream session has ended. Sign in again and continue from the Stripe card.'));
+      if (get && callbackPattern.test(path)) return signIn(401, 'Your Stream session has ended. Sign in again and continue from the Stripe card.', true);
       return reject(401, 'Sign in to your filmmaker workspace.');
     }
     if (get && path === '/setup') return redirect('/setup/settings');

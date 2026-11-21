@@ -1,17 +1,10 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { classifyResendFailure } from '@dustwave/worker-core/resend';
-import { prepareResendEmail } from '@dustwave/worker-core/email';
+import { mailbox, streamSender, sendStreamEmail } from './stream-email.js';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const minute = 60_000;
-
-function mailbox(value) {
-  if (typeof value !== 'string' || value.length > 254) return;
-  const email = value.trim();
-  const match = /^([^\s@<>,;:"\\]+)@([a-z\d.-]+\.[a-z]{2,})$/i.exec(email);
-  if (match && !/[\x00-\x1f\x7f]/.test(value)) return match[1] + '@' + match[2].toLowerCase();
-}
 
 // Only the address fingerprint, token digests and play position persist.
 // The mailbox supplied on a restore request is used for that delivery only.
@@ -72,30 +65,24 @@ export function recoveryStore(db, key) {
 }
 
 export function createViewerRecovery({ store, env = process.env, fetchImpl = fetch }) {
-  if (!env.STREAM_RECOVERY_FROM || !env.RESEND_API_KEY) return;
-  const sender = env.STREAM_RECOVERY_FROM.trim();
-  const address = mailbox(sender.match(/^[^<>\r\n]*<([^<>\r\n]+)>$/u)?.[1] ?? sender);
-  if (!address) throw new Error('STREAM_RECOVERY_FROM must contain one verified sender address.');
-  const from = `Stream <${address}>`;
+  const from = streamSender(env);
+  if (!from) return;
   return {
     request(offer, address, origin) {
       if (env.STREAM_RECOVERY_TEST_TO && mailbox(address) !== mailbox(env.STREAM_RECOVERY_TEST_TO)) return;
       const delivery = store.reserveRecovery(offer, address);
       if (!delivery) return;
       const link = origin + '/embed/' + encodeURIComponent(offer.id) + '#restore=' + delivery.code;
-      const payload = prepareResendEmail({ from, to: [delivery.email],
+      const payload = { from, to: [delivery.email],
         subject: 'Your Stream access link',
         text: 'You requested access to ' + offer.title + '. Open this private link within 15 minutes to continue watching.\n\n' +
-          link + '\n\nIf you did not request this email, you can ignore it.' });
+          link + '\n\nIf you did not request this email, you can ignore it.' };
       // A request gets the same public response for every address. Log delivery
       // failures without an address, film, order, request body or credential.
       const send = async () => {
-        const options = { method: 'POST', headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY,
-          'Content-Type': 'application/json', 'Idempotency-Key': 'stream-restore-' + digest(delivery.code) },
-          body: JSON.stringify(payload), redirect: 'error' };
         for (let attempt = 0; attempt < 3; attempt++) {
-          const response = await fetchImpl('https://api.resend.com/emails', { ...options, signal: AbortSignal.timeout(10000) })
-            .catch(() => null);
+          const response = await sendStreamEmail({ key: env.RESEND_API_KEY, payload, fetchImpl,
+            idempotencyKey: 'stream-restore-' + digest(delivery.code) }).catch(() => null);
           if (response?.ok) return;
           const failure = classifyResendFailure(response?.status || 0, { retryAfter: response?.headers.get('retry-after') });
           if (!failure.retryable || attempt === 2 || failure.retryAfterSeconds > 20) break;

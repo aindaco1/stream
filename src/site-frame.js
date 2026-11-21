@@ -1,5 +1,5 @@
-export function faqLink(current = false) {
-  return `<a href="/faq"${current ? ' aria-current="page"' : ''}>FAQ</a>`;
+export function faqLink(current = false, href = '/faq') {
+  return `<a href="${href}"${current ? ' aria-current="page"' : ''}>FAQ</a>`;
 }
 
 export function siteFooter(home) {

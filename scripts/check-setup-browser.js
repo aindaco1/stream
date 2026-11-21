@@ -108,9 +108,8 @@ async function checkAppearance(page, origin) {
 }
 
 async function signIn(page, origin, owner) {
-  await page.goto(origin + '/setup/sign-in');
-  await page.getByLabel('Invitation code').fill(setup.store.invite(owner));
-  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.goto(origin + '/setup/sign-in#' + setup.store.invite(owner));
+  await page.getByRole('button', { name: 'Open workspace' }).click();
   await page.getByRole('heading', { name: 'Settings', exact: true }).waitFor();
 }
 
@@ -123,10 +122,12 @@ async function checkFieldHelp(section) {
 
 async function checkOverviewHelp(page) {
   const overview = page.locator('#overview');
+  const breakdown = overview.locator('.analytics-breakdown');
+  assert.ok(await breakdown.locator('[data-stat="taxCollected"]').isVisible(), 'Tax and fees are visible in Overview');
+  await breakdown.locator('summary').click();
   const buttons = overview.getByRole('button', {name:/^Help for /});
   assert.deepEqual(await buttons.allTextContents(),
     ['Paid plays','Avg. watch time','Rentals','Purchases','Net Revenue'].map(label => 'Help for ' + label));
-  const breakdown = overview.locator('.analytics-breakdown');
   const [card, toggle] = await Promise.all([overview.locator('.analytics-summary').boundingBox(), breakdown.locator('summary').boundingBox()]);
   assert.ok(Math.abs(card.width - toggle.width) < 1, 'The disclosure fills the available width');
   await breakdown.locator('summary').click({position:{x:toggle.width - 8, y:toggle.height / 2}});
@@ -167,7 +168,7 @@ async function checkTouchHelp(page) {
     const phone = await context.newPage();
     await phone.goto(page.url());
     const overview = phone.locator('#overview');
-    await overview.locator('.analytics-breakdown summary').tap();
+    assert.ok(await overview.locator('[data-stat="processingFees"]').isVisible());
     const trigger = overview.getByRole('button', {name:'Help for Stripe fees',exact:true});
     const tip = phone.getByRole('tooltip');
     await trigger.tap();
@@ -818,6 +819,10 @@ try {
         await page.goto(origin + '/setup/sign-in');
         await page.locator('header').getByRole('link', { name: 'FAQ', exact: true }).click();
         await page.getByRole('heading', { name: 'What does it cost?' }).waitFor();
+        assert.equal(await page.getByRole('heading', {level:2}).first().textContent(), 'How do I put a film on my site?');
+        assert.ok(await page.locator('header').getByRole('link', {name:'Sign in', exact:true}).isVisible());
+        assert.equal(await page.getByRole('combobox', {name:'Appearance'}).inputValue(), 'dark');
+        assert.ok(await page.evaluate(() => Math.abs(document.querySelector('.faq-intro').offsetWidth - document.querySelector('main').clientWidth) <= 1));
         const footer = page.getByRole('contentinfo');
         assert.equal(await footer.getByRole('link').count(), 1);
         assert.ok(await footer.getByText(/DUST WAVE/).isVisible());
@@ -840,6 +845,7 @@ try {
           await page.locator('#' + topic + ' a[href="/faq#' + topic + '"]').click();
           assert.equal(new URL(page.url()).hash, '#' + topic);
           assert.ok(await page.locator('section:target h2').isVisible());
+          assert.ok(await page.getByRole('button',{name:'Sign out'}).isVisible());
           await page.goBack();
         }
         await page.goto(origin + '/setup#payments');

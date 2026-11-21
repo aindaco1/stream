@@ -10,13 +10,16 @@ Viewers pay once in the embed. **Previous title** and **Next title** move throug
 
 ## Guided filmmaker setup
 
-Start Stream with `npm start` and give each pilot filmmaker their own sign-in link. In a second terminal, run:
+Start the workspace with `npm start`. The pilot is invite-only. The operator links an address to a new or existing account by its exact workspace name. Use the same name when enabling email sign-in for an existing filmmaker.
 
 ```sh
-npm run invite -- "Filmmaker name"
+npm run invite -- "Filmmaker name" --email filmmaker@example.org
+npm run invite -- --super-admin "Operator name" --email operator@example.org
 ```
 
-The filmmaker opens the link and selects **Open settings**. It expires after 30 minutes and can be used once. Their signed-in session lasts 14 days. For a returning filmmaker, issue another invite with the same unique name to reopen their workspace. The operator can use a private handoff to share the invitation. The default local link works on the Mac running Stream.
+The filmmaker opens `/setup/sign-in`, enters the enrolled email and completes the Cloudflare Turnstile check. The email link works once for 15 minutes. Selecting **Open workspace** starts a 14-day filmmaker session. Super admins use `/setup/admin/sign-in` and a separate 12-hour session. To issue a one-time invitation directly, omit `--email` and share the resulting 30-minute link privately.
+
+Configure a Managed Turnstile widget for the workspace hostname. Set `STREAM_TURNSTILE_SITE_KEY` and `STREAM_TURNSTILE_SECRET_KEY` on the workspace service, along with `RESEND_API_KEY` and the verified `STREAM_RECOVERY_FROM` sender. The server checks each email request with Cloudflare before issuing a link. Set `STREAM_PUBLIC_ORIGIN` to the workspace’s HTTPS origin for links that open from other devices. On a separate viewer service, set `STREAM_WORKSPACE_ORIGIN` to that workspace so FAQ and sign-in use the same session and appearance preference. Loopback links open on the Mac running the pilot. [Cloudflare server-side validation](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)
 
 1. **Connect Cloudflare R2.** Choose or create a dedicated private bucket in Cloudflare, then paste its dashboard URL into Storage settings. Create an **Object Read & Write** token limited to that bucket. Enter the token value or its access key pair and confirm the scope and encrypted storage. Stream checks the connection by writing and removing a small test object. Filmmakers with an existing read-only connection can enable uploads once in Storage settings. [Cloudflare R2 permissions and credentials](https://developers.cloudflare.com/r2/api/tokens/)
 2. **Get paid with Stripe.** To create a connected account, select your business country in Stream, then continue to Stripe for identity and payout details. You can sign in to Stripe to reuse eligible business details. If Stream offers **Connect my Stripe account**, select an eligible existing Standard business directly on Stripe. Return to Stream to see what is ready or needs attention. Both payment and payout capabilities must be active. You can upload and privately preview a film while Stripe reviews your information. Publish and start selling once Stripe is ready.
@@ -26,7 +29,7 @@ A filmmaker can set the rental and purchase prices for a film in setup. Leaving 
 
 **Settings** opens on Storage. Choose **Replace R2 key** to update access to the selected bucket, or **Use a different bucket** for future uploads. Storage and Payments link to their sections in the public FAQ at `/faq#storage` and `/faq#payments`, with setup guidance, fees and worked examples.
 
-Use the **🌓** appearance selector in the filmmaker header to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, setup and the dashboard.
+Use the **🌓** appearance selector in the filmmaker header to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, the FAQ, settings and the dashboard.
 
 ### Filmmaker dashboard
 
@@ -53,7 +56,7 @@ The setup and viewer services run on loopback and share the same private SQLite 
 | `STREAM_STATE_DIR` | Private state directory, outside the checkout and cloud sync. The `filmmakers/` subdirectory holds SQLite and its owner-only credential encryption key. Back up both privately. Run one filmmaker setup service and one viewer service per state directory on the same host. |
 | `STREAM_VIEWER_ORIGIN` | The public HTTPS viewer origin used in dashboard embed code when setup and playback use different hosts. Local setup defaults to the viewer at port 8793. |
 | `STREAM_LOCAL_PREVIEW_PORT` | Optional separate port on 127.0.0.1. Set the same value for the local setup and viewer services to let the dashboard preview films directly. Copied embeds continue to use the public viewer origin. |
-| `RESEND_API_KEY`, `STREAM_RECOVERY_FROM` | Enable viewer-requested access emails with a Resend key and verified sender address. Stream supplies the display name. Keep secrets in the viewer environment. On startup the service checks older active orders for their verified checkout address without emailing those viewers. |
+| `RESEND_API_KEY`, `STREAM_RECOVERY_FROM` | Enable viewer access emails and workspace sign-in emails with a Resend key and verified sender address. Stream supplies the display name. Keep secrets in the viewer environment. On startup the service checks older active orders for their verified checkout address without emailing those viewers. |
 | `STREAM_RECOVERY_TEST_TO` | Limit recovery mail to one exact recipient in a shared sandbox, such as `delivered@resend.dev`. |
 | `STRIPE_CONNECT_SECRET_KEY` | Stream’s server-side Connect platform key. Use a sandbox key for rehearsal. Filmmakers enter identity and bank information on Stripe. |
 | `STRIPE_CONNECT_CLIENT_ID` | Optional, mode-matching Standard OAuth client ID. Enable eligible existing-account connections in the Connect platform and register the exact `/setup/stripe/oauth` redirect on your origin. |

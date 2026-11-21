@@ -159,36 +159,37 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
       ])}`);
 }
 
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, signIn = false, signInHref = '/setup/sign-in', turnstile = false } = {}) {
   const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="same-origin">
-    <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/setup/style.css">
-    <link rel="stylesheet" href="/setup/dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
+    <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css">
+    <link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
     ${programPreview ? '<link rel="stylesheet" href="/program-lineup.css">' : ''}
-    <script src="/setup/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
+    <script src="/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
     <script type="module" src="/select-focus.js"></script>
     ${csrf ? '<script type="module" src="/setup/field-help.js"></script>' : ''}
-    ${!csrf ? '<script src="/setup/sign-in.js" defer></script>' : !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}
+    ${turnstile ? '<script src="/setup/turnstile-size.js" defer></script>' : ''}
+    ${signIn ? '<script src="/setup/sign-in.js" defer></script>' : csrf && !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}
     ${(builder || admin) && csrf ? '<script type="module" src="/setup/analytics-refresh.js"></script>' : ''}
     ${builder ? '<script type="module" src="/setup/dashboard.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${programEditor ? '<script type="module" src="/setup/program-editor.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>
     <body><a class="skip" href="#main">Skip to content</a>
-    <header class="masthead"><div class="bar"><strong class="brand">Stream</strong>
-      ${faqLink()}
+    <header class="masthead"><div class="bar"><a class="brand" href="${admin ? '/setup/admin' : '/'}" aria-label="Stream home">Stream</a>
+      ${faqLink(faq, csrf && admin ? '/setup/admin/faq' : '/faq')}
       <label class="appearance" title="Appearance"><span aria-hidden="true">🌓</span><select aria-label="Appearance" data-appearance-select>
         <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
       </select></label>
       ${csrf ? `<form method="post" action="${admin ? '/setup/admin/sign-out' : '/setup/sign-out'}">${hidden('csrf', csrf)}
-        <button class="sign-out" type="submit">Sign out</button></form>` : ''}</div>
-      ${csrf && !admin ? `<nav class="workspace-nav" aria-label="Filmmaker workspace"><div class="tab-bar">
-        <a href="/setup/dashboard"${dashboard ? current : ''}>Dashboard</a>
-        <a href="/setup/settings"${dashboard ? '' : current}>Settings</a>
+        <button class="sign-out" type="submit">Sign out</button></form>` : signIn ? '' : `<a href="${escapeHtml(signInHref)}">Sign in</a>`}</div>
+      ${csrf && !admin ? `<nav class="workspace-nav" aria-label="Workspace navigation"><div class="tab-bar">
+        <a href="/setup/dashboard"${dashboard && !faq ? current : ''}>Dashboard</a>
+        <a href="/setup/settings"${dashboard || faq ? '' : current}>Settings</a>
       </div></nav>` : ''}</header>
-    <main class="setup-shell" id="main" tabindex="-1">${content}</main>
-    ${siteFooter(admin ? '/setup/admin' : '/setup/dashboard')}</body></html>`;
+    <main class="setup-shell${faq ? ' filmmaker-help' : ''}" id="main" tabindex="-1">${content}</main>
+    ${siteFooter(admin ? '/setup/admin' : '/')}</body></html>`;
 }
 
 const primaryLabels = { plays: 'Paid plays', averageWatch: 'Avg. watch time', rentals: 'Rentals', purchases: 'Purchases', netRevenue: 'Net Revenue' };
@@ -204,6 +205,9 @@ function displayStat(stats, key) {
   if (key === 'averageWatch') {
     if (!stats.timedPlays) return '—';
     return formatDuration(Math.round(stats.watchSeconds / stats.timedPlays)) || '0 sec';
+  }
+  if ((key === 'filmTaxFees' || key === 'tipTaxFees') && stats.pendingTaxFees) {
+    return stats[key] ? usd.format(stats[key] / 100) + ' + pending' : 'Pending';
   }
   return moneyFields.has(key) ? usd.format(stats[key] / 100) : String(stats[key]);
 }
@@ -233,13 +237,13 @@ function statsList(stats, details = detailLabels, id = 'overview') {
   const list = labels => '<dl class="film-stats">' + Object.entries(labels).map(([key, label]) =>
     `<div data-stat="${key}"><dt data-field-help="${escapeHtml(explanations[key])}">${label}</dt><dd>${displayStat(stats, key)}</dd></div>`
   ).join('') + '</dl>';
-  const taxFee = stats.filmTaxFees ? ' − ' + displayStat(stats, 'filmTaxFees') + ' Stripe Tax fees' : '';
+  const taxFee = stats.filmTaxFees ? ' − ' + usd.format(stats.filmTaxFees / 100) + ' confirmed Stripe Tax fees' : '';
   const adjustmentNote = stats.paymentAdjustments > 0
     ? `<p class="hint net-calculation">${displayStat(stats, 'revenue')} revenue − ${displayStat(stats, 'processingFees')} Stripe fees` +
       `${taxFee} − ${usd.format(stats.paymentAdjustments / 100)} Stripe adjustment = <strong>${displayStat(stats, 'netRevenue')} net revenue</strong></p>`
     : '';
-  return `<div class="analytics-summary" data-report="${escapeHtml(id)}"${stats.estimatedOrders ? ' data-pending-fees' : ''}>${list(primaryLabels)}
-    <details class="analytics-breakdown"><summary>Viewing and sales breakdown</summary>${list(details)}${adjustmentNote}</details></div>`;
+  return `<div class="analytics-summary" data-report="${escapeHtml(id)}"${stats.estimatedOrders || stats.pendingTaxFees ? ' data-pending-fees' : ''}>${list(primaryLabels)}
+    <details class="analytics-breakdown"${id === 'overview' ? ' open' : ''}><summary>Viewing and sales breakdown</summary>${list(details)}${adjustmentNote}</details></div>`;
 }
 
 const analyticsGuide = '<p class="hint"><a href="/faq#dashboard-analytics">How these numbers are calculated</a></p>';

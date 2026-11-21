@@ -5,6 +5,7 @@ import { programStore, isProgramId } from './program-store.js';
 import { analyticsReports } from './analytics.js';
 import { bucketReader } from './r2-write.js';
 import { DatabaseSync } from 'node:sqlite';
+import { mailbox } from './stream-email.js';
 import { recoveryStore } from './viewer-recovery.js';
 import { StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
 import { filmPrices, rentalHours } from './prices.js';
@@ -59,6 +60,8 @@ export function openSetupStore(directory) {
     );
     CREATE TABLE IF NOT EXISTS platform_admins (id TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS invitations (digest TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS login_addresses (owner TEXT NOT NULL, audience TEXT NOT NULL, email TEXT NOT NULL,
+      lastSent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(owner,audience), UNIQUE(email,audience));
     CREATE TABLE IF NOT EXISTS sessions (digest TEXT PRIMARY KEY, owner TEXT NOT NULL, csrf TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS storage_drafts (owner TEXT PRIMARY KEY, config TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS claims (mode TEXT NOT NULL, account TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(mode, account));
@@ -186,23 +189,52 @@ export function openSetupStore(directory) {
     const clear = Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]);
     return { ...JSON.parse(row.config), ...JSON.parse(clear.toString('utf8')) };
   }
+  function ensureAccount(owner, audience) {
+    if (!['admin', 'filmmaker'].includes(audience)) throw new Error('Invalid sign-in audience.');
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9 ._@+-]{0,95}$/.test(owner)) throw new Error('Use a short, unique filmmaker name.');
+    if (audience === 'admin') sql('INSERT OR IGNORE INTO platform_admins(id) VALUES(?)').run(owner);
+    else sql('INSERT OR IGNORE INTO makers(id,draft) VALUES(?,?)').run(owner, JSON.stringify(newDraft()));
+  }
   const store = {
     ...programStore(db, transaction, (owner,id) => store.film(owner,id)),
     ...recoveryStore(db, key),
     ...analyticsReports(db),
     invite(owner, audience = 'filmmaker') {
-      if (!['admin', 'filmmaker'].includes(audience)) throw new Error('Invalid sign-in audience.');
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9 ._@+-]{0,95}$/.test(owner)) throw new Error('Use a short, unique filmmaker name.');
       const code = token();
       transaction(() => {
         const now = Date.now();
         sql('DELETE FROM invitations WHERE expires <= ? OR (owner = ? AND audience = ?)').run(now, owner, audience);
         sql('DELETE FROM sessions WHERE expires <= ?').run(now);
-        if (audience === 'admin') sql('INSERT OR IGNORE INTO platform_admins(id) VALUES(?)').run(owner);
-        else sql('INSERT OR IGNORE INTO makers(id,draft) VALUES(?,?)').run(owner, JSON.stringify(newDraft()));
+        ensureAccount(owner, audience);
         sql('INSERT INTO invitations(digest,owner,expires,audience) VALUES(?,?,?,?)').run(hash(code), owner, now + 30 * 60_000, audience);
       });
       return code;
+    },
+    enrollLogin(owner, audience, address) {
+      const email = mailbox(address)?.toLowerCase();
+      if (!email) throw new Error('Enter one valid sign-in email.');
+      transaction(() => {
+        ensureAccount(owner, audience);
+        sql('INSERT INTO login_addresses(owner,audience,email) VALUES(?,?,?) ON CONFLICT(owner,audience) DO NOTHING').run(owner,audience,email);
+        if (sql('SELECT email FROM login_addresses WHERE owner=? AND audience=?').get(owner,audience).email !== email) {
+          throw new Error('This account already has a different sign-in address.');
+        }
+      });
+    },
+    requestLogin(address, audience) {
+      const email = mailbox(address)?.toLowerCase();
+      if (!email) return;
+      return transaction(() => {
+        const now = Date.now();
+        const row = sql(`UPDATE login_addresses SET lastSent=? WHERE email=? AND audience=? AND lastSent<?
+          AND (SELECT count(*) FROM login_addresses WHERE lastSent>=?)<60 RETURNING owner`)
+          .get(now,email,audience,now-60_000,now-60_000);
+        if (!row) return;
+        const code = token();
+        sql('DELETE FROM invitations WHERE expires<=?').run(now);
+        sql('INSERT INTO invitations(digest,owner,expires,audience) VALUES(?,?,?,?)').run(hash(code),row.owner,now+15*60_000,audience);
+        return { email, code };
+      });
     },
     signIn(code, audience = 'filmmaker') {
       if (!/^[\w-]{43}$/.test(code)) return;

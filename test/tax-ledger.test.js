@@ -186,6 +186,9 @@ test('the itemized report matches the platform charge and deducts an inline tax 
   const included = row(ctx.platform,inline.intentId,'Tax','Automatic tax','0.11','usd',inline.chargeBalanceId);
   const load = (...rows) => importTaxFeeReport(ctx.store,ctx.platform,[headers,...rows].join('\n'));
   assert.equal(ctx.store.platformReport(null).total.pendingTaxFees,2);
+  const pendingReport = renderPlatformDashboard('csrf', ctx.store.platformReport(null), true);
+  assert.match(pendingReport, /data-report="overview" data-pending-fees/);
+  assert.match(pendingReport, />Stripe Tax fees<\/dt><dd>Pending<\/dd>/);
   assert.deepEqual(load(external.replace('0.1100','0.11').replace(ctx.platform,'acct_other'),
     included.replace(',Tax,Automatic tax,',',Payments,Card processing,')),{matched:0,recorded:0});
   for (const bad of [included.replace(',usd,',',eur,'),included.replace('0.11','-0.11'),included.replace('0.11','0.115'),external]) {

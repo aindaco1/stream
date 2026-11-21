@@ -237,6 +237,7 @@ body.paying #status { color: var(--pay-muted); padding: 0 0 .75rem; margin: 0; }
 }
 #restore-tools { border-block-start: 1px solid #393939; }
 #restore-tools summary { width: fit-content; min-height: 2.75rem; align-content: center; font-size: .8125rem; color: #bdbdbd; }
+#restore-tools[open] { padding-block-end: .5rem; }
 #restore-form { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; max-width: 32rem; }
 #restore-form label { flex: 1 1 12rem; }
 #restore-form button { font-size: .875rem; }

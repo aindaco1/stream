@@ -30,7 +30,7 @@ select[data-pointer-focus]:focus { outline: none; }
 .masthead { border-bottom: 1px solid var(--line); background: var(--surface); }
 .bar, main, .workspace-nav { width: var(--page-width); margin-inline: auto; }
 .bar { display: flex; flex-wrap: wrap; align-items: center; min-height: 4rem; padding-block: .5rem; gap: .5rem 1rem; }
-.brand { margin-inline-end: auto; font-size: 1.125rem; font-weight: 750; letter-spacing: -.035em; }
+.brand { text-decoration: none; margin-inline-end: auto; font-size: 1.125rem; font-weight: 750; letter-spacing: -.035em; }
 .bar .appearance { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .875rem; }
 :root:not([data-appearance-ready]) .appearance { display: none; }
 .bar .appearance select { margin: 0; width: auto; height: 2.75rem; font-size: 1rem; }
@@ -62,7 +62,8 @@ h2 { font-size: clamp(1.28rem, 4vw, 1.65rem); letter-spacing: -.035em; }
 @media (max-width: 899px) {
   .tab-bar:has(+ .dw-admin-mobile-tabs:not([hidden])) { display: none; }
   .dw-admin-mobile-tabs:not([hidden]) { display: grid; gap: .25rem; }
-  .workspace-nav .dw-admin-mobile-tabs { padding-bottom: .875rem; }
+  .workspace-nav .dw-admin-mobile-tabs { padding-bottom: .75rem; }
+  .workspace-nav .dw-admin-mobile-tabs__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .dw-admin-mobile-tabs__label { color: var(--muted); font-size: .875rem; }
   .dw-admin-mobile-tabs select { width: 100%; height: 2.75rem; margin: 0; }
 }
@@ -78,7 +79,7 @@ h2 { font-size: clamp(1.28rem, 4vw, 1.65rem); letter-spacing: -.035em; }
 details { border-block-start: 1px solid var(--line); }
 summary { cursor: pointer; padding-block: .625rem; min-height: 2.75rem; font-weight: 650; }
 summary::marker { color: var(--muted); }
-details[open] > :not(summary) + * { margin-block-start: .75rem; }
+details[open]:not(.dashboard-film) > :not(summary) + * { margin-block-start: .75rem; }
 ol, ul { padding-inline-start: 1.5rem; }
 li + li { margin-block-start: .5rem; }
 main form, .film-sharing, .field-stack { display: grid; gap: 1rem; min-width: 0; }
@@ -228,7 +229,7 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 }
 
 .filmmaker-help { display: grid; gap: 1.25rem; }
-.provider-card p, .filmmaker-help p { max-width: 72ch; }
+.provider-card p, .filmmaker-help section :is(p, ol) { max-width: 72ch; }
 .filmmaker-help section { display: grid; gap: .625rem; padding-block-start: 1.25rem; border-block-start: 1px solid var(--line); }
 .filmmaker-help h3 { font-size: 1.0625rem; margin-block-start: .5rem; }
 @media (min-width: 60rem) {
@@ -296,3 +297,8 @@ button.info-button:is(:hover, [aria-expanded=true]) { background: var(--subtle);
 }
 @media (pointer: coarse) { button.info-button, .provider-card button.info-button { width: 2rem; height: 2rem; } }
 @media (forced-colors: active) { .info-tooltip { border: 1px solid CanvasText; } }
+
+.sign-in-panel { display: grid; gap: 1rem; max-width: 35rem; }
+.sign-in-panel [hidden] { display: none; }
+.cf-turnstile { min-width: 0; }
+.filmmaker-help > .faq-intro { max-width: none; }

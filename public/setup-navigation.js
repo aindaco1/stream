@@ -2,7 +2,7 @@ import { mountAccessibleTabs, mountResponsiveTabSelect } from './tabs.js';
 
 const workspace = document.querySelector('.workspace-nav');
 const links = workspace.querySelectorAll('a[href]');
-const currentPage = workspace.querySelector('[aria-current="page"]').getAttribute('href');
+const currentPage = workspace.querySelector('[aria-current="page"]')?.getAttribute('href') || '';
 const pages = mountResponsiveTabSelect(workspace, {
   tabList: workspace.querySelector('.tab-bar'),
   tabs: links,
@@ -11,6 +11,11 @@ const pages = mountResponsiveTabSelect(workspace, {
   activeValue: currentPage,
   activate: path => location.assign(path)
 });
+if (!currentPage) {
+  const here = new Option(document.querySelector('.bar [aria-current="page"]').textContent, '', true, true);
+  here.disabled = true;
+  pages.select.prepend(here);
+}
 // A history traversal can restore a select's old form value from the page cache.
 window.addEventListener('pageshow', () => { pages.select.value = currentPage; });
 

@@ -1,3 +1,4 @@
+import { workspacePage } from './setup-view.js';
 import { createServer } from 'node:http';
 import { createCipheriv } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -26,6 +27,7 @@ const assets = new Map([
   ['/checkout.js', ['../public/checkout.js', 'text/javascript']],
   ['/payment.js', ['../public/payment.js', 'text/javascript']],
   ['/platform-tip.js', [import.meta.resolve('@dustwave/worker-core/platform-tip'), 'text/javascript']],
+  ['/appearance.js', [import.meta.resolve('@dustwave/admin-shell/appearance-browser'), 'text/javascript']],
   ['/filmmaker.css', ['../public/setup.css', 'text/css']],
   ['/filmmaker-dark.css', ['../public/setup-dark.css', 'text/css']],
   ['/dust-wave-square.webp', ['../public/dust-wave-square.webp', 'image/webp']],
@@ -129,11 +131,16 @@ const checkoutHeaders = {
   'X-Robots-Tag': 'noindex'
 };
 
-export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout, recovery, maxIndexes = 32 } = {}) {
+export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout, recovery, workspaceOrigin = process.env.STREAM_WORKSPACE_ORIGIN, maxIndexes = 32 } = {}) {
   if (!Number.isSafeInteger(maxIndexes) || maxIndexes < 1) throw new Error('A positive media index limit is required.');
   if (publicOrigin) {
     const url = new URL(publicOrigin);
     if (url.protocol !== 'https:' || url.origin !== publicOrigin) throw new Error('Set STREAM_PUBLIC_ORIGIN to an HTTPS origin.');
+  }
+  if (workspaceOrigin) {
+    const workspace = new URL(workspaceOrigin);
+    const local = workspace.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(workspace.hostname);
+    if (workspace.origin !== workspaceOrigin || !(workspace.protocol === 'https:' || local)) throw new Error('Use a workspace HTTPS or loopback origin.');
   }
   const connections = new Map();
   const receivers = airplayLeases();
@@ -203,15 +210,16 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         return await setup.handle(req, { path, origin, send, sendMp4 });
       }
       const read = req.method === 'GET' || req.method === 'HEAD';
+      if (setup && read && (path === '/' || path === '/faq')) {
+        return send(303, 'text/plain', '', { Location: path === '/' ? '/setup/home' : '/setup/faq' });
+      }
       if (path === '/faq') {
         if (!read) return fail(405);
-        const back = setup ? '<a href="/setup/dashboard">Filmmaker workspace</a>' : '<a href="/screening">Screening room</a>';
-        return send(200, 'text/html; charset=utf-8', `<!doctype html><html lang="en"><head><meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1"><title>FAQ · Stream</title>
-          <link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css"><link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)"></head>
-          <body><a class="skip" href="#main">Skip to content</a><header class="masthead"><div class="bar"><strong class="brand">Stream</strong>${back}${faqLink(true)}</div></header>
-          <main id="main" tabindex="-1" class="filmmaker-help">${renderFilmmakerFaq()}</main>${siteFooter(setup ? '/setup/dashboard' : '/screening')}</body></html>`,
-          { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
+        if (workspaceOrigin && (!publicOrigin || workspaceOrigin.startsWith('https://'))) {
+          return send(303, 'text/plain', '', { Location: new URL('/faq', workspaceOrigin).href });
+        }
+        return send(200, 'text/html; charset=utf-8', workspacePage('FAQ', null, renderFilmmakerFaq(), { faq: true, signInHref: '#getting-started' }),
+          { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
       if (read && staticFiles.has(path)) {
         const { type, data } = staticFiles.get(path);

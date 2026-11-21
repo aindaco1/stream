@@ -38,7 +38,9 @@ test('the public FAQ explains costs, the pilot and how to sell films', () => {
   for (const text of ['<h1>FAQ</h1>', '$0.99','$0.33','$0.66','20 GB','$0.15','test cards','real storage','Sales are final','optional tip','10% of the film price','0% to skip it']) {
     assert.ok(faq.includes(text), text);
   }
-  assert.doesNotMatch(faq, /<form\b|<script\b/);
+  assert.doesNotMatch(faq, /<form\b|<script\b|Stream on GitHub/);
+  assert.equal(faq.match(/<h2>(.*?)<\/h2>/)?.[1], 'How do I put a film on my site?');
+  for (const step of ['Copy embed code','Custom HTML','publish your page']) assert.ok(faq.includes(step));
   for (const text of ['invite-only','permission to distribute','10 GB','180 seconds','starts when they pay','original file',
     'embed code','record their screen','private access link','text subtitles','picture subtitles']) assert.ok(faq.includes(text),text);
 });
