@@ -2,7 +2,7 @@ import { payoutCountryOptions } from './payout-countries.js';
 
 export const firstSale = 'You can upload a film and watch a private preview before connecting Stripe. To publish and get paid for rentals or purchases, first connect your Stripe account and finish verification.';
 
-const proceeds = 'You keep your film rights. Rentals and purchases are your sales. Stream sends your proceeds to your connected Stripe account after fees. Viewers can add an optional tip for Dust Wave in the same payment.';
+const proceeds = 'You keep your film rights. Rentals and purchases are your sales. Stream sends your proceeds to your connected Stripe account after fees. In your <a href="https://dashboard.stripe.com/settings/payouts">Stripe Dashboard</a>, you can choose weekly bank deposits if your account offers them. Viewers can add an optional tip for Dust Wave in the same payment.';
 
 function payoutCountries() {
   const names = payoutCountryOptions.map(country => country.label).join(', ');

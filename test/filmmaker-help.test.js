@@ -10,7 +10,7 @@ test('Payments and FAQ match the country selector and explain filmmaker ownershi
   assert.equal(selection.join(' '), 'AT BE BG CA CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IT LI LT LU LV MT NL NO PL PT RO SE SI SK US');
   for (const page of [renderSetupCosts('stripe'), renderFilmmakerFaq()]) {
     for (const {label} of payoutCountryOptions) assert.ok(page.includes(label), label);
-    for (const text of ['You keep your film rights', 'your sales', 'U.S. dollars', 'currency conversion', 'test cards']) assert.ok(page.includes(text),text);
+    for (const text of ['You keep your film rights', 'your sales', 'weekly bank deposits', 'U.S. dollars', 'currency conversion', 'test cards']) assert.ok(page.includes(text),text);
   }
 });
 
