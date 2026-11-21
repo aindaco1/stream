@@ -42,6 +42,29 @@ export async function programFixture({ clock, path, directory, text, picture, du
   };
 }
 
+export async function checkProgramLayout(frames) {
+  for (const frame of frames) {
+    await frame.locator('#program-lineup li').first().waitFor();
+    const layout = () => frame.evaluate(() => ({
+      width: innerWidth,
+      video: document.querySelector('video').getBoundingClientRect().toJSON(),
+      list: document.querySelector('#program-lineup').getBoundingClientRect().toJSON(),
+      play: document.querySelector('#play').getBoundingClientRect().top,
+      overflow: document.documentElement.scrollWidth - innerWidth
+    }));
+    const {width, video, list, play, overflow} = await layout();
+    assert.equal(overflow, 0);
+    if (width === 320) {
+      assert.ok(list.top >= video.bottom);
+    } else {
+      assert.equal(width, 900);
+      assert.ok(list.left >= video.right);
+      await frame.locator('#program-lineup summary').first().click();
+      assert.equal((await layout()).play, play);
+    }
+  }
+}
+
 export async function checkProgramPlayer({ frame, neighbor, app, fixture, preview, complete, context, requests }) {
   const {offer} = fixture;
   const [opening, first, second, closing] = offer.lineup;
@@ -61,24 +84,7 @@ export async function checkProgramPlayer({ frame, neighbor, app, fixture, previe
   assert.deepEqual(await rows.locator('.program-row-title').allTextContents(), offer.lineup.map(item=>item.title));
   assert.equal(await next.count(),0);
   assert.equal(await rows.getByRole('button').count(),0);
-  const size = async width => (await frame.frameElement()).evaluate((element,w)=>{element.width=w;}, width);
-  const layout = () => frame.evaluate(() => ({
-    video:document.querySelector('video').getBoundingClientRect().toJSON(),
-    list:document.querySelector('#program-lineup').getBoundingClientRect().toJSON(),
-    play:document.querySelector('#play').getBoundingClientRect().top,
-    overflow:document.documentElement.scrollWidth - innerWidth
-  }));
-  for (const width of [320, 900]) {
-    await size(width);
-    await frame.waitForFunction(w=>innerWidth===w,width);
-    const {video,list,overflow} = await layout();
-    assert.equal(overflow,0);
-    assert.ok(width === 320 ? list.top >= video.bottom : list.left >= video.right);
-  }
-  const before = await layout();
   await rows.first().locator('summary').click();
-  assert.equal((await layout()).play,before.play);
-  await size(480);
   assert.equal(await rows.first().locator('.film-synopsis').textContent(),'Opening remarks synopsis');
   assert.equal(await rows.locator('.film-credits').count(),0);
   await preview(frame);
@@ -130,14 +136,38 @@ export async function checkProgramPlayer({ frame, neighbor, app, fixture, previe
   await displayed(opening);
   await selection('s2');
   await sub.selectOption('');
-  await next.click();
-  await displayed(first);
-  await selection('');
-  await frame.locator('video').evaluate(v => {v.currentTime=23;});
-  const mark = '/title/' + first.id + '/position';
-  await frame.page().waitForResponse(response=>response.url().endsWith(mark) && response.ok(), {timeout:5000}).catch(() => {
-    assert.ok(requests.some(request=>request.url.endsWith(mark)), 'Program sent a title-scoped bookmark.');
-  });
+  // Delay a bookmark on the opening while the viewer moves to the next film and seeks.
+  // Releasing it later must not overwrite the new title or position.
+  const release = Promise.withResolvers();
+  const positions = [];
+  const record = async route => {
+    const request = route.request();
+    positions.push(request.url());
+    if (positions.length === 1) await release.promise;
+    await route.fallback();
+  };
+  const page = frame.page();
+  const pattern = '**/title/*/position';
+  await page.route(pattern, record);
+  try {
+    const pending = page.waitForRequest(request => request.url().endsWith('/title/' + opening.id + '/position'));
+    await frame.locator('video').evaluate(v => {v.currentTime=9;});
+    await pending;
+    await next.click();
+    await displayed(first);
+    await selection('');
+    const mark = '/title/' + first.id + '/position';
+    const saved = page.waitForResponse(response=>response.url().endsWith(mark) &&
+      response.request().postData()?.endsWith(' 23') && response.ok());
+    await frame.locator('video').evaluate(v => {v.currentTime=23;});
+    await frame.waitForFunction(() => {const v=document.querySelector('video'); return !v.seeking && v.currentTime>=23;});
+    assert.equal(positions.length,1,'A pending bookmark must finish before writing the new title.');
+    release.resolve();
+    await saved;
+  } finally {
+    release.resolve();
+    await page.unroute(pattern, record);
+  }
   const download = async button => {
     const result = frame.page().waitForEvent('download');
     await button.click();

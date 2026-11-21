@@ -13,7 +13,7 @@ import { chromium } from 'playwright';
 import { openFilm } from '../src/media.js';
 import { createRentalAuthority, rentalScope } from '../src/rental.js';
 import { makeServer } from '../src/server.js';
-import { checkProgramPlayer, programFixture } from './program-player-rehearsal.js';
+import { checkProgramLayout, checkProgramPlayer, programFixture } from './program-player-rehearsal.js';
 import { createFileSource } from '../src/source.js';
 
 const clock = fileURLToPath(new URL('../.local/clock.mp4', import.meta.url));
@@ -142,8 +142,10 @@ player.on('request', (req, res) => {
 await new Promise(resolve => player.listen(0, '127.0.0.1', resolve));
 const app = 'http://127.0.0.1:' + player.address().port;
 const publisher = createServer((req, res) => {
-  const frames = [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660], [program.offer.id + '?show=synopsis', 480, 640]]
-    .map(([id, width, height]) => `<iframe allow="autoplay; payment; picture-in-picture ${id === 'legacy' ? "'none'" : '*'}" width="${width}" height="${height}" src="${app}/embed/${id}"></iframe>`);
+  const embed = program.offer.id + '?show=synopsis';
+  const dimensions = req.url === '/program-layout' ? [[embed, 320, 640], [embed, 900, 640]] :
+    [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660], [embed, 480, 640]];
+  const frames = dimensions.map(([id, width, height]) => `<iframe allow="autoplay; payment; picture-in-picture ${id === 'legacy' ? "'none'" : '*'}" width="${width}" height="${height}" src="${app}/embed/${id}"></iframe>`);
   res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Publisher</title>' +
     '<style>body{margin:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px}iframe{border:0}</style>' + frames.join('\n'));
 });
@@ -764,6 +766,13 @@ try {
   await nm.close();
 
   checkout.manualNmEnabled = false;
+  // Fixed publisher slots exercise both layouts without moving a live payment iframe under the pointer.
+  const layouts = await context.newPage();
+  await layouts.goto(host + '/program-layout');
+  const layoutFrames = await Promise.all((await layouts.locator('iframe').elementHandles()).map(element => element.contentFrame()));
+  assert.equal(layoutFrames.length, 2);
+  await checkProgramLayout(layoutFrames);
+  await layouts.close();
   const programPage = await context.newPage();
   await programPage.goto(host);
   const programFrame = programPage.frame({url:url=>url.pathname === '/embed/' + program.offer.id});

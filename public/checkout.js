@@ -512,18 +512,33 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     showOffer();
     inspect(true, Boolean(returnId));
   }
+  let pendingBookmark;
+  let writingBookmark = false;
+  async function savePosition(seconds, mediaPrefix = '/film/' + encodeURIComponent(film)) {
+    if (!unlocked) return;
+    pendingBookmark = {url:mediaPrefix + '/position', body:unlocked.token + ' ' + seconds};
+    if (writingBookmark) return;
+    writingBookmark = true;
+    // Finish the older write first. Skipped titles only need the most recent bookmark.
+    try {
+      while (pendingBookmark) {
+        const {url, body} = pendingBookmark;
+        pendingBookmark = undefined;
+        await fetch(url, {method:'POST', headers:{'Content-Type':'text/plain'}, body,
+          credentials:'omit', referrerPolicy:'no-referrer', keepalive:true}).catch(() => {});
+      }
+    } finally {
+      writingBookmark = false;
+    }
+  }
+
   return { showOffer, purchaseReceipt, downloadFile, checkAccess: () => inspect(true),
     async restoreAttempt(attempt) {
       if (!validToken(attempt)) throw new Error('Invalid link');
       token = attempt;
       await inspect(true, true);
     },
-    savePosition(seconds, mediaPrefix = '/film/' + encodeURIComponent(film)) {
-      if (unlocked) fetch(mediaPrefix + '/position', {
-        method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: unlocked.token + ' ' + seconds,
-        credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: true
-      }).catch(() => {});
-    }
+    savePosition
   };
 }
 
