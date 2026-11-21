@@ -18,21 +18,61 @@ export async function requestAirPlayLease(prefix, receipt, rentalEnd) {
 
 export function attachAirPlay(video, status) {
   const button = video.closest('.video-stage').querySelector('#airplay');
-  const supported = typeof video.webkitShowPlaybackTargetPicker === 'function' &&
-    Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
-  let active;
+  const webkit = typeof video.webkitShowPlaybackTargetPicker === 'function';
+  const remote = video.remote;
+  const picker = webkit || typeof remote?.prompt === 'function';
+  const supported = picker && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
+  let active, enabled = false, prompting = false;
 
-  function update() {
-    button.hidden = !active;
-    button.setAttribute('aria-pressed', String(Boolean(active && video.webkitCurrentPlaybackTargetIsWireless)));
+  // Each player lives in its own iframe. Use its existing private rental link
+  // if this browser or its receivers cannot offer a direct handoff.
+  const doc = video.ownerDocument;
+  const access = doc?.getElementById('access-tools');
+  function canHandoff() {
+    return access && !access.hidden && Boolean(doc.getElementById('access-link')?.value);
   }
-  button.addEventListener('click', () => {
-    if (!active) return;
-    // WebKit requires a direct user gesture. Discovery and lease issuance happen before this click.
-    try { video.webkitShowPlaybackTargetPicker(); }
-    catch { status.textContent = 'AirPlay could not open. Try the AirPlay control in Safari’s video player.'; }
+  function showHandoff() {
+    if (!canHandoff()) {
+      status.textContent = 'This browser could not find a compatible TV.';
+      return;
+    }
+    const details = access.querySelector('details');
+    doc.getElementById('tv-help').hidden = false;
+    details.open = true;
+    doc.getElementById('copy-link').focus();
+  }
+  if (!webkit) {
+    button.setAttribute('aria-label', 'Play on TV');
+    button.setAttribute('title', 'Play on TV');
+  }
+  function update() {
+    button.hidden = !enabled || (!active && !canHandoff());
+    const connected = webkit ? video.webkitCurrentPlaybackTargetIsWireless : remote?.state === 'connected';
+    button.setAttribute('aria-pressed', String(Boolean(enabled && connected)));
+  }
+  function setRentalActive(value) {
+    enabled = value;
+    update();
+  }
+  button.addEventListener('click', async () => {
+    if (!enabled || prompting) return;
+    if (!active) return showHandoff();
+    const current = active;
+    prompting = true;
+    try {
+      // Invoke directly within the click to preserve the user gesture.
+      if (webkit) video.webkitShowPlaybackTargetPicker();
+      else await remote.prompt();
+    } catch (error) {
+      if (!enabled || active !== current) return;
+      if (['NotAllowedError','AbortError'].includes(error.name)) {
+        if (canHandoff()) status.textContent = 'For AirPlay, open your private rental link in Safari under “Watch on another device”.';
+      } else showHandoff();
+    } finally { prompting = false; }
   });
   video.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', update);
+  remote?.addEventListener('connect', update);
+  remote?.addEventListener('disconnect', update);
 
   function open(lease, { caption, position, autoplay, ready, retry, expire }) {
     const life = new AbortController();
@@ -60,12 +100,11 @@ export function attachAirPlay(video, status) {
       else expiry = setTimeout(checkEnd, Math.min(remaining, 2147483647));
     }
     const player = {selectAirPlaySubtitle, destroy() {
-      if (active === player) active = undefined;
+      if (active === player) { active = undefined; setRentalActive(false); }
       clearTimeout(expiry);
       selection?.abort();
       life.abort();
       video.preload = previousPreload;
-      update();
     }};
     active = player;
     video.disableRemotePlayback = false;
@@ -82,8 +121,8 @@ export function attachAirPlay(video, status) {
     }, {signal:life.signal, once:true});
     selectAirPlaySubtitle(caption, position, autoplay);
     expiry = setTimeout(checkEnd, 0);
-    update();
+    setRentalActive(true);
     return player;
   }
-  return { supported, open };
+  return { supported, open, setRentalActive };
 }

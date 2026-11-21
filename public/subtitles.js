@@ -34,7 +34,10 @@ export function attachSubtitles(video, setRendition) {
   const select = document.getElementById('subtitles');
   const status = document.getElementById('subtitle-status');
   let source, scope, grant, selected = '', preference, request, suspended = false;
-  let placeholder, nativeHls = false;
+  let placeholder, receiverPath = '';
+  // WebKit renders text from the receiver's HLS playlist. Chromium also needs
+  // a local text track while playing that same receiver-ready stream.
+  const playlistText = () => receiverPath && typeof video.webkitShowPlaybackTargetPicker === 'function';
   const entries = new Map();
 
   function clear() {
@@ -55,9 +58,13 @@ export function attachSubtitles(video, setRendition) {
     scope = grant = source = undefined;
   }
 
-  function read(path) {
-    return fetch(source + '/' + scope + '/subtitles' + path, {
-      headers: grant ? { Authorization: 'Bearer ' + grant } : {}, signal: request.signal,
+  function read(id) {
+    const receiverTrack = receiverPath && id;
+    const url = receiverTrack
+      ? new URL('captions.vtt?subtitle=' + encodeURIComponent(id), new URL(receiverPath, location.origin))
+      : source + '/' + scope + '/subtitles' + (id ? '/' + encodeURIComponent(id) + '.vtt' : '');
+    return fetch(url, {
+      headers: grant && !receiverTrack ? { Authorization: 'Bearer ' + grant } : {}, signal: request.signal,
       credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer'
     });
   }
@@ -68,7 +75,7 @@ export function attachSubtitles(video, setRendition) {
     selected = id;
     select.value = id;
     status.textContent = '';
-    if (nativeHls) {
+    if (playlistText()) {
       if (fromViewer) setRendition(id);
       return;
     }
@@ -76,11 +83,11 @@ export function attachSubtitles(video, setRendition) {
       element.default = key === id;
       element.track.mode = key === id ? 'showing' : 'disabled';
     }
-    if (fromViewer) setRendition(entry?.track.format === 'bitmap' ? id : '');
+    if (fromViewer) setRendition(receiverPath || entry?.track.format === 'bitmap' ? id : '');
     if (!entry || entry.track.format === 'bitmap' || entry.url || entry.loading) return;
     entry.loading = true;
     try {
-      const response = await read('/' + encodeURIComponent(id) + '.vtt');
+      const response = await read(id);
       if (!response.ok) throw Error();
       const blob = await response.blob();
       if (entries.get(id) !== entry) return;
@@ -97,18 +104,18 @@ export function attachSubtitles(video, setRendition) {
 
   select.addEventListener('change', () => choose(select.value, true));
   video.textTracks.addEventListener('change', () => {
-    if (nativeHls || !entries.size || suspended || video.readyState < 2) return;
+    if (playlistText() || !entries.size || suspended || video.readyState < 2) return;
     const active = [...entries].find(([, entry]) => entry.element.track.mode === 'showing')?.[0] || '';
     const current = entries.get(selected);
     if (!active && current && (current.loading || current.element.readyState !== HTMLTrackElement.LOADED || video.seeking)) return;
     if (active !== selected) choose(active, true);
   });
 
-  async function show(prefix, nextScope, nextGrant, native = false) {
-    if (source === prefix && scope === nextScope && grant === nextGrant && native === nativeHls)
-      return nativeHls || entries.get(selected)?.track.format === 'bitmap' ? selected : '';
+  async function show(prefix, nextScope, nextGrant, nextReceiverPath = '') {
+    if (source === prefix && scope === nextScope && grant === nextGrant && nextReceiverPath === receiverPath)
+      return receiverPath || entries.get(selected)?.track.format === 'bitmap' ? selected : '';
     clear();
-    nativeHls = native;
+    receiverPath = nextReceiverPath;
     source = prefix;
     scope = nextScope;
     grant = nextGrant;
@@ -119,12 +126,12 @@ export function attachSubtitles(video, setRendition) {
       if (!response.ok) throw Error();
       const tracks = await response.json();
       if (request !== controller) return '';
-      if (tracks.length && !nativeHls) placeholder = URL.createObjectURL(new Blob(['WEBVTT\n\n'], { type: 'text/vtt' }));
+      if (tracks.length && !playlistText()) placeholder = URL.createObjectURL(new Blob(['WEBVTT\n\n'], { type: 'text/vtt' }));
       for (const track of tracks) {
         const {id, label, language, kind} = track;
         select.add(new Option(label, id));
         // Receiver-side HLS supplies the chosen text track or captioned video itself.
-        if (nativeHls) { entries.set(id, {track}); continue; }
+        if (playlistText()) { entries.set(id, {track}); continue; }
         const element = document.createElement('track');
         element.kind = kind === 'captions' ? 'captions' : 'subtitles';
         element.label = label;
@@ -140,7 +147,7 @@ export function attachSubtitles(video, setRendition) {
       const match = matchingCaption(tracks, preference, source);
       choose(match?.id || '');
       if (preference && !match) status.textContent = 'Your selected captions are unavailable for this title.';
-      return match && (nativeHls || match.format === 'bitmap') ? match.id : '';
+      return match && (receiverPath || match.format === 'bitmap') ? match.id : '';
     } catch {
       if (request === controller) clear();
       return '';
@@ -148,7 +155,7 @@ export function attachSubtitles(video, setRendition) {
   }
   return { show, clear, suspend() { suspended = true; }, resume() {
     const entry = entries.get(selected);
-    if (nativeHls) {
+    if (playlistText()) {
       for (const track of video.textTracks) {
         if (track.kind === 'subtitles' || track.kind === 'captions')
           track.mode = entry && entry.track.format !== 'bitmap' ? 'showing' : 'disabled';

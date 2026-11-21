@@ -101,6 +101,7 @@ if (!receipt && document.body.dataset.checkout === 'true') {
 
 function stopPlayback() {
   playbackGeneration++;
+  airPlay.setRentalActive(false);
   clearTimeout(renewal);
   clearTimeout(startupTimer);
   subtitles.clear();
@@ -191,11 +192,12 @@ async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
     const lease = eligibleBrowser && orderId && access === 'rent' &&
       await requestAirPlayLease(prefix, receipt, rentalExpiresAt);
     if (generation !== playbackGeneration) return;
+    airPlay.setRentalActive(false);
     stream?.destroy();
     stream = undefined;
     clearTimeout(renewal);
     playGrant = grant;
-    const selected = await subtitles.show(media, 'play', grant, Boolean(lease));
+    const selected = await subtitles.show(media, 'play', grant, lease?.path);
     if (generation !== playbackGeneration) return;
     rendition = selected;
     stagePlay.hidden = true;
@@ -240,6 +242,7 @@ async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
     });
     player.on(window.Hls.Events.MANIFEST_PARSED, () => {
       if (stream !== player) return;
+      airPlay.setRentalActive(Boolean(!program && !purchase && orderId && access === 'rent'));
       ready(autoplay);
     });
     player.attachMedia(video);

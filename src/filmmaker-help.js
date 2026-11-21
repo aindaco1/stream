@@ -51,7 +51,7 @@ export function renderFilmmakerFaq() {
       <p>Yes. If the film has subtitles, tap or move over the video to show its controls. Choose the captions button to pick a language or turn subtitles off. Stream supports embedded text subtitles and DVD or Blu-ray picture subtitles. Check the private preview for the tracks available in your file.</p>
     </section>
     <section><h2>Can I watch a rental on my TV?</h2>
-      <p>In the pilot, open a rented film in Safari on the same Wi-Fi network as your AirPlay TV. Start the rental, choose <strong>AirPlay</strong> on the video, then select your TV. If a code appears on the TV, enter it on your Apple device. The rental ends at its original time. AirPlay is available for individual film rentals.</p>
+      <p>Start an individual film rental on the same Wi-Fi network as your TV. In Safari, choose <strong>AirPlay</strong> in the video controls. In other browsers, choose <strong>Play on TV</strong>. The devices you see depend on your browser. If your AirPlay TV isn’t listed, open <strong>Watch on another device</strong> and use your private rental link in Safari. You can keep watching until the original rental ends.</p>
     </section>
     <section><h2>Can I keep watching in a floating window?</h2>
       <p>Start the film, then choose the picture-in-picture button on the video. It appears when your browser, device and the site hosting the player allow it.</p>
@@ -64,7 +64,7 @@ export function renderFilmmakerFaq() {
       <p>Open your published film in the Dashboard. Choose the details you want alongside the player and check the live preview. You can include a synopsis, credits or a personal message. Copy the embed code and paste it into your site. Each film has its own checkout, even when several share a page.</p>
     </section>
     <section><h2>How do I offer a double feature or a program of shorts?</h2>
-      <p>Choose <strong>Create program</strong> on your Dashboard. Pick at least two of your films, put them in screening order, and add an opening or closing video if you like. Choose the program image, preview and price, then publish and copy its embed code. Opening and closing videos you upload for a program are managed in its editor.</p>
+      <p>Once you’ve saved two films, choose <strong>Create program</strong> in the Programs section of your Dashboard. Pick at least two of your films, put them in screening order, and add an opening or closing video if you like. Choose the program image, preview and price, then publish and copy its embed code. Opening and closing videos you upload for a program are managed in its editor.</p>
       <p>Viewers pay once in the player and can move between titles with Previous title and Next title. The player remembers their caption choice when a matching track is available. One rental window covers the lineup. A purchase includes the original videos, in order, in a ZIP. After editing prices or the lineup, choose <strong>Publish changes</strong> to update the public embed. Earlier buyers keep their edition.</p>
     </section>
     <section><h2>Can a program save on card fees?</h2>

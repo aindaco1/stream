@@ -345,6 +345,7 @@ test('program uploads have one editor, keep their original edition, and count to
   save({members, previewFilmId:clip});
   assert.ok(store.programLibrary(owner,id).some(f => f.id === clip));
   assert.ok(!store.programLibrary(owner,other.id).some(f => f.id === clip));
+  assert.ok(!store.programLibrary(owner,null).some(f => f.id === clip), 'an opening video cannot qualify its owner to create another program');
   assert.ok(!store.dashboardFilms(owner).some(f => f.id === clip));
   assert.throws(() => store.saveProgram(owner,other.id,{...data,members},other.version),/own library/);
   assert.throws(() => save({members:[{filmId:clip,role:'film'}],previewFilmId:clip}), /own library/);

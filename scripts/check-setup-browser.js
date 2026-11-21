@@ -494,7 +494,8 @@ async function checkFilmUpload(page, movies) {
 }
 
 async function checkProgramEditor(page) {
-  await page.getByRole('button', { name:'Create program' }).click();
+  assert.equal(await page.locator('#films').getByRole('button', {name:'Create program'}).count(), 0);
+  await page.locator('#programs button.primary').filter({hasText:'Create program'}).click();
   const form = page.locator('.program-editor');
   await form.getByLabel('Program title').fill('Two projections');
   await page.setViewportSize({width:320,height:780});

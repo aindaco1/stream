@@ -81,3 +81,58 @@ test('only an active rental can open its own picker, and changing captions retai
   button.dispatchEvent(new Event('click'));
   assert.equal(video.opens, 1);
 });
+
+test('a paid player uses the standard TV picker on a user click and tracks its connection', async () => {
+  const {video, button} = viewer();
+  delete video.webkitShowPlaybackTargetPicker;
+  let prompts = 0;
+  const remote = video.remote = Object.assign(new EventTarget(), {
+    state:'disconnected', async prompt() { prompts++; }
+  });
+  const tv = attachAirPlay(video, {});
+  const player = tv.open({path, expiresAt:rentalEnd()}, {caption:'',position:0,autoplay:true,ready() {},retry() {},expire() {}});
+  try {
+    assert.equal(button.attributes.get('aria-label'),'Play on TV');
+    button.dispatchEvent(new Event('click'));
+    assert.equal(prompts,1);
+    remote.state = 'connected';
+    remote.dispatchEvent(new Event('connect'));
+    assert.equal(button.attributes.get('aria-pressed'),'true');
+    remote.state = 'disconnected';
+    remote.dispatchEvent(new Event('disconnect'));
+    assert.equal(button.attributes.get('aria-pressed'),'false');
+  } finally { player.destroy(); }
+  assert.equal(button.hidden,true);
+});
+
+test('browsers without a compatible receiver reuse the private rental link', async () => {
+  const {video,button} = viewer();
+  delete video.webkitShowPlaybackTargetPicker;
+  const panel = {open:false}, hint = {hidden:true};
+  let focused = 0;
+  const access = {hidden:false,querySelector:() => panel};
+  const elements = {'access-tools':access,'tv-help':hint,'access-link':{value:'private-viewer-link'},
+    'copy-link':{focus() { focused++; }}};
+  video.ownerDocument = {getElementById:id => elements[id]};
+  const tv = attachAirPlay(video, {});
+  assert.equal(tv.supported,false);
+  tv.setRentalActive(true);
+  assert.equal(button.hidden,false);
+  button.dispatchEvent(new Event('click'));
+  assert.deepEqual([panel.open,hint.hidden,focused],[true,false,1]);
+  tv.setRentalActive(false);
+  assert.equal(button.hidden,true);
+  button.dispatchEvent(new Event('click'));
+  assert.equal(focused,1);
+
+  // A supported browser can also report a disabled picker or no devices.
+  video.remote = Object.assign(new EventTarget(),{prompt:async () => {throw new DOMException('No device','NotFoundError');}});
+  const next = attachAirPlay(video,{});
+  const player = next.open({path,expiresAt:rentalEnd()},{caption:'',position:0,ready(){},retry(){},expire(){}});
+  try {
+    panel.open = false;
+    button.dispatchEvent(new Event('click'));
+    await Promise.resolve();
+    assert.deepEqual([panel.open,focused],[true,2]);
+  } finally { player.destroy(); }
+});

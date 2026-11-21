@@ -318,8 +318,9 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
         <button class="secondary" name="action" value="unpublish">Unpublish program</button></form>` : ''}
       </div></details>`;
   }).join('');
+  const createProgram = films.length >= 2 ? `<form action="/setup/program/create" method="post">${hidden('csrf', csrf)}<button type="submit" class="primary">Create program</button></form>` : '';
   const pendingProgramVideo = !completedDraft && draft.programTarget;
-  const continueVideo = pendingProgramVideo ? `<a class="primary-link" href="/setup/dashboard/new">Continue ${escapeHtml(draft.programTarget.role)} video</a>` : '';
+  const continueVideo = pendingProgramVideo ? `<a class="primary-link${createProgram ? ' secondary' : ''}" href="/setup/dashboard/new">Continue ${escapeHtml(draft.programTarget.role)} video</a>` : '';
   const add = completedDraft
     ? `<form method="post" action="/setup/next">${hidden('csrf', csrf)}${hidden('draftId', draft.id)}<button>Add a film</button></form>`
     : pendingProgramVideo ? '' : `<a class="primary-link" href="/setup/dashboard/new">${draft.title || draft.rights ? 'Continue film draft' : 'Add a film'}</a>`;
@@ -329,9 +330,8 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
     <section class="film-card" id="overview"><h2>Overview</h2>${statsList(totals)}
       ${revenueNote(totals)}
       <a href="/setup/settings#payments">Payment settings</a></section>
-    <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2><div class="film-actions">${add}
-      <form action="/setup/program/create" method="post">${hidden('csrf', csrf)}<button class="secondary">Create program</button></form></div></header>
+    <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2><div class="film-actions">${add}</div></header>
       ${cards || '<p>You have no saved films yet.</p>'}</section>
-    <section class="film-list" id="programs"><header class="film-list-header"><h2>Programs</h2>${continueVideo}</header>
+    <section class="film-list" id="programs"><header class="film-list-header"><h2>Programs</h2><div class="film-actions">${continueVideo}${createProgram}</div></header>
       ${programCards || '<p>Group your films into one screening with one embed and one checkout.</p>'}</section>`, { dashboard: true, builder: true });
 }

@@ -277,7 +277,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       }
       const versioned = /^\/film\/(p-[a-f0-9-]{36})\/v\/([\w-]{43})(?:\/title\/(f-[a-f0-9-]{36}))?\/(.+)$/.exec(path);
       const mediaPath = versioned ? '/film/' + versioned[1] + '/' + versioned[4] : path;
-      const receiver = /^\/film\/([a-z0-9-]+)\/airplay\/([A-Za-z0-9_-]{43})\/(index\.m3u8|video\.m3u8|captions\.m3u8|key|(?:0|[1-9]\d{0,3})\.(?:ts|vtt))$/.exec(path);
+      const receiver = /^\/film\/([a-z0-9-]+)\/airplay\/([A-Za-z0-9_-]{43})\/(index\.m3u8|video\.m3u8|captions\.(?:m3u8|vtt)|key|(?:0|[1-9]\d{0,3})\.(?:ts|vtt))$/.exec(path);
       const route = receiver ? [path, receiver[1], 'play/' + receiver[3], undefined, receiver[3]] : /^\/film\/([a-z0-9-]+)\/(checkout|buy|abandon|order|session|airplay|download|restore|redeem|position|view|preview\.mp4|(?:preview|play)\/subtitles(?:\/([a-zA-Z0-9_-]{1,64})\.vtt)?|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(mediaPath);
       if (!route) return fail(404);
       const [, id, action, trackId, asset] = route;
@@ -435,7 +435,12 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           return send(200, 'application/json', JSON.stringify(grant));
         } catch (error) { return fail(error.statusCode === 429 ? 429 : 403); }
       }
-      if (!read) return fail(405);
+      // The Google Cast default receiver fetches adaptive media from a web origin.
+      // Only its credential-free reads of an authorized receiver URL need CORS.
+      const castRead = receiver && req.headers.origin === 'https://www.gstatic.com';
+      const preflight = castRead && req.method === 'OPTIONS' &&
+        ['GET','HEAD'].includes(req.headers['access-control-request-method']);
+      if (!read && !preflight) return fail(405);
       const subtitles = new URL(req.url, origin).searchParams.getAll('subtitle');
       const rendition = subtitles[0];
       if (subtitles.length && (subtitles.length !== 1 || !/^s\d{1,5}$/.test(rendition))) return fail(400);
@@ -472,6 +477,14 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (receiver) {
           access = receivers.read(receiver[2], spec);
           if (!access || !authorized() || !await checkout.verifyPlayback(order()) || !authorized()) return fail(403);
+          if (castRead) {
+            res.setHeader('Access-Control-Allow-Origin', 'https://www.gstatic.com');
+            res.setHeader('Vary', 'Origin');
+            if (preflight) return send(204, 'text/plain', '', {
+              'Access-Control-Allow-Methods':'GET, HEAD',
+              'Access-Control-Allow-Headers':'Content-Type, Accept-Encoding, Range'
+            });
+          }
           receivers.touch(access);
           key = access.key;
         } else {
@@ -489,6 +502,10 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       });
       const hlsType = 'application/vnd.apple.mpegurl';
       if (receiver && rendition && film.subtitleTracks?.some(track => track.id === rendition && track.format === 'text')) {
+        if (asset === 'captions.vtt') {
+          const track = await film.subtitles(rendition);
+          return authorized() ? send(200, 'text/vtt; charset=utf-8', track) : fail(403);
+        }
         if (asset === 'index.m3u8') return send(200, hlsType, captionMaster({id:rendition}));
         if (asset === 'captions.m3u8') return send(200, hlsType, playlist(film.segments, rendition, true));
         if (!asset.endsWith('.vtt')) return fail(404);

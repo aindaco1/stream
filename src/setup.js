@@ -419,6 +419,7 @@ export async function createSetup({
       const data = callback ? {} : await readForm(req, path === '/setup/dashboard/info' ? 32768 : 8192);
       if (!callback && data.csrf !== session.csrf) return reject(403, 'Reload the page before submitting this form.');
       if (path === '/setup/program/create') {
+        if (store.programLibrary(owner, null).length < 2) return dashboard(422, 'Save at least two films to create a program.');
         const created = store.createProgram(owner);
         return redirect('/setup/program/' + created.id);
       }

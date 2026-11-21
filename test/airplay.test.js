@@ -69,6 +69,15 @@ test('a paid receiver can read encrypted HLS and captions until access is withdr
   assert.equal((await fetch(new URL(issued.path.replace('film-a','film-b'),origin))).status,403);
   assert.equal((await read('download')).status,404);
   assert.equal((await fetch(origin + '/film/film-a/download')).status,403);
+  const receiverOrigin = 'https://www.gstatic.com';
+  const castRead = await fetch(base,{headers:{Origin:receiverOrigin}});
+  assert.equal(castRead.headers.get('access-control-allow-origin'),receiverOrigin);
+  assert.equal(castRead.headers.has('access-control-allow-credentials'),false);
+  const preflight = () => fetch(base,{method:'OPTIONS',headers:{Origin:receiverOrigin,
+    'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'range'}});
+  assert.equal((await preflight()).status,204);
+  const publisher = await fetch(base,{headers:{Origin:'https://publisher.example'}});
+  assert.equal(publisher.headers.has('access-control-allow-origin'),false);
   const playlist = await read('index.m3u8');
   assert.match(playlist.headers.get('cache-control'),/no-store/);
   assert.match(await playlist.text(),/#EXT-X-KEY:METHOD=AES-128,URI="key"/);
@@ -82,9 +91,12 @@ test('a paid receiver can read encrypted HLS and captions until access is withdr
   assert.match(await (await read('index.m3u8?subtitle=s1')).text(),/SUBTITLES.*captions\.m3u8\?subtitle=s1/);
   assert.match(await (await read('captions.m3u8?subtitle=s1')).text(),/1\.vtt\?subtitle=s1/);
   assert.match(await (await read('1.vtt?subtitle=s1')).text(),/LOCAL:00:00:04.000,MPEGTS:0[\s\S]*Across a cut/);
+  assert.equal(await (await read('captions.vtt?subtitle=s1')).text(),media.subtitles());
+  assert.equal((await read('captions.vtt?subtitle=s2')).status,404);
   assert.equal((await read('1.vtt?subtitle=s3')).status,404);
   paid = false;
-  for (const path of ['index.m3u8','key','0.ts','1.vtt?subtitle=s1']) assert.equal((await read(path)).status,403);
+  assert.equal((await preflight()).status,403);
+  for (const path of ['index.m3u8','key','0.ts','1.vtt?subtitle=s1','captions.vtt?subtitle=s1']) assert.equal((await read(path)).status,403);
   assert.equal(renders.length,1);
 });
 

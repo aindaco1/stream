@@ -182,6 +182,21 @@ test('program editor protects private drafts, enforces ownership and rejects sta
     };
   }
   const maker = actor('Programs owner'), other = actor('Another owner');
+  const button = /<button[^>]*class="primary"[^>]*>Create program<\/button>/;
+  const dashboard = async () => (await maker.get('/setup/dashboard')).text();
+  assert.doesNotMatch(await dashboard(),/action="\/setup\/program\/create"/);
+  assert.equal((await maker.post('/setup/program/create')).status,422);
+  const bucket = { accountId:'b'.repeat(32), bucket:'library', jurisdiction:'default' };
+  for (const owner of ['Programs owner','Another owner']) {
+    setup.store.saveBucket(owner,{...bucket,accessKeyId:'test',secretAccessKey:'test'});
+    setup.store.saveFilm(owner,bucket,{id:'f-'+randomUUID(),title:'First film',objectKey:'first.mp4',revision:'1',duration:12});
+  }
+  assert.doesNotMatch(await dashboard(),/action="\/setup\/program\/create"/);
+  assert.equal((await maker.post('/setup/program/create')).status,422);
+  setup.store.saveFilm('Programs owner',bucket,{id:'f-'+randomUUID(),title:'Second film',objectKey:'second.mp4',revision:'1',duration:12});
+  const [beforePrograms, programs] = (await dashboard()).split('id="programs"');
+  assert.doesNotMatch(beforePrograms,button);
+  assert.match(programs,button);
   const created = await maker.post('/setup/program/create');
   assert.equal(created.status,303);
   const path = created.headers.get('Location');
