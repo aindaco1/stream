@@ -4,7 +4,7 @@ function estimateStripeFee(chargedCents) {
 }
 
 const viewing = ['previews','plays','timedPlays','watchSeconds'];
-const metrics = [...viewing, 'rentals', 'purchases', 'revenue', 'netRevenue', 'estimatedFees', 'reportedFees',
+const metrics = [...viewing, 'rentals', 'purchases', 'revenue', 'netRevenue', 'processingFees', 'reportedFees', 'refundAdjustments',
   'filmTaxFees', 'tipTaxFees', 'pendingTaxFees', 'platformTips', 'taxCollected', 'estimatedOrders', 'transfersToReview'];
 
 export function sumFilmStats(films) {
@@ -15,7 +15,8 @@ export function sumFilmStats(films) {
 // page should only read the settled ledger entries for the films being shown.
 function filmStats(filter = '', includeLineup = false) {
   const estimated = 'stream_fee_estimate(COALESCE(o.chargedTotalCents,o.amount + o.tipAmount))';
-  return `SELECT f.owner, f.id, json_extract(f.metadata, '$.title') AS title,
+  return `SELECT amounts.*, revenue - processingFees - filmTaxFees - refundAdjustments AS netRevenue
+    FROM (SELECT f.owner, f.id, json_extract(f.metadata, '$.title') AS title,
     ${viewing.map(key => `${includeLineup ? `COALESCE(pc.${key},0) + ` : ''}COALESCE(c.${key},0) + COALESCE((SELECT SUM(ec.${key}) FROM program_videos v
       JOIN film_counts ec ON ec.filmId=v.filmId WHERE v.programId=f.id),0) AS ${key}`).join(', ')},
     COUNT(*) FILTER (WHERE o.kind='rent') AS rentals, COUNT(*) FILTER (WHERE o.kind='buy') AS purchases,
@@ -24,15 +25,15 @@ function filmStats(filter = '', includeLineup = false) {
     COALESCE(SUM(o.taxBasicFeeCents - o.filmTaxFeeCents),0) AS tipTaxFees,
     COUNT(*) FILTER (WHERE o.paidAt IS NOT NULL AND o.taxBasicFeeCents IS NULL) AS pendingTaxFees,
     COALESCE(SUM(o.taxCents),0) AS taxCollected, COALESCE(SUM(o.cardProcessingCents),0) AS reportedFees,
-    COALESCE(SUM(${estimated}) FILTER (WHERE o.intentId IS NOT NULL),0) AS estimatedFees,
-    COUNT(*) FILTER (WHERE o.intentId IS NOT NULL AND o.stripeFeeCents IS NULL) AS estimatedOrders,
+    COALESCE(SUM(COALESCE(o.cardProcessingCents, ${estimated})) FILTER (WHERE o.intentId IS NOT NULL),0) AS processingFees,
+    COALESCE(SUM(MIN(o.amount,o.refundedAmount)),0) AS refundAdjustments,
+    COUNT(*) FILTER (WHERE o.intentId IS NOT NULL AND o.cardProcessingCents IS NULL) AS estimatedOrders,
     COUNT(*) FILTER (WHERE o.taxPolicy='marketplace-v1' AND COALESCE(o.transferId,'')!='no_proceeds' AND
-      (o.refundedAmount>0 OR o.revocationReason IS NOT NULL OR o.disputeStatus NOT IN ('won','prevented','warning_closed'))) AS transfersToReview,
-    COALESCE(SUM(o.amount - MIN(o.amount,o.refundedAmount) - COALESCE(o.cardProcessingCents, ${estimated}) - o.filmTaxFeeCents),0) AS netRevenue
+      (o.refundedAmount>0 OR o.revocationReason IS NOT NULL OR o.disputeStatus NOT IN ('won','prevented','warning_closed'))) AS transfersToReview
     FROM (SELECT id,owner,metadata FROM films WHERE id NOT IN (SELECT filmId FROM program_videos) UNION ALL SELECT id,owner,metadata FROM programs) f LEFT JOIN film_counts c ON c.filmId=f.id
     ${includeLineup ? 'LEFT JOIN program_lineup_counts pc ON pc.filmId=f.id' : ''}
     LEFT JOIN viewer_test_orders o ON o.filmId=f.id AND o.owner=f.owner AND o.paidAt IS NOT NULL AND o.intentId IS NOT NULL
-    ${filter} GROUP BY f.id`;
+    ${filter} GROUP BY f.id) amounts`;
 }
 
 export function analyticsReports(db) {

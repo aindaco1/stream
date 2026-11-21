@@ -124,9 +124,14 @@ async function checkFieldHelp(section) {
 async function checkOverviewHelp(page) {
   const overview = page.locator('#overview');
   const buttons = overview.getByRole('button', {name:/^Help for /});
-  assert.equal(await buttons.count(), 4);
+  assert.deepEqual(await buttons.allTextContents(),
+    ['Paid plays','Avg. watch time','Rentals','Purchases','Net Revenue'].map(label => 'Help for ' + label));
   const breakdown = overview.locator('.analytics-breakdown');
-  await breakdown.locator('summary').click();
+  const [card, toggle] = await Promise.all([overview.locator('.analytics-summary').boundingBox(), breakdown.locator('summary').boundingBox()]);
+  assert.ok(Math.abs(card.width - toggle.width) < 1, 'The disclosure fills the available width');
+  await breakdown.locator('summary').click({position:{x:toggle.width - 8, y:toggle.height / 2}});
+  const grid = await breakdown.locator('.film-stats').boundingBox();
+  assert.ok(Math.abs(grid.width - card.width) < 1, 'The expanded metrics fill the card');
   assert.equal(await buttons.count(), await overview.locator('dt').count());
   await breakdown.locator('summary').click();
   const iconGap = await overview.locator('.metric-label-end').first().evaluate(end => {
@@ -146,7 +151,7 @@ async function checkOverviewHelp(page) {
   await tip.waitFor();
   await page.getByRole('heading', {name:'Overview',exact:true}).click();
   await tip.waitFor({state:'hidden'});
-  await overview.getByRole('button', {name:'Help for Sales',exact:true}).focus();
+  await overview.getByRole('button', {name:'Help for Purchases',exact:true}).focus();
   await page.keyboard.press('Tab');
   await tip.waitFor();
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-expanded')), 'true');
@@ -163,7 +168,7 @@ async function checkTouchHelp(page) {
     await phone.goto(page.url());
     const overview = phone.locator('#overview');
     await overview.locator('.analytics-breakdown summary').tap();
-    const trigger = overview.getByRole('button', {name:'Help for Estimated card fees',exact:true});
+    const trigger = overview.getByRole('button', {name:'Help for Stripe fees',exact:true});
     const tip = phone.getByRole('tooltip');
     await trigger.tap();
     await tip.waitFor();

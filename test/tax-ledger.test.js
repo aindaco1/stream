@@ -54,7 +54,7 @@ test('tax policy and verified charges survive restart, receipt replay, fee delay
   assert.equal(report().total.platformTips,90);
   assert.equal(report().total.revenue,1000);
   assert.equal(report().total.netRevenue,936);
-  assert.equal(report().total.estimatedFees,64);
+  assert.equal(report().total.processingFees,64);
   assert.equal(report().total.estimatedOrders,1);
   assert.equal(ctx.store.pendingViewerTransfers(ctx.platform)[0].orderId,order.orderId);
   assert.equal(ctx.store.pendingViewerTransfers('acct_Other').length,0);
@@ -75,7 +75,7 @@ test('tax policy and verified charges survive restart, receipt replay, fee delay
   assert.equal(settle({}).stripeFeeCents,55);
   assert.equal(report().total.netRevenue,945);
   assert.equal(report().total.reportedFees,55);
-  assert.equal(report().total.estimatedFees,64);
+  assert.equal(report().total.processingFees,55);
   assert.equal(report().total.estimatedOrders,0);
   assert.equal(ctx.store.setViewerTransfer(order.orderId,'no_proceeds'),false);
   assert.equal(ctx.store.setViewerTransfer(order.orderId,'tr_Seller'),true);
@@ -87,6 +87,7 @@ test('tax policy and verified charges survive restart, receipt replay, fee delay
   assert.equal(reversed.transferId,'tr_Seller');
   assert.equal(report().total.transfersToReview,1);
   assert.equal(report().total.netRevenue,-55);
+  assert.equal(report().total.refundAdjustments,1000);
   assert.equal(report().total.platformTips,90);
   assert.equal(report().total.taxCollected,90);
   const admin = renderPlatformDashboard('test', report());
@@ -199,8 +200,8 @@ test('the itemized report matches the platform charge and deducts an inline tax 
   const a = ctx.store.viewerOrderById(standalone.orderId), b = ctx.store.viewerOrderById(inline.orderId);
   assert.deepEqual([a.cardProcessingCents,a.filmTaxFeeCents,b.cardProcessingCents,b.filmTaxFeeCents],[60,10,49,10]);
   const totals = ctx.store.platformReport(null).total;
-  assert.deepEqual([totals.reportedFees,totals.netRevenue,totals.platformTips,totals.filmTaxFees,totals.tipTaxFees,totals.pendingTaxFees],
-    [109,1871,178,20,2,0]);
+  assert.deepEqual([totals.reportedFees,totals.processingFees,totals.netRevenue,totals.platformTips,totals.filmTaxFees,totals.tipTaxFees,totals.pendingTaxFees],
+    [109,109,1871,178,20,2,0]);
   assert.equal(ctx.store.pendingViewerTransfers(ctx.platform).length,2);
 });
 

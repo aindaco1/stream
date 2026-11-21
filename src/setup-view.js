@@ -190,17 +190,16 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     ${siteFooter(admin ? '/setup/admin' : '/setup/dashboard')}</body></html>`;
 }
 
-const primaryLabels = { plays: 'Paid plays', averageWatch: 'Avg. watch time', sales: 'Sales', netRevenue: 'Net Revenue' };
+const primaryLabels = { plays: 'Paid plays', averageWatch: 'Avg. watch time', rentals: 'Rentals', purchases: 'Purchases', netRevenue: 'Net Revenue' };
 const detailLabels = {
-  previews: 'Preview starts', rentals: 'Rentals', purchases: 'Purchases', revenue: 'Revenue',
-  estimatedFees: 'Estimated card fees', filmTaxFees: 'Film share of Stripe Tax fees', taxCollected: 'Tax charged'
+  previews: 'Preview starts', revenue: 'Revenue',
+  processingFees: 'Stripe fees', filmTaxFees: 'Stripe Tax fees', taxCollected: 'Tax charged'
 };
-const platformDetails = { ...detailLabels, platformTips: 'Platform tips after tax and fees', tipTaxFees: 'Tip share of Stripe Tax fees', transfersToReview: 'Transfers to review' };
+const platformDetails = { ...detailLabels, platformTips: 'Platform tips after tax and fees', tipTaxFees: 'Tip tax fees', transfersToReview: 'Transfers to review' };
 const platformLabels = {...primaryLabels, ...platformDetails};
-const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'filmTaxFees', 'tipTaxFees', 'platformTips', 'taxCollected']);
+const moneyFields = new Set(['revenue', 'netRevenue', 'processingFees', 'filmTaxFees', 'tipTaxFees', 'platformTips', 'taxCollected']);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 function displayStat(stats, key) {
-  if (key === 'sales') return String(stats.rentals + stats.purchases);
   if (key === 'averageWatch') {
     if (!stats.timedPlays) return '—';
     return formatDuration(Math.round(stats.watchSeconds / stats.timedPlays)) || '0 sec';
@@ -214,16 +213,17 @@ function statsList(stats, details = detailLabels) {
     previews: 'How many times a free preview started. Someone can watch more than once.',
     plays: 'How many times a rented or purchased video started playing. Watching another title in a program can count as another play.',
     averageWatch: 'How long viewers watched, on average, each time they played a paid title. Pauses, buffering and skipped footage add no time. A dash means no plays have been timed yet.',
-    sales: 'Completed rentals and purchases combined. Buying or renting an entire program counts as one sale.',
-    rentals: 'Completed rental payments. Renting a whole program counts once.',
-    purchases: 'Completed purchases that include a download. Buying a whole program counts once.',
+    rentals: 'Completed rentals, including any later refunded. Renting a program counts once.',
+    purchases: 'Completed download purchases, including any later refunded. Buying a program counts once.',
     revenue: 'The film and program prices viewers paid, before fees or refunds. Tips and sales tax are counted separately.',
     netRevenue: 'What filmmakers keep after card fees, their share of confirmed Stripe Tax fees, and any recorded refunds up to the film price.' +
       (stats.estimatedOrders ? ' Card fees are still estimated for ' + payments(stats.estimatedOrders) + '.' : '') +
       (stats.pendingTaxFees ? ' The Stripe Tax fee is still pending for ' + payments(stats.pendingTaxFees) + '.' : ''),
-    estimatedFees: 'Stream estimates card fees at the U.S. domestic rate of 2.9% plus 30¢ per payment, including tips and tax.' +
-      (reported ? ' Stripe has reported ' + usd.format(stats.reportedFees / 100) + ' in processing fees on ' + payments(reported) + '.' : ''),
-    filmTaxFees: 'The filmmaker’s share of the fee Stripe charges to calculate tax. When a payment includes a tip, Dust Wave covers the tip’s share.',
+    processingFees: 'Card processing fees deducted from revenue. Stream estimates each fee until Stripe reports the actual amount.' +
+      (reported ? ' Stripe has confirmed ' + usd.format(stats.reportedFees / 100) + ' on ' + payments(reported) + '.' : '') +
+      (stats.estimatedOrders ? ' The remaining ' + usd.format((stats.processingFees - stats.reportedFees) / 100) + ' is estimated for ' + payments(stats.estimatedOrders) + '.' : ''),
+    filmTaxFees: 'The filmmaker’s share of Stripe’s fee for calculating tax on film or program sales. Dust Wave covers the tip’s share.' +
+      (stats.pendingTaxFees ? ' Awaiting confirmation for ' + payments(stats.pendingTaxFees) + '.' : ''),
     taxCollected: 'Tax charged at checkout, including any tax already included in a platform tip. This shows the original tax at the time of sale.',
     platformTips: 'Optional tips left for Dust Wave, after any tax included in the tip and the tip’s share of confirmed Stripe Tax fees.',
     tipTaxFees: 'The part of the confirmed Stripe Tax fee paid from Dust Wave’s tip.',
@@ -232,8 +232,13 @@ function statsList(stats, details = detailLabels) {
   const list = labels => '<dl class="film-stats">' + Object.entries(labels).map(([key, label]) =>
     `<div><dt data-field-help="${escapeHtml(explanations[key])}">${label}</dt><dd>${displayStat(stats, key)}</dd></div>`
   ).join('') + '</dl>';
+  const taxFee = stats.filmTaxFees ? ' − ' + displayStat(stats, 'filmTaxFees') + ' Stripe Tax fees' : '';
+  const refundNote = stats.refundAdjustments > 0
+    ? `<p class="hint net-calculation">${displayStat(stats, 'revenue')} revenue − ${displayStat(stats, 'processingFees')} Stripe fees` +
+      `${taxFee} − ${usd.format(stats.refundAdjustments / 100)} refunded = <strong>${displayStat(stats, 'netRevenue')} net revenue</strong></p>`
+    : '';
   return `<div class="analytics-summary">${list(primaryLabels)}
-    <details class="analytics-breakdown"><summary>Viewing and sales breakdown</summary>${list(details)}</details></div>`;
+    <details class="analytics-breakdown"><summary>Viewing and sales breakdown</summary>${list(details)}${refundNote}</details></div>`;
 }
 
 const analyticsGuide = '<p class="hint"><a href="/faq#dashboard-analytics">How these numbers are calculated</a></p>';

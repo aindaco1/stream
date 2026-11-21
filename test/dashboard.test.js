@@ -127,23 +127,29 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
       paidAt: Math.floor(Date.now() / 1000), refundedAmount: refund, disputeStatus: null, revocationReason: null, stripeFeeCents: kind === 'buy' ? 60 : null });
   }
   assert.deepEqual(store.dashboardFilms('Alice')[0].stats, { previews: 1, plays: 1, timedPlays: 0, watchSeconds: 0, rentals: 1, purchases: 1, revenue: 600,
-    filmTaxFees: 0, tipTaxFees: 0, pendingTaxFees: 0, estimatedFees: 79, reportedFees: 60, netRevenue: 329, estimatedOrders: 1, platformTips: 40, taxCollected: 0, transfersToReview: 0 });
+    filmTaxFees: 0, tipTaxFees: 0, pendingTaxFees: 0, processingFees: 96, reportedFees: 60, refundAdjustments: 175, netRevenue: 329, estimatedOrders: 1, platformTips: 40, taxCollected: 0, transfersToReview: 0 });
   assert.deepEqual(store.dashboardFilms('Benny')[0].stats, { previews: 0, plays: 0, timedPlays: 0, watchSeconds: 0, rentals: 0, purchases: 0, revenue: 0,
-    filmTaxFees: 0, tipTaxFees: 0, pendingTaxFees: 0, estimatedFees: 0, reportedFees: 0, netRevenue: 0, estimatedOrders: 0, platformTips: 0, taxCollected: 0, transfersToReview: 0 });
+    filmTaxFees: 0, tipTaxFees: 0, pendingTaxFees: 0, processingFees: 0, reportedFees: 0, refundAdjustments: 0, netRevenue: 0, estimatedOrders: 0, platformTips: 0, taxCollected: 0, transfersToReview: 0 });
   const platform = store.platformReport(null);
   assert.equal(platform.total.films, 2);
   assert.equal(platform.total.platformTips, 40);
   assert.equal(platform.total.netRevenue, 329);
   assert.equal(platform.total.revenue, 600);
-  assert.equal(platform.total.estimatedFees, 79);
+  assert.equal(platform.total.processingFees, 96);
+  assert.equal(platform.total.netRevenue, platform.total.revenue - platform.total.processingFees - platform.total.refundAdjustments - platform.total.filmTaxFees);
   assert.deepEqual(platform.rows.map(row => [row.name, row.revenue]), [['Alice', 600], ['Benny', 0]]);
   assert.deepEqual(store.platformReport('Benny').rows.map(row => row.title), ['Other private title']);
   const overview = (await ada.get()).split('id="overview"')[1].split('</section>')[0];
   assert.match(overview, /\$6\.00/);
   assert.match(overview, /data-field-help="[^"]*estimated for 1 payment\."[^>]*>Net Revenue</);
-  assert.match(overview, /data-field-help="[^"]*reported \$0\.60 in processing fees on 1 payment\."[^>]*>Estimated card fees</);
+  assert.match(overview, /data-field-help="[^"]*confirmed \$0\.60 on 1 payment\. The remaining \$0\.36 is estimated for 1 payment\."[^>]*>Stripe fees<\/dt><dd>\$0\.96</);
+  assert.match(overview, /\$6\.00 revenue − \$0\.96 Stripe fees − \$1\.75 refunded = <strong>\$3\.29 net revenue/);
   assert.match(overview, />Avg\. watch time<\/dt><dd>—<\/dd>/);
-  assert.match(overview, />Sales<\/dt><dd>2<\/dd>/);
+  const headline = overview.split('<details')[0];
+  assert.match(headline, />Rentals<\/dt><dd>1<\/dd>/);
+  assert.match(headline, />Purchases<\/dt><dd>1<\/dd>/);
+  assert.doesNotMatch(overview, />Sales<\/dt>/);
+  assert.doesNotMatch(await ben.get(), /class="hint net-calculation"/);
   for (const seconds of [0, 10, 20]) catalog.recordView(ada.id, 'paid', randomUUID(), {seconds});
   const timed = (await ada.get()).split('id="overview"')[1].split('</section>')[0];
   assert.match(timed, />Avg\. watch time<\/dt><dd>10 sec<\/dd>/, 'legacy plays stay out of the average');
