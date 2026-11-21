@@ -692,10 +692,14 @@ try {
         }
         await page.getByLabel('Free preview (seconds)').fill('0');
         await page.getByLabel('Rental duration (hours)').fill('12');
-        await page.getByRole('button', { name: 'Save settings' }).click();
-        assert.equal(new URL(page.url()).hash, '#' + privatePath.split('/').pop());
+        const savedDashboard = origin + '/setup/dashboard#' + privatePath.split('/').pop();
+        await Promise.all([
+          page.waitForURL(savedDashboard, { waitUntil: 'load' }),
+          page.getByRole('button', { name: 'Save settings' }).click()
+        ]);
         await page.reload();
-        await page.getByRole('form', { name: 'Edit prices and playback for Projection test <first cut>' }).waitFor();
+        assert.equal(await editor.getByLabel('Free preview (seconds)').inputValue(), '0');
+        assert.equal(await editor.getByLabel('Rental duration (hours)').inputValue(), '12');
         await page.getByRole('button', { name: 'Unpublish film' }).click();
         await page.getByRole('button', { name: 'Publish film' }).waitFor();
         assert.equal(await page.getByLabel('Embed code').count(), 0);
