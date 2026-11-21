@@ -423,6 +423,7 @@ async function checkFilmUpload(page, movies) {
   const editor = card.locator('.thumbnail-editor');
   const otherCard = page.locator('.dashboard-film').filter({ hasText: 'Projection test <first cut>' });
   const other = otherCard.locator('.thumbnail-editor');
+  await editor.waitFor();
   assert.equal(await page.locator('.thumbnail-editor').count(), 2);
   const image = await sharp({ create: { width: 320, height: 180, channels: 3, background: '#896c50' } }).png().toBuffer();
   await editor.getByLabel('Thumbnail image').setInputFiles({ name: 'second.png', mimeType: 'image/png', buffer: image });
