@@ -698,8 +698,7 @@ async function checkProgramEditor(page) {
   const preview = card.locator('.film-sharing iframe');
   assert.deepEqual(new URL(await preview.getAttribute('src')).searchParams.get('show').split(','), ['synopsis','byline','credits','message']);
   const posterStyle = card.getByLabel('Poster style');
-  assert.equal(await posterStyle.inputValue(), 'marquee');
-  await posterStyle.selectOption('broadside');
+  assert.equal(await posterStyle.inputValue(), 'broadside');
   const programFrame = preview.contentFrame();
   await programFrame.locator('body[data-poster=broadside] .poster-head #film-title').waitFor();
   await programFrame.getByText('Curated by Maya & Lee', {exact:true}).waitFor();
@@ -987,7 +986,7 @@ try {
         const frame = sharing.frameLocator('iframe');
         const publicUrl = env.STREAM_VIEWER_ORIGIN + '/embed/' + privatePath.split('/').pop();
         await checkThumbnails(page, publicUrl, artwork);
-        assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl + '?poster=marquee');
+        assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl + '?poster=broadside');
         assert.equal(await frame.locator('.film-info').count(), 0);
         const blankField = sharing.getByRole('checkbox', { name: 'Filmmaker message' });
         await blankField.check();
@@ -996,7 +995,7 @@ try {
         await page.setViewportSize({ width: 1024, height: 844 });
         const controlOffsets = () => sharing.evaluate(section => {
           const top = section.getBoundingClientRect().top;
-          return ['h4', 'form', '.embed-code', '.copy-embed'].map(selector =>
+          return ['h3', 'form', '.embed-code', '.copy-embed'].map(selector =>
             Math.round(section.querySelector(selector).getBoundingClientRect().top - top));
         });
         const stylePicker = sharing.getByLabel('Poster style');

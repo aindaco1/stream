@@ -611,6 +611,7 @@ try {
   interruptNext = true;
   await renter.locator('#rent').click();
   await renter.getByText('Checkout could not open.', { exact: false }).waitFor();
+  assert.ok(await renter.locator('#rent').evaluate(button => document.activeElement === button));
   await buyer.locator('#rent').click();
   await buyer.frameLocator('iframe[title="Test contact details"]').getByLabel('Email').waitFor();
   await buyer.getByRole('button', { name: 'Back to film' }).click();

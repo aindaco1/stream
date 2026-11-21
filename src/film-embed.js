@@ -6,8 +6,8 @@ export const infoFields = [
   { name: 'message', label: 'Filmmaker message', limit: 280 }
 ];
 
-export const posterStyles = new Map([['marquee', 'Midnight Marquee'], ['broadside', 'Festival Broadside']]);
-export const posterChoice = value => posterStyles.has(value) ? value : 'marquee';
+export const posterStyles = new Map([['broadside', 'Festival Broadside'], ['marquee', 'Midnight Marquee']]);
+export const posterChoice = value => posterStyles.has(value) ? value : 'broadside';
 
 export function selectedFields(value = '') {
   const names = value.split(',');
@@ -75,7 +75,7 @@ export function renderFilmInfo(info, fields) {
   if (!visible.length) return '';
   const paragraphs = visible.map(name => name === 'credits' ? renderCredits(info.creditEntries ?? info.credits) :
     `<p class="film-${name}">${escapeHtml(info[name])}</p>`);
-  return '<section class="film-info" aria-label="About the film">' + paragraphs.join('') + '</section>';
+  return '<div class="film-info">' + paragraphs.join('') + '</div>';
 }
 
 export function filmByline(info, fields) {

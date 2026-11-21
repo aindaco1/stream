@@ -186,12 +186,13 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.match(await poster('marquee', 'byline'), /A film by Ada &amp; Jo/);
   assert.doesNotMatch(await poster('marquee', 'byline'), /Camera &lt;A&gt;/);
   assert.doesNotMatch(await poster('broadside', 'credits'), /A film by Ada/);
-  assert.doesNotMatch(await poster('unknown', 'credits'), /data-poster=|poster\.css/);
+  assert.match(await poster('unknown', 'credits'), /data-poster="broadside"/);
+  assert.match(await player(''), /data-poster="broadside"/);
   assert.equal((await ada.post('info', { ...info, byline: 'x'.repeat(161) })).status, 422);
   assert.match(await player('credits,message'), /Camera &lt;A&gt; &amp; B/);
   assert.match(await player('credits,message'), /For our crew/);
   assert.doesNotMatch(await player('credits,message'), /A desert film/);
-  const details = (await player('synopsis,credits,message')).match(/<section class="film-info"[\s\S]*?<\/section>/)[0];
+  const details = (await player('synopsis,credits,message')).match(/<div class="film-info"[\s\S]*?<\/div>/)[0];
   assert.match(details, /<p class="film-synopsis">A desert film\.<\/p><p class="film-message">For our crew\.<\/p><p class="film-credits"><span class="credit"><span class="credit-name">Camera &lt;A&gt; &amp; B<\/span><\/span><\/p>/);
   assert.doesNotMatch(details, />Synopsis<|>Credits<|>Filmmaker message</);
   assert.doesNotMatch(await player('unknown'), /A desert film|For our crew|class="film-info"/);

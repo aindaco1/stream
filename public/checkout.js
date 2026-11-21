@@ -432,6 +432,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
         refresh.focus();
       } else {
         showOffer();
+        byId(kind).focus();
         status.textContent = 'Checkout could not open. Select your offer to try again or check an earlier payment.';
       }
     }

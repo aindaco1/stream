@@ -78,7 +78,7 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
         <button class="secondary" name="action" value="preview">Save and preview</button>
         <button name="action" value="publish">${program.published ? 'Publish changes' : 'Publish program'}</button></div>
     </form>
-    ${program.bucket ? `<div class="film-card">${thumbnailEditor({ ...program, uploads: program.bucket.uploads }, csrf)}
+    ${program.bucket ? `<div class="film-card">${thumbnailEditor({ ...program, uploads: program.bucket.uploads }, csrf, 'h2')}
       <p class="hint">The first film’s thumbnail appears until you add a program image.</p></div>` :
       '<p><a href="/setup/settings#storage">Connect storage</a> to upload a program thumbnail.</p>'}`;
 }

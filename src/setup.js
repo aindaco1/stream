@@ -1,3 +1,4 @@
+import { staticAsset } from './static-asset.js';
 import { createHash } from 'node:crypto';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { streamSender, sendStreamEmail, mailbox } from './stream-email.js';
@@ -130,8 +131,8 @@ export async function createSetup({
   directory = join(operatorDirectory(), 'filmmakers'), stripe, viewerCheckout, env = process.env,
   sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm, thumbnailFetch = fetch, uploadFetch = fetch, verifyChallenge = verifyTurnstile, mailFetch = fetch
 } = {}) {
-  const style = await readFile(new URL('../public/setup.css', import.meta.url));
-  const darkStyle = await readFile(new URL('../public/setup-dark.css', import.meta.url));
+  const style = staticAsset('text/css', await readFile(new URL('../public/setup.css', import.meta.url)));
+  const darkStyle = staticAsset('text/css', await readFile(new URL('../public/setup-dark.css', import.meta.url)));
   const scripts = new Map(await Promise.all(Object.entries({
     '/setup/turnstile-size.js': new URL(import.meta.resolve('@dustwave/admin-shell/turnstile-browser')),
     '/setup/sign-in.js': new URL('../public/sign-in.js', import.meta.url),
@@ -147,7 +148,7 @@ export async function createSetup({
     '/setup/navigation.js': new URL('../public/setup-navigation.js', import.meta.url),
     '/setup/tabs.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs')),
     '/setup/tabs-browser.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs-browser'))
-  }).map(async ([route, file]) => [route, await readFile(file)])));
+  }).map(async ([route, file]) => [route, staticAsset('text/javascript', await readFile(file))])));
   const from = streamSender(env);
   const siteKey = from && env.STREAM_TURNSTILE_SECRET_KEY && env.STREAM_TURNSTILE_SITE_KEY;
   const store = openSetupStore(directory);
@@ -202,9 +203,9 @@ export async function createSetup({
         ...feedback
       }));
     };
-    if (get && path === '/setup/style.css') return send(200, 'text/css', style, commonHeaders);
-    if (get && path === '/setup/dark.css') return send(200, 'text/css', darkStyle, commonHeaders);
-    if (get && scripts.has(path)) return send(200, 'text/javascript', scripts.get(path), commonHeaders);
+    if (get && path === '/setup/style.css') return style(req, send, commonHeaders);
+    if (get && path === '/setup/dark.css') return darkStyle(req, send, commonHeaders);
+    if (get && scripts.has(path)) return scripts.get(path)(req, send, commonHeaders);
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
     if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(), { faq: true, admin }));
     if (get && path === agreementPath) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(), { reference: true }));

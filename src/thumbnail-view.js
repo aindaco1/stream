@@ -1,7 +1,7 @@
 import { escapeHtml } from './film-embed.js';
 import { centerFrame } from './thumbnail-frame.js';
 
-export function thumbnailEditor(film, csrf) {
+export function thumbnailEditor(film, csrf, heading = 'h3') {
   const id = encodeURIComponent(film.id);
   const url = '/setup/thumbnail/' + id;
   const version = escapeHtml(film.thumbnail || '');
@@ -9,7 +9,7 @@ export function thumbnailEditor(film, csrf) {
     ${version ? `src="${url}/poster.jpg" loading="lazy"` : 'hidden'}>`;
   const controls = [['x', 'Horizontal position', 0, 100], ['y', 'Vertical position', 0, 100], ['zoom', 'Zoom', 100, 200]]
     .map(([name, label, min, max]) => `<label>${label}<input type="range" name="${name}" min="${min}" max="${max}" value="${centerFrame[name]}"></label>`).join('');
-  return `<section class="film-thumbnail" id="thumbnail-${id}"><h4>Thumbnail</h4>
+  return `<section class="film-thumbnail" id="thumbnail-${id}"><${heading}>Thumbnail</${heading}>
     ${film.uploads ? `<form class="thumbnail-editor" aria-label="Thumbnail for ${escapeHtml(film.title)}"
       data-version="${version}" data-csrf="${escapeHtml(csrf)}" data-url="${url}">
       <noscript>Enable JavaScript to preview and save a thumbnail.</noscript>

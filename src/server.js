@@ -1,4 +1,5 @@
 import { workspacePage } from './setup-view.js';
+import { staticAsset } from './static-asset.js';
 import { createServer } from 'node:http';
 import { createCipheriv } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -11,7 +12,7 @@ import { faqLink, siteFooter } from './site-frame.js';
 import { agreementPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
-import { escapeHtml, filmByline, posterStyles, renderFilmInfo, selectedFields } from './film-embed.js';
+import { escapeHtml, filmByline, posterChoice, renderFilmInfo, selectedFields } from './film-embed.js';
 import { formatDuration } from './offer-fields.js';
 import { programPresentation, streamProgramArchive } from './program-delivery.js';
 import { playbackSettings } from './operator.js';
@@ -40,6 +41,7 @@ const assets = new Map([
   ['/hls.js', ['../node_modules/hls.js/dist/hls.light.min.js', 'text/javascript']]
 ]);
 const headers = {
+  'X-Robots-Tag': 'noindex',
   'Cache-Control': 'private, no-store',
   'Referrer-Policy': 'no-referrer',
   'X-Content-Type-Options': 'nosniff',
@@ -48,7 +50,7 @@ const headers = {
 
 function reply(req, res, status, type, body, extra = {}) {
   const data = Buffer.isBuffer(body) ? body : Buffer.from(body);
-  res.writeHead(status, { ...headers, 'Content-Type': type, 'Content-Length': data.length, ...extra });
+  res.writeHead(status, { ...headers, 'Content-Type': type, ...(status !== 304 && { 'Content-Length': data.length }), ...extra });
   res.end(req.method === 'HEAD' ? undefined : data);
 }
 
@@ -186,7 +188,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
     ['player', 'checkout', 'return', 'screening'].map(name => readFile(new URL('../public/' + name + '.html', import.meta.url), 'utf8')));
   const lookup = (id, entitled = false, revision) => catalog?.get(id, { entitled, ...(revision && {revision}) }) || (openMaker && filmSpec(id));
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
-    [path, { type, data: await readFile(new URL(file, import.meta.url)) }])));
+    [path, staticAsset(type, await readFile(new URL(file, import.meta.url)))])));
   const server = createServer(async (req, res) => {
     const held = new Set();
     const connection = (spec, entitled = false, memberId) => acquire(spec, entitled, held, memberId);
@@ -228,8 +230,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
       if (read && staticFiles.has(path)) {
-        const { type, data } = staticFiles.get(path);
-        return send(200, type, data);
+        return staticFiles.get(path)(req, send);
       }
       if (catalog && read && (path === '/screening' || path === '/')) {
         const embeds = catalog.list().map(({ id, title }) =>
@@ -274,28 +275,23 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (!spec) return fail(404);
         const payable = Boolean(checkout && spec.id);
         const params = new URL(req.url, origin).searchParams;
-        const show = params.get('show'), style = params.get('poster');
-        const themed = posterStyles.has(style);
+        const show = params.get('show'), style = posterChoice(params.get('poster'));
         const fields = selectedFields(show || '');
         const title = escapeHtml(published?.title || 'Private screening');
         const heading = `<h1 id="film-title">${title}</h1>`;
         const summary = '<p id="program-summary" hidden></p>';
-        const info = renderFilmInfo(published?.info, fields);
+        const program = spec.type === 'program';
+        const byline = program ? '' : filmByline(published?.info, fields);
+        const runtime = program ? summary : `<span>${escapeHtml(formatDuration(published?.duration))}</span>`;
+        const description = published?.info?.synopsis && fields.some(field => field.name === 'synopsis')
+          ? published.info.synopsis : published ? `Watch ${published.title} in the filmmaker’s Stream player.` : 'Private screening.';
         const text = {
-          title, poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '',
-          posterAttribute: '', posterStyles: '', masthead: '', detailsTitle: heading + summary, filmInfo: info, posterInfo: ''
+          title, description: escapeHtml(description), style,
+          poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '',
+          masthead: `<header class="poster-head"><div class="poster-imprint"><span id="poster-byline"${byline ? '' : ' hidden'}>${escapeHtml(byline)}</span>${runtime}</div>${style === 'broadside' ? heading : ''}</header>`,
+          detailsTitle: style === 'marquee' ? heading : '',
+          filmInfo: renderFilmInfo(published?.info, fields)
         };
-        if (themed) {
-          const program = spec.type === 'program';
-          const byline = program ? '' : filmByline(published?.info, fields);
-          const runtime = program ? summary : `<span>${escapeHtml(formatDuration(published?.duration))}</span>`;
-          text.posterAttribute = ` data-poster="${style}"`;
-          text.posterStyles = '<link rel="stylesheet" href="/poster.css">';
-          text.masthead = `<header class="poster-head"><div class="poster-imprint"><span id="poster-byline"${byline ? '' : ' hidden'}>${escapeHtml(byline)}</span>${runtime}</div>${style === 'broadside' ? heading : ''}</header>`;
-          text.detailsTitle = style === 'marquee' ? heading : '';
-          text.posterInfo = info;
-          text.filmInfo = '';
-        }
         text.programStyles = spec.type === 'program' ? '<link rel="stylesheet" href="/program-lineup.css">' : '';
         text.program = spec.type === 'program' ? escapeHtml(JSON.stringify(published ?
           programPresentation(published, show === null ? undefined : fields) : {title:'Private screening',lineup:[]})) : '';
@@ -307,7 +303,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           .replaceAll('{{rent}}', String(published?.prices?.rent ?? ''))
           .replaceAll('{{rentalHours}}', String(published?.rentalHours ?? 48))
           .replaceAll('{{buy}}', String(published?.prices?.buy ?? ''))
-          .replace(/\{\{(title|filmInfo|poster|program|programStyles|posterStyles|masthead|detailsTitle|posterInfo|posterAttribute)\}\}/g, (_, key) => text[key]);
+          .replace(/\{\{(title|description|style|filmInfo|poster|program|programStyles|masthead|detailsTitle)\}\}/g, (_, key) => text[key]);
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
       const versioned = /^\/film\/(p-[a-f0-9-]{36})\/v\/([\w-]{43})(?:\/title\/(f-[a-f0-9-]{36}))?\/(.+)$/.exec(path);

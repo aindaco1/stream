@@ -58,13 +58,10 @@ export async function checkProgramLayout(frames) {
     assert.equal(await frame.locator('#program-lineup details').count(), 0);
     assert.ok(await frame.locator('#program-lineup .film-synopsis').first().isVisible());
     assert.equal(overflow, 0);
-    if (width === 320) {
-      assert.ok(list.top >= video.bottom);
-    } else {
-      assert.equal(width, 900);
-      assert.ok(list.left >= video.right);
-
-    }
+    assert.ok([320, 900].includes(width));
+    assert.equal(await frame.locator('body').getAttribute('data-poster'), 'broadside');
+    assert.ok(list.top >= video.bottom, 'The lineup follows the player on the portrait poster');
+    assert.ok(video.width <= 640, 'The poster keeps its reading width on a wide host page');
   }
 }
 

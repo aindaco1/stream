@@ -12,7 +12,7 @@ const pages = mountResponsiveTabSelect(workspace, {
   activate: path => location.assign(path)
 });
 if (!currentPage) {
-  const here = new Option(document.querySelector('.bar [aria-current="page"]').textContent, '', true, true);
+  const here = new Option(document.querySelector('main h1').textContent, '', true, true);
   here.disabled = true;
   pages.select.prepend(here);
 }

@@ -159,11 +159,19 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
       ])}`);
 }
 
+const publicDescriptions = new Map([
+  ['Create your filmmaker workspace', 'Embed your films on your own website. Join the Stream pilot to try previews, rentals and downloads with your own film storage.'],
+  ['Filmmaker sign-in', 'Sign in to your Stream filmmaker workspace with a private email link.'],
+  ['FAQ', 'Learn how to put a film on your website, create a program, connect storage and payments, and understand fees and viewer access.'],
+  ['Filmmaker agreement', 'Read the Stream pilot terms for filmmakers, including film ownership, permissions, storage and viewer access.']
+]);
+
 export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, signInHref = '/setup/sign-in', turnstile = false } = {}) {
   const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="same-origin">
+    ${publicDescriptions.has(title) ? `<meta name="description" content="${escapeHtml(publicDescriptions.get(title))}">` : ''}
     <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css">
     <link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
     ${programPreview ? '<link rel="stylesheet" href="/program-lineup.css">' : ''}
@@ -311,7 +319,7 @@ function filmInfoEditor(film, csrf, selection, style, saved) {
         : `<textarea id="${escapeHtml(film.id)}-${name}" name="${name}" rows="2" maxlength="${limit}">${escapeHtml(film.info?.[name])}</textarea>`}</div>`).join('');
   return `<form id="info-${escapeHtml(film.id)}" class="film-info-editor" method="post" action="/setup/dashboard/info">
     ${hidden('csrf', csrf)}${hidden('filmId', film.id)}${hidden('show', selection)}${hidden('poster', style)}
-    <h4>Film details</h4><p class="hint">Each embed can show any of these fields. Saved edits appear wherever that field is included.</p>
+    <h3>Film details</h3><p class="hint">Each embed can show any of these fields. Saved edits appear wherever that field is included.</p>
     <div class="info-fields">${fields}</div><div class="film-actions"><button type="submit">Save film details</button>
     ${saved ? '<span role="status">Film details saved.</span>' : ''}</div></form>`;
 }
@@ -339,7 +347,7 @@ function embedBuilder(film, url, previewUrl, selection, style, program = false) 
     }
   }
   return `<section class="film-sharing"${program ? ' data-program' : ''} id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}" data-preview="${escapeHtml(previewUrl)}" data-populated="${populated.join(',')}" data-lineup-size="${lineupSize}">
-    <div class="embed-controls"><h4>Embed this ${program ? 'program' : 'film'}</h4>
+    <div class="embed-controls"><h3>Embed this ${program ? 'program' : 'film'}</h3>
       <form method="get" action="/setup/dashboard#embed-${escapeHtml(film.id)}">${hidden('film', film.id)}
         <label>Poster style<select name="poster">${designs}</select></label>
         <fieldset class="embed-options"><legend>Include in this embed</legend><div class="embed-checks">${options}</div><p class="hint">Only fields with saved text will appear.</p></fieldset>
@@ -348,7 +356,7 @@ function embedBuilder(film, url, previewUrl, selection, style, program = false) 
         <textarea id="code-${escapeHtml(film.id)}" class="embed-code" readonly spellcheck="false" rows="3">${escapeHtml(code)}</textarea></div>
       <div class="film-actions"><button class="secondary copy-embed" type="button">Copy embed code</button><span class="copy-status" role="status"></span></div>
     </div>
-    <div class="embed-preview"><div class="preview-heading"><h5>${program ? 'Published embed preview' : 'Live preview'}</h5><a class="public-player" href="${escapeHtml(layout.src)}">Open public player</a></div>
+    <div class="embed-preview"><div class="preview-heading"><h4>${program ? 'Published embed preview' : 'Live preview'}</h4><a class="public-player" href="${escapeHtml(layout.src)}">Open public player</a></div>
       ${pricingNote}${iframeCode(layoutFor(previewUrl), film.title, false)}</div>
     </section>`;
 }

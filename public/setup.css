@@ -182,7 +182,7 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .preview-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .25rem .75rem; }
 .public-player { font-size: .875rem; }
 .film-list-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
-.film-sharing h4, .film-info-editor h4, .embed-preview h5 { margin: 0; font-size: 1.125rem; }
+.film-sharing :is(h3, h4), .film-info-editor h3 { margin: 0; font-size: 1.125rem; }
 .info-fields { display: grid; gap: 1rem; }
 @media (min-width: 42rem) {
   .info-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -214,7 +214,7 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .embed-preview iframe { display: block; width: 100%; max-width: 640px; border: 0; background: #181818; }
 .film-thumbnail { display: grid; min-width: 0; gap: .75rem; border-block-start: 1px solid var(--line); padding-block-start: 1.25rem; }
 .file-picker [hidden], .video-upload [hidden], .film-thumbnail [hidden] { display: none; }
-.film-thumbnail h4 { font-size: 1.125rem; margin: 0; }
+.film-thumbnail > :is(h2, h3) { font-size: 1.125rem; margin: 0; }
 .thumbnail-readonly { display: grid; gap: .75rem; }
 .thumbnail-readonly > a { justify-self: start; }
 .thumbnail-readonly .thumbnail-poster { width: 100%; height: auto; border-radius: .35rem; }
@@ -293,7 +293,7 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .watermark-setting .help-field { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem .75rem; }
 .thumbnail-sliders .help-field { display: grid; grid-template-columns: minmax(8rem, 11rem) minmax(0, 1fr); align-items: center; }
 .thumbnail-sliders .help-heading label { display: block; }
-.program-library .help-heading { flex: 1; }
+.program-library .help-heading { flex: 1 1 14rem; min-width: min(100%, 12rem); }
 .program-library .help-heading label { min-width: 0; flex: initial; }
 .help-field small { display: block; color: var(--muted); }
 button.info-button, .provider-card button.info-button {

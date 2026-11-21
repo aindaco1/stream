@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{description}}">
   <title>{{title}} · Stream</title>
-  <link rel="stylesheet" href="/style.css">{{programStyles}}{{posterStyles}}
+  <link rel="stylesheet" href="/style.css">{{programStyles}}<link rel="stylesheet" href="/poster.css">
   <script src="/app.js" type="module"></script>
 </head>
-<body{{posterAttribute}} data-program="{{program}}" data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
+<body data-poster="{{style}}" data-program="{{program}}" data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
   <main aria-labelledby="film-title">
     {{masthead}}
     <div class="video-stage">
@@ -26,7 +27,7 @@
     </div>
     <div class="details">
       <div class="title-block">{{detailsTitle}}<p id="program-now" role="status" hidden></p></div>
-      {{posterInfo}}
+      {{filmInfo}}
       <button type="button" id="play">Play {{preview}}-second preview</button>
     </div>
     <section id="purchase" aria-label="Film offers" hidden>
@@ -47,7 +48,7 @@
     <section id="payment" aria-labelledby="checkout-heading" hidden>
       <div id="checkout-scroll">
         <header class="payment-header">
-          <div class="payment-nav"><h2 id="checkout-heading" tabindex="-1">{{title}}</h2>
+          <div class="payment-nav"><h1 id="checkout-heading" tabindex="-1">{{title}}</h1>
             <button type="button" id="close-checkout">Back to film</button></div>
           <div class="order-line"><p id="order-terms"></p><strong id="order-price"></strong></div>
           <p id="order-tip" hidden></p>
@@ -76,7 +77,7 @@
         <form id="card-form" hidden>
           <div id="contact-element"></div>
           <section id="billing-location" aria-labelledby="billing-label" hidden>
-            <h3 id="billing-label">Billing address</h3>
+            <h2 id="billing-label">Billing address</h2>
             <div id="billing-address-element"></div>
           </section>
           <div id="payment-element"></div>
@@ -109,7 +110,6 @@
     <div id="email-return" hidden><button id="redeem-link" type="button">Restore and watch</button></div>
     <p id="status" role="status" aria-live="polite"></p>
     <p id="subtitle-status" role="status"></p>
-    {{filmInfo}}
     <details id="restore-tools" hidden><summary>Restore access</summary>
       <form id="restore-form"><label>Email used at checkout
         <input id="restore-email" type="email" name="email" autocomplete="email" required maxlength="254"></label>
