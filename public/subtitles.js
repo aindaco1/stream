@@ -40,6 +40,16 @@ export function attachSubtitles(video, setRendition) {
   const playlistText = () => receiverPath && typeof video.webkitShowPlaybackTargetPicker === 'function';
   const entries = new Map();
 
+  // Safari can leave the chosen HLS subtitle disabled when system captions are off.
+  function showReceiverText() {
+    if (!playlistText() || entries.get(selected)?.track.format !== 'text') return;
+    for (const track of video.textTracks) {
+      if (track.kind === 'subtitles') track.mode = 'showing';
+    }
+  }
+  video.textTracks.addEventListener('addtrack', showReceiverText);
+  video.addEventListener('loadedmetadata', showReceiverText);
+
   function clear() {
     request?.abort();
     request = undefined;

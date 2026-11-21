@@ -27,13 +27,21 @@ video { display: block; background: #080808; width: 100%; aspect-ratio: 16 / 9; 
   position: absolute; inset: .4rem .4rem auto auto; display: flex; gap: .125rem;
   transition: opacity .15s ease-out;
 }
+.video-stage.docked-tools { display: grid; grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); }
+.docked-tools > video, .docked-tools > #start-video { grid-area: 1 / 1 / 2 / 2; }
+.docked-tools > .video-tools {
+  position: static; grid-area: 2 / 1; justify-content: flex-end; flex-wrap: wrap;
+  padding-inline: .4rem; background: #111;
+}
 .video-stage.tools-idle .video-tools:not(:has(:is(:focus-visible:not([data-pointer-focus]), select:open))) { opacity: 0; pointer-events: none; }
 .video-tool {
   position: relative; display: grid; place-items: center; width: 44px; height: 44px;
   padding: 0; border: 0; border-radius: .35rem; background: rgb(0 0 0 / .72); color: #fff;
 }
 .video-tool:hover, .video-tool:has(:focus-visible:not([data-pointer-focus])) { background: #222; }
-.video-tool:has(:focus-visible:not([data-pointer-focus])) { outline: 2px solid white; outline-offset: 2px; }
+.video-tool:focus-visible:not([data-pointer-focus]),
+.video-tool:has(select:focus-visible:not([data-pointer-focus])) { outline: 2px solid currentColor; outline-offset: -4px; }
+.video-tool[data-pointer-focus]:focus { outline: none; }
 .caption-icon {
   font: 700 .69rem/1 Arial, sans-serif; letter-spacing: .03em; padding: .11rem .13rem;
   border: 1.5px solid currentColor; border-radius: .15rem;

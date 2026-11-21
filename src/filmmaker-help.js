@@ -50,8 +50,11 @@ export function renderFilmmakerFaq() {
     <section><h2>Can viewers turn subtitles on?</h2>
       <p>Yes. If the film has subtitles, tap or move over the video to show its controls. Choose the captions button to pick a language or turn subtitles off. Stream supports embedded text subtitles and DVD or Blu-ray picture subtitles. Check the private preview for the tracks available in your file.</p>
     </section>
-    <section><h2>Can I watch a rental on my TV?</h2>
-      <p>Start an individual film rental on the same Wi-Fi network as your TV. In Safari, choose <strong>AirPlay</strong> in the video controls. In other browsers, choose <strong>Play on TV</strong>. The devices you see depend on your browser. If your AirPlay TV isn’t listed, open <strong>Watch on another device</strong> and use your private rental link in Safari. You can keep watching until the original rental ends.</p>
+    <section id="tv"><h2>Can I watch a rental on my TV?</h2>
+      <p>Start an individual film rental on the same Wi-Fi network as your TV. In Safari, choose <strong>AirPlay</strong> in the video controls. In Opera and other browsers, choose <strong>Play on TV</strong>. The devices you see depend on your browser. If your AirPlay TV isn’t listed, open <strong>Watch on another device</strong> and use your private rental link in Safari. You can keep watching until the original rental ends.</p>
+      <h3>What should I export for TV viewing?</h3>
+      <p>For the widest compatibility, export an <strong>MP4 with H.264 video and stereo AAC-LC audio</strong>. Use standard dynamic range (SDR), 8-bit color and up to 1080p at 24, 25 or 30 frames per second. Keep your film’s original frame rate if it’s one of those.</p>
+      <p>You can also upload HEVC, AV1 or VP9. Stream prepares H.264 video for the rental, so the TV doesn’t need to read your original file. When Stream converts a film, the viewing copy is up to 720p at 24 frames per second. Viewers who buy a download receive the original. Before a screening, try a rental on the intended TV and check the picture, sound and any captions.</p>
     </section>
     <section><h2>Can I keep watching in a floating window?</h2>
       <p>Start the film, then choose the picture-in-picture button on the video. It appears when your browser, device and the site hosting the player allow it.</p>

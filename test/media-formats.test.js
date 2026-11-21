@@ -55,6 +55,15 @@ for (const [codec,extension,encoder,subtitleCodec] of codecs) {
         assert.ok(['h264','aac'].includes(stream.codec_name));
         assert.ok(Number(stream.duration) <= 5.00001, codec+' preview duration '+stream.duration);
       }
+      const paidStreams = probe(ending,'stream=codec_type,codec_name,profile,pix_fmt,sample_rate,channels').streams;
+      const video = paidStreams.find(stream => stream.codec_type === 'video');
+      const audio = paidStreams.find(stream => stream.codec_type === 'audio');
+      assert.equal(video.codec_name, 'h264');
+      assert.equal(video.pix_fmt, 'yuv420p');
+      assert.equal(audio.codec_name, 'aac');
+      assert.equal(audio.profile, 'LC');
+      assert.equal(audio.channels, 2);
+      assert.equal(audio.sample_rate, '48000');
       assert.ok(pixel(preview,4) < 16);
       assert.ok(pixel(ending,.5) > 230);
       ff(['-xerror','-i',ending,'-f','null','-']);

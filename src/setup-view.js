@@ -112,7 +112,7 @@ export function filmSection({ r2, rights, draft, csrf }) {
   }
   return `
     <details class="film-guide"><summary>Supported video settings</summary>
-      <p>Choose an MP4, MOV or MKV up to 10 GB and four hours long. Supported video formats are H.264, H.265 (HEVC), AV1 and VP9. Include subtitle tracks in the file if you want viewers to be able to turn them on.</p>
+      <p>Choose an MP4, MOV or MKV up to 10 GB and four hours long. Supported video formats are H.264, H.265 (HEVC), AV1 and VP9. Include subtitle tracks in the file if you want viewers to be able to turn them on. <a href="/faq#tv">Recommended export settings for TV viewing</a></p>
     </details>
     <form method="post" action="/setup/film" data-film-form>${fields}
       <label>${draft.programTarget ? 'Video title' : 'Film title'}<input id="film-title" name="title" type="text" maxlength="160" required value="${escapeHtml(draft.title)}"></label>

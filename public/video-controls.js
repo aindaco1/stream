@@ -1,6 +1,9 @@
 export function attachVideoControls(video, status) {
   const stage = video.closest('.video-stage');
   const button = stage.querySelector('#picture-in-picture');
+  // WebKit expands its native volume slider across the upper part of the picture.
+  const docked = typeof video.webkitShowPlaybackTargetPicker === 'function';
+  stage.classList.toggle('docked-tools', docked);
   const standard = typeof video.requestPictureInPicture === 'function' && typeof document.exitPictureInPicture === 'function';
   const inPip = () => standard ? document.pictureInPictureElement === video : video.webkitPresentationMode === 'picture-in-picture';
   let hideTimer;
@@ -8,7 +11,7 @@ export function attachVideoControls(video, status) {
   function showTools() {
     clearTimeout(hideTimer);
     stage.classList.remove('tools-idle');
-    if (!video.paused && !video.ended) hideTimer = setTimeout(() => stage.classList.add('tools-idle'), 2400);
+    if (!docked && !video.paused && !video.ended) hideTimer = setTimeout(() => stage.classList.add('tools-idle'), 2400);
   }
 
   function updatePip() {

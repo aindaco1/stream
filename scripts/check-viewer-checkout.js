@@ -643,6 +643,21 @@ try {
   await renter.locator('video').evaluate(video => { video.currentTime = 120; });
   await renter.waitForFunction(() => document.querySelector('video').currentTime > 120.25, null, { polling: 100 });
   const subtitleMenu = renter.getByRole('combobox', { name: 'Subtitles' });
+  const tv = renter.locator('#airplay');
+  await subtitleMenu.focus();
+  await subtitleMenu.press('Tab');
+  assert.ok(await tv.evaluate(button => {
+    const style = getComputedStyle(button);
+    return document.activeElement === button && style.outlineStyle === 'solid' &&
+      parseFloat(style.outlineOffset) <= -parseFloat(style.outlineWidth);
+  }));
+  // A mouse-opened system picker can return focus to the same button on Escape.
+  await tv.dispatchEvent('pointerdown', { pointerType:'mouse' });
+  await tv.press('Escape');
+  assert.equal(await tv.evaluate(button => getComputedStyle(button).outlineStyle), 'none');
+  await tv.press('Shift+Tab');
+  await subtitleMenu.press('Tab');
+  assert.equal(await tv.evaluate(button => getComputedStyle(button).outlineStyle), 'solid');
   await subtitleMenu.selectOption('s2');
   await renter.waitForFunction(() => [...document.querySelector('video').textTracks].some(track => track.activeCues?.[0]?.text === 'Paid caption'));
   await subtitleMenu.selectOption('s3');
@@ -786,6 +801,22 @@ try {
   assert.equal(layoutFrames.length, 2);
   await checkProgramLayout(layoutFrames);
   await layouts.close();
+  // Exercise Safari's separate control row in CI as well as on macOS with SafariDriver.
+  const docked = await context.newPage();
+  await docked.addInitScript(() => { HTMLVideoElement.prototype.webkitShowPlaybackTargetPicker = () => {}; });
+  await docked.goto(app + '/embed/first');
+  await docked.locator('video').evaluate(video => { video.muted = true; });
+  await docked.locator('#play').click();
+  const cc = docked.getByRole('combobox', { name:'Subtitles' });
+  await cc.waitFor();
+  await docked.locator('video').evaluate(video => video.pause());
+  for (const [width, height] of [[320, 200], [750, 600]]) {
+    await docked.setViewportSize({ width, height });
+    const video = await docked.locator('video').boundingBox();
+    const captions = await cc.boundingBox();
+    assert.ok(video.height > 0 && captions.y >= video.y + video.height - .5 && captions.height >= 44);
+  }
+  await docked.close();
   const programPage = await context.newPage();
   await programPage.goto(host);
   const programFrame = programPage.frame({url:url=>url.pathname === '/embed/' + program.offer.id});
