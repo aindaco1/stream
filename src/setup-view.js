@@ -32,7 +32,7 @@ function stripeCard(stripe, csrf) {
     restricted: 'Payments unavailable'
   };
   let description = 'Connect Stripe to publish and get paid.';
-  if (!stripe.configured) description = 'Dust Wave is still setting up Stripe for this workspace.';
+  if (!stripe.configured) description = 'Stripe setup for this Stream workspace is still in progress.';
   else if (ready) {
     description = stripe.businessName && stripe.businessName !== stripe.accountId ? stripe.businessName : '';
     if (!description && stripe.accountId) description = `Account ending in ${stripe.accountId.slice(-4)}`;
@@ -223,11 +223,11 @@ function statsList(stats, details = detailLabels, id = 'overview') {
     processingFees: 'Card processing fees deducted from revenue. Stream estimates each fee until Stripe reports the actual amount.' +
       (reported ? ' Stripe has confirmed ' + usd.format(stats.reportedFees / 100) + ' on ' + payments(reported) + '.' : '') +
       (stats.estimatedOrders ? ' The remaining ' + usd.format((stats.processingFees - stats.reportedFees) / 100) + ' is estimated for ' + payments(stats.estimatedOrders) + '.' : ''),
-    filmTaxFees: 'The filmmaker’s share of Stripe’s fee for calculating tax on film or program sales. Dust Wave covers the tip’s share.' +
+    filmTaxFees: 'The filmmaker’s share of Stripe’s fee for calculating tax on film or program sales. Stream covers the tip’s share.' +
       (stats.pendingTaxFees ? ' Awaiting confirmation for ' + payments(stats.pendingTaxFees) + '.' : ''),
     taxCollected: 'Tax charged at checkout, including any tax already included in a platform tip. This shows the original tax at the time of sale.',
-    platformTips: 'Optional tips left for Dust Wave, after any tax included in the tip and the tip’s share of confirmed Stripe Tax fees.',
-    tipTaxFees: 'The part of the confirmed Stripe Tax fee paid from Dust Wave’s tip.',
+    platformTips: 'Optional tips left for Stream, after any tax included in the tip and the tip’s share of confirmed Stripe Tax fees.',
+    tipTaxFees: 'The part of the confirmed Stripe Tax fee paid from the Stream tip.',
     transfersToReview: 'Payments with an external adjustment that may affect a transfer. Open Stripe to review them.'
   };
   const list = labels => '<dl class="film-stats">' + Object.entries(labels).map(([key, label]) =>

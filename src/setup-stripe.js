@@ -179,7 +179,7 @@ export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch
       if (error.providerStatus !== 400 || (!legacyRejected && !countryRejected)) throw error;
       delete state.createRequest;
       await ctx.save();
-      if (countryRejected) throw new StripeSetupError('Stripe cannot enable card payments for this account and business country. Check your selection or contact Dust Wave.', 422);
+      if (countryRejected) throw new StripeSetupError('Stripe cannot enable card payments for this account and business country. Check your selection or contact Stream support.', 422);
       return ensureHostedAccount(ctx, country);
     }
     if (account?.object !== 'v2.core.account' || account.livemode !== live || !ACCOUNT_ID.test(account.id)) throw unavailable();

@@ -26,7 +26,7 @@ export function checkoutItems(order) {
   }
   const film = item(order.kind, order.amount, order.title, order.kind === 'rent' ?
     order.rentalHours + '-hour streaming rental, starting at purchase.' : 'One-time purchase with original file download.');
-  return order.tipAmount ? [film, item('tip', order.tipAmount, 'Optional tip to Dust Wave')] : [film];
+  return order.tipAmount ? [film, item('tip', order.tipAmount, 'Optional tip to Stream')] : [film];
 }
 
 export function matchesMarketplaceSession(session, order) {

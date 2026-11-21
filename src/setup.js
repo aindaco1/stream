@@ -24,8 +24,8 @@ const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 's
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
 const previewPattern = /^\/setup\/preview\/([fp]-[a-f0-9-]{36})(\/clip\.mp4)?$/;
 const callbackPattern = /^\/setup\/stripe\/(oauth|refresh|return)$/;
-const rightsVersion = 'film-distribution-v1';
-const rightsStatement = 'I own this film or have permission to distribute it through Dust Wave Stream.';
+const rightsVersion = 'film-distribution-v2';
+const rightsStatement = 'I own this film or have permission to distribute it through Stream.';
 
 class SetupError extends Error {
   constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; }
@@ -35,7 +35,7 @@ function signInPage(message = '', admin = false) {
   const title = admin ? 'Super admin sign-in' : 'Filmmaker sign-in';
   const feedback = message ? '<p role="alert">' + escapeHtml(message) + '</p>' : '';
   const instructions = admin ? 'Open your private admin invitation or enter its one-time code.' :
-    'Open the private invitation from Dust Wave, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.';
+    'Open your private Stream invitation, or paste your one-time code below. Returning filmmakers can request a fresh invitation to the same workspace.';
   return workspacePage(title, null, `<h1>${title}</h1>${feedback}<p>${instructions}</p>
     <form method="post" action="${admin ? '/setup/admin/sign-in' : '/setup/sign-in'}"><label>Invitation code
     <input name="code" type="password" required autocomplete="one-time-code" maxlength="64"></label>
@@ -183,7 +183,7 @@ export async function createSetup({
       try {
         const { code } = await readForm(req);
         const id = store.signIn(code || '', audience);
-        if (!id) return html(401, signInPage('This invitation has expired or was used. Ask Dust Wave for a fresh link.', admin));
+        if (!id) return html(401, signInPage('This invitation has expired or was used. Request a fresh link from Stream.', admin));
         return redirect(admin ? basePath : '/setup/settings', { 'Set-Cookie': cookie(id, admin ? 12 * 3600 : 14 * 86400) });
       } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
     }

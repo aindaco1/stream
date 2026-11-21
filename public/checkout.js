@@ -388,7 +388,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
       }
       if (result.tipAmount > 0 || marketplace) {
         byId('order-tip').textContent = 'Film ' + currency.format(result.filmAmount / 100) + (result.tipAmount > 0
-          ? ' + Dust Wave tip ' + currency.format(result.tipAmount / 100) + (marketplace ? ' (tax included)' : '') : '');
+          ? ' + Stream tip ' + currency.format(result.tipAmount / 100) + (marketplace ? ' (tax included)' : '') : '');
         byId('order-tip').hidden = false;
       }
       const [, card] = await Promise.all([stripeScript(), result.uiMode === 'elements' ? import('/payment.js') : undefined]);

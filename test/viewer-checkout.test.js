@@ -137,7 +137,7 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
       const tipAmount = Number(form.get('line_items[1][price_data][unit_amount]'));
       const amount = filmAmount + tipAmount;
       assert.equal(form.get('payment_intent_data[application_fee_amount]'), !marketplace && tipAmount ? String(tipAmount) : null);
-      if (tipAmount) assert.equal(form.get('line_items[1][price_data][product_data][name]'),'Optional tip to Dust Wave');
+      if (tipAmount) assert.equal(form.get('line_items[1][price_data][product_data][name]'),'Optional tip to Stream');
       assert.equal(headers.get('Stripe-Version'), '2026-10-28.endive');
       const uiMode = form.get('ui_mode');
       if (uiMode === 'embedded_page') {

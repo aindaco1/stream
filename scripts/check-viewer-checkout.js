@@ -700,7 +700,7 @@ try {
   await buyer.getByRole('button', { name: 'Back to film' }).click();
   await complete(buyer, 'buy', { sizes: [[375, 211]], async beforeEntry(order) {
     assert.deepEqual([order.filmAmount, order.tipAmount, order.amount], [299, 30, 329]);
-    assert.equal(await buyer.locator('#order-tip').textContent(), 'Film $2.99 + Dust Wave tip $0.30 (tax included)');
+    assert.equal(await buyer.locator('#order-tip').textContent(), 'Film $2.99 + Stream tip $0.30 (tax included)');
   } });
   await buyer.getByRole('combobox', { name: 'Subtitles' }).selectOption('s2');
   await buyer.waitForFunction(() => [...document.querySelector('video').textTracks].some(track => track.mode === 'showing' && track.cues?.length === 2));

@@ -25,7 +25,7 @@ export function processingFee(order, charge, total = orderTotal(order), applicat
   let application = 0, processing = 0;
   for (const fee of tx.fee_details) {
     if (fee.currency !== 'usd' || !Number.isSafeInteger(fee.amount) || fee.amount < 0) return null;
-    // Withholding on a platform charge may belong to Dust Wave. Hold it for review
+    // Withholding on a platform charge may belong to Stream’s operator. Hold it for review
     // before allocating a fee to the filmmaker's transfer.
     if (order.taxPolicy === 'marketplace-v1' && fee.type === 'withheld_tax' && fee.amount) return null;
     if (fee.type === 'application_fee') application += fee.amount;

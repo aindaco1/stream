@@ -73,13 +73,17 @@ export function recoveryStore(db, key) {
 
 export function createViewerRecovery({ store, env = process.env, fetchImpl = fetch }) {
   if (!env.STREAM_RECOVERY_FROM || !env.RESEND_API_KEY) return;
+  const sender = env.STREAM_RECOVERY_FROM.trim();
+  const address = mailbox(sender.match(/^[^<>\r\n]*<([^<>\r\n]+)>$/u)?.[1] ?? sender);
+  if (!address) throw new Error('STREAM_RECOVERY_FROM must contain one verified sender address.');
+  const from = `Stream <${address}>`;
   return {
     request(offer, address, origin) {
       if (env.STREAM_RECOVERY_TEST_TO && mailbox(address) !== mailbox(env.STREAM_RECOVERY_TEST_TO)) return;
       const delivery = store.reserveRecovery(offer, address);
       if (!delivery) return;
       const link = origin + '/embed/' + encodeURIComponent(offer.id) + '#restore=' + delivery.code;
-      const payload = prepareResendEmail({ from: env.STREAM_RECOVERY_FROM, to: [delivery.email],
+      const payload = prepareResendEmail({ from, to: [delivery.email],
         subject: 'Your Stream access link',
         text: 'You requested access to ' + offer.title + '. Open this private link within 15 minutes to continue watching.\n\n' +
           link + '\n\nIf you did not request this email, you can ignore it.' });
