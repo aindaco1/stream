@@ -4,7 +4,6 @@ import { previewSeconds } from './prices.js';
 import { formatDuration, hidden, priceFields, programOfferSummary } from './offer-fields.js';
 import { payoutCountryOptions } from './payout-countries.js';
 import { faqLink, siteFooter } from './site-frame.js';
-import { firstSale, renderSetupCosts } from './filmmaker-help.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
@@ -12,7 +11,7 @@ import { embedLayout, escapeHtml, iframeCode, infoFields, selectedFields } from 
 
 export function renderStripeCountryForm(csrf, mode) {
   const options = payoutCountryOptions.map(({ code, label }) => `<option value="${code}">${escapeHtml(label)}</option>`).join('');
-  return `<p>Choose the country where your business is registered. If you operate as an individual, choose the country where you do business. Stripe uses it to determine your verification and payment requirements.</p>
+  return `<p>Choose the country where your business is registered. If you work as an individual, choose where you do business.</p>
     <form method="post" action="/setup/stripe/start" class="provider-form">
       ${hidden('csrf', csrf)}${hidden('mode', mode)}
       <label>Business country or region <select name="country" required>
@@ -33,7 +32,7 @@ function stripeCard(stripe, csrf) {
     action_required: 'More information needed',
     restricted: 'Payments unavailable'
   };
-  let description = 'Use a new Stripe account or sign in to one you already have.';
+  let description = 'Connect Stripe to publish and get paid.';
   if (!stripe.configured) description = 'Dust Wave is still setting up Stripe for this workspace.';
   else if (ready) description = stripe.businessName ? `Payments account for ${stripe.businessName}.` : `Your Stripe account is ready for ${payments}.`;
   else if (stripe.status === 'pending') description = 'Stripe is reviewing your account information.';
@@ -41,11 +40,11 @@ function stripeCard(stripe, csrf) {
   else if (stripe.reason) description = stripe.reason;
 
   return renderStripeCard({
-    title: 'Get paid with Stripe',
+    title: stripe.mode === 'test' ? 'Stripe · Test payments' : 'Stripe', showGuide: false,
     status: stripe.configured ? (statuses[stripe.status] || 'Not connected') : 'Payments setup unavailable',
     // The shared renderer uses this flag to hide onboarding controls. Status
     // text and payment authorization retain their independent provider values.
-    description: ready ? description : firstSale + ' ' + description, csrfToken: csrf, ready: ready || stripe.status === 'pending' || stripe.unsupportedCountry, existingOAuth: stripe.existingAvailable === true,
+    description, csrfToken: csrf, ready: ready || stripe.status === 'pending' || stripe.unsupportedCountry, existingOAuth: stripe.existingAvailable === true,
     resume: stripe.hasAccount === true || stripe.creating === true,
     action: stripe.configured ? '/setup/stripe/start' : undefined,
     checkAction: stripe.configured && stripe.hasAccount ? '/setup/stripe/check' : undefined,
@@ -65,27 +64,28 @@ export function renderStripeReset(csrf, mode, state, confirmation) {
 
 const uploadOptions = { storageAccess: 'uploads', uploadConsent: 'I authorize Stream to encrypt and store this bucket key for video and thumbnail uploads.' };
 
-export function renderBucketAccess(csrf, location, error, action = '/setup/r2/access') {
+export function renderBucketAccess(csrf, location, error, action, replacing) {
+  const back = action === '/setup/r2/access' ? '<a href="/setup/settings?bucket=change#storage">Choose another bucket</a>' : '<a href="/setup/settings#storage">Back to Storage</a>';
   return (error ? `<p class="feedback error" role="alert">${escapeHtml(error)}</p>` : '') +
-    renderR2TokenForm({ ...location, ...uploadOptions, csrfToken: csrf, action }) +
-    '<p><a href="/setup/settings#storage">Choose another bucket</a></p>';
+    renderR2TokenForm({ ...location, ...uploadOptions, csrfToken: csrf, action, buttonLabel: replacing ? 'Save replacement key' : undefined }) +
+    `<p>${back}</p>`;
 }
 
-function storageCard(r2, draft, csrf) {
+function storageCard(r2, draft, csrf, chooseBucket) {
   const connected = r2.status === 'ready';
-  const jurisdiction = draft.jurisdiction ?? r2.jurisdiction;
-  return renderR2Card({
-    ...uploadOptions, title: 'Store your film on Cloudflare',
-    status: connected ? 'Connected' : r2.status === 'error' ? 'Check connection' : 'Not connected',
-    description: connected ? (r2.uploads ? `Films and thumbnails upload to ${r2.bucket} from Stream.` : `Stream has read access to ${r2.bucket}.`) :
-      'Connect a private R2 bucket in your Cloudflare account. Your film stays in that bucket.',
-    action: '/setup/r2', guideAction: '/setup/r2/location', csrfToken: csrf, connected,
-    values: {
-      accountId: draft.accountId ?? r2.accountId,
-      bucket: draft.bucket ?? r2.bucket,
-      jurisdiction: ['eu', 'us', 'fedramp'].includes(jurisdiction) ? jurisdiction : 'default'
-    }
+  const choosing = !connected || chooseBucket;
+  const card = renderR2Card({
+    ...uploadOptions, title: 'Cloudflare R2', showGuide: false,
+    status: connected ? 'Connected' : 'Not connected',
+    description: connected ? `${r2.bucket}${r2.uploads ? '' : ' (read-only)'}` : 'Connect a private bucket for your films and thumbnails.',
+    action: choosing ? '/setup/r2' : undefined, guideAction: choosing ? '/setup/r2/location' : undefined,
+    csrfToken: csrf, values: draft
   });
+  if (!connected) return card;
+  const actions = choosing ? '<a href="/setup/settings#storage">Cancel bucket change</a>' :
+    (r2.uploads ? '<a href="/setup/r2/uploads">Replace R2 key</a>' : '<a href="/setup/r2/uploads">Enable film and thumbnail uploads</a>') +
+    '<a href="/setup/settings?bucket=change#storage">Use a different bucket</a>';
+  return card + `<div class="film-actions">${actions}</div>`;
 }
 
 function priceEditor(film, csrf) {
@@ -143,17 +143,17 @@ function sectionTabs(label, initial, sections) {
     <nav class="tab-bar subtabs" aria-label="${label}">${links}</nav>${panels}</div>`;
 }
 
-export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, draft = {}, error, notice, initialSection }) {
+export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, draft = {}, error, notice, initialSection, chooseBucket = false }) {
   const initial = initialSection || 'storage';
   return workspacePage('Settings', csrf, `<div class="workspace-intro"><h1>Settings</h1>
       ${filmmaker.name ? `<p class="account">Signed in as ${escapeHtml(filmmaker.name)}</p>` : ''}</div>
       ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
       ${notice ? `<div class="feedback" role="status">${escapeHtml(notice)}</div>` : ''}
       ${sectionTabs('Settings sections', initial, [
-        { id: 'storage', name: 'Storage', content: storageCard(r2, draft, csrf) +
-          (r2.status === 'ready' ? (r2.uploads ? '' : '<a class="primary-link" href="/setup/r2/uploads">Enable film and thumbnail uploads</a>') + '<a href="/setup/dashboard#films">Go to films</a>' : '') + renderSetupCosts('r2') },
+        { id: 'storage', name: 'Storage', content: storageCard(r2, draft, csrf, chooseBucket) +
+          '<a href="/faq#storage">Storage setup and pricing FAQ</a>' },
         { id: 'payments', name: 'Payments', content: stripeCard(stripe, csrf) +
-          (['ready', 'pending'].includes(stripe.status) ? (r2.status === 'ready' ? '<a href="/setup/dashboard#films">Go to films</a>' : '<a href="#storage">Go to storage</a>') : '') + renderSetupCosts('stripe') }
+          '<a href="/faq#payments">Stripe setup, fees and payouts FAQ</a>' }
       ])}`);
 }
 

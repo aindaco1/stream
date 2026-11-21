@@ -24,7 +24,7 @@ The filmmaker opens the link and selects **Open settings**. It expires after 30 
 
 A filmmaker can set the rental and purchase prices for a film in setup. Leaving a price blank removes that offer from new checkouts. Existing saved films start with their previous $0.99 rental. New films stay private to their filmmaker during setup. The existing public demo players and sandbox purchase rehearsal are described below.
 
-**Settings** opens on Storage and lists fees in both Storage and Payments. The header links to the public **FAQ** at `/faq`, which includes rates and worked examples.
+**Settings** opens on Storage. Choose **Replace R2 key** to update access to the selected bucket, or **Use a different bucket** for future uploads. Storage and Payments link to their sections in the public FAQ at `/faq#storage` and `/faq#payments`, with setup guidance, fees and worked examples.
 
 Use the **🌓** appearance selector in the filmmaker header to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, setup and the dashboard.
 
@@ -65,7 +65,7 @@ Stream uses the U.S. platform’s self-serve Connect countries for filmmaker pay
 
 To start Stripe setup over, open **Settings → Payments**. Select **Reset Stripe connection**, review the named seller and mode, and confirm. New sales on published films resume when a connected account is ready. Unfinished checkouts on the old account are closed. Settled orders keep their original seller, payment history and viewer access. Reset changes Stream’s active connection. The filmmaker can manage provider authorizations separately in Stripe.
 
-The setup cards come from Admin Shell **0.19.0** in the pinned Dust Wave Platform submodule. Stream owns the filmmaker sessions, rights records, provider calls and media checks. To run the form rehearsal, install Chromium with `npx playwright install chromium` and run `npm run check:setup`. This browser rehearsal uses simulated provider responses, real forms and the private preview renderer. The sandbox sale commands below contact Stripe and create test payments. [Cloudflare R2 credentials](https://developers.cloudflare.com/r2/api/tokens/) · [Cloudflare uploads](https://developers.cloudflare.com/r2/objects/upload-objects/)
+The setup cards come from Admin Shell **0.20.0** in the pinned Dust Wave Platform submodule. Stream owns the filmmaker sessions, rights records, provider calls and media checks. To run the form rehearsal, install Chromium with `npx playwright install chromium` and run `npm run check:setup`. This browser rehearsal uses simulated provider responses, real forms and the private preview renderer. The sandbox sale commands below contact Stripe and create test payments. [Cloudflare R2 credentials](https://developers.cloudflare.com/r2/api/tokens/) · [Cloudflare uploads](https://developers.cloudflare.com/r2/objects/upload-objects/)
 
 ## Public viewer checkout in a Stripe sandbox
 

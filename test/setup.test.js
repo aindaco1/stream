@@ -158,6 +158,12 @@ test('guided setup carries an authenticated filmmaker from empty storage to priv
   assert.equal((await fetch(origin + preview + '/clip.mp4')).status, 401);
   const replace = await submit('r2', { ...config, bucket: 'future-films' });
   assert.equal(replace.status, 303);
+  const staleKey = await submit('r2/uploads', {
+    bucketUrl: `https://dash.cloudflare.com/${config.accountId}/r2/default/buckets/${config.bucket}`,
+    storageAccess: 'uploads', privateConfirmed: 'yes', uploadConsent: 'yes', tokenValue: 'obsolete'
+  });
+  assert.equal(staleKey.status, 409);
+  assert.equal(setup.store.maker('Ada').r2.bucket, 'future-films');
   assert.equal((await get(preview + '/clip.mp4')).status, 200);
   assert.deepEqual(reads.at(-1), [config.bucket, film.objectKey]);
   assert.equal((await submit('next', { draftId: id })).status, 303);

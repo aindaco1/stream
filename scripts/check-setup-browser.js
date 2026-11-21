@@ -28,6 +28,7 @@ const accountId = 'a'.repeat(32);
 const bucket = 'screening-room-test';
 const access = testWriterId;
 const secret = testWriterSecret;
+const replacementId = '9'.repeat(32);
 const bucketUrl = `https://dash.cloudflare.com/${accountId}/r2/default/buckets/${bucket}`;
 const readToken = 'syntheticbucketreadtoken'.repeat(2);
 let browser, server, viewer, setup;
@@ -288,8 +289,8 @@ async function confirmStorageAccess(form) {
   await form.locator('[name="uploadConsent"]').check();
 }
 
-async function submitKeyPair(form, key, buttonLabel) {
-  await form.locator('[name="accessKeyId"]').fill(access);
+async function submitKeyPair(form, key, buttonLabel, keyId = access) {
+  await form.locator('[name="accessKeyId"]').fill(keyId);
   await form.locator('[name="secretAccessKey"]').fill(key);
   await confirmStorageAccess(form);
   await form.getByRole('button', { name: buttonLabel }).click();
@@ -339,11 +340,6 @@ async function connectBucket(page, method, recover) {
     }
     if (recover) {
       await card.getByText('Enter connection details manually', { exact: true }).click();
-      await card.getByText('Choose a Cloudflare account and bucket', { exact: true }).click();
-      assert.ok(await card.getByText('New bucket.', { exact: true }).isVisible());
-      assert.ok(await card.getByText('Existing bucket.', { exact: true }).isVisible());
-      await card.getByText('Get an upload key for this bucket', { exact: true }).click();
-      assert.ok(await card.getByRole('link', { name: 'Cloudflare’s R2 token guide' }).isVisible());
       await fill('intentionally-wrong-fixture-key');
       await page.getByRole('alert').waitFor();
       assert.equal(await card.locator('[name="secretAccessKey"]').inputValue(), '');
@@ -356,6 +352,36 @@ async function connectBucket(page, method, recover) {
   await card.locator('.provider-status').filter({ hasText: /^Connected$/ }).waitFor();
   const markup = await page.content();
   assert.ok([secret, access, readToken].every(value => !markup.includes(value)), 'Credentials stay out of rendered HTML');
+}
+
+async function replaceBucketKey(page, owner) {
+  const storage = page.locator('#storage');
+  await storage.getByRole('link', { name: 'Use a different bucket' }).click();
+  assert.ok(await storage.getByLabel('Bucket dashboard URL').isVisible());
+  await page.reload();
+  await storage.getByRole('link', { name: 'Cancel bucket change' }).click();
+  assert.equal(await storage.getByLabel('Bucket dashboard URL').count(), 0);
+  await storage.getByRole('link', { name: 'Replace R2 key' }).click();
+  await page.getByRole('heading', { name: 'Replace R2 key' }).waitFor();
+  const token = page.getByLabel('R2 token value');
+  const form = page.locator('form').filter({ has: token });
+  assert.equal(await form.locator('[name=bucketUrl]').inputValue(), bucketUrl);
+  assert.equal(await page.locator('[name=accountId], input[type=url]').count(), 0);
+  const active = setup.store.maker(owner).r2;
+  const previous = setup.store.uploadCredentials(owner, active);
+  await token.fill('invalidsyntheticreplacementtoken'.repeat(2));
+  await confirmStorageAccess(form);
+  await form.getByRole('button', { name: 'Save replacement key' }).click();
+  await page.getByRole('alert').waitFor();
+  assert.deepEqual(setup.store.uploadCredentials(owner, active), previous);
+  assert.equal(await token.inputValue(), '');
+  await page.getByText('Use an existing access key pair', { exact: true }).click();
+  const pair = page.locator('form').filter({ has: page.locator('[name=accessKeyId]') });
+  await submitKeyPair(pair, secret, 'Save replacement key', replacementId);
+  await storage.getByRole('link', { name: 'Replace R2 key' }).waitFor();
+  assert.deepEqual(setup.store.maker(owner).r2, active);
+  assert.deepEqual(setup.store.uploadCredentials(owner, active), { ...previous, accessKeyId: replacementId });
+  report.keyReplacement = { keptBucket: true, rejectedKeyPreservedAccess: true, savedKeyPair: true, separateBucketChoice: true };
 }
 
 async function registerFilm(page, shouldRecover, origin, owner) {
@@ -640,7 +666,7 @@ try {
     async checkBucket(settings) {
       assert.equal(settings.bucket, bucket);
       assert.equal(settings.accountId, accountId);
-      if (settings.accessKeyId !== access || settings.secretAccessKey !== secret) throw Error('Test credential rejected');
+      if (![access, replacementId].includes(settings.accessKeyId) || settings.secretAccessKey !== secret) throw Error('Test credential rejected');
     },
     sourceFor(settings) {
       if (movies.objects.has(settings.objectKey)) return createR2Source(settings, movies.fetcher);
@@ -711,20 +737,24 @@ try {
         await page.screenshot({ path: path.join(evidence, first ? 'setup-mobile.png' : 'setup-desktop.png'), fullPage: true });
       }
       if (first) {
-        await openSection(page, 'payments');
-        assert.ok(await page.getByText('2.9% + 30¢', { exact: false }).isVisible());
-        await openSection(page, 'storage');
-        assert.ok(await page.getByText('10 GB of storage free', { exact: false }).isVisible());
+        for (const topic of ['payments', 'storage']) {
+          await openSection(page, topic);
+          await page.locator('#' + topic + ' a[href="/faq#' + topic + '"]').click();
+          assert.equal(new URL(page.url()).hash, '#' + topic);
+          assert.ok(await page.locator('section:target h2').isVisible());
+          await page.goBack();
+        }
         await page.goto(origin + '/setup#payments');
         await page.locator('#payments[role=tabpanel]').waitFor();
         assert.equal(new URL(page.url()).pathname, '/setup/settings');
         assert.deepEqual(await page.locator('.workspace-nav .tab-bar a').allTextContents(), ['Dashboard', 'Settings']);
-        report.pricing = { publicFaq: true, settings: true, oldSetupLink: true };
+        report.pricing = { publicFaq: true, settingsDeepLinks: true, oldSetupLink: true };
       }
       if (storage === 'existing') await connectBucket(page, mode === 'reuse' ? 'selected keys' : 'manual', mode === 'existing');
       const previewWithoutPayments = mode === 'new' && storage === 'existing';
       if (!previewWithoutPayments) await finishStripe(page, mode, first);
       if (storage === 'new') await connectBucket(page, 'token', first);
+      if (first) await replaceBucketKey(page, owner);
       const privatePath = await registerFilm(page, first, origin, owner);
       if (previewWithoutPayments) {
         await openSection(page, 'payments');
@@ -862,9 +892,9 @@ try {
   }
   assert.deepEqual(starts, ['new', 'resume', 'existing', 'new', 'new', 'existing', 'reuse']);
   assert.equal(outboundRequests, 0);
-  assert.equal(guidedTokenAttempts, 4, 'Two guided connections, one legacy upgrade, one unsuccessful attempt');
-  assert.equal(guidedKeyAttempts, 1);
-  assert.equal(artwork.probes.size, 6, 'Every accepted setup or upgrade credential passed a write-and-delete check');
+  assert.equal(guidedTokenAttempts, 5, 'Two guided connections, one legacy upgrade, two unsuccessful attempts');
+  assert.equal(guidedKeyAttempts, 2);
+  assert.equal(artwork.probes.size, 7, 'Every accepted setup or upgrade credential passed a write-and-delete check');
   for (const key of artwork.probes) assert.ok(!artwork.objects.has(key));
   report.cloudflareSetup = { guidedTokenConnections: 2, selectedBucketWithKeyPair: 1, manualConnections: 2, handledWrongTokenAndKey: true };
   report.passed = true;

@@ -1,79 +1,51 @@
 import { payoutCountryOptions } from './payout-countries.js';
 
-export const firstSale = 'You can upload a film and watch a private preview before connecting Stripe. To publish and get paid for rentals or purchases, first connect your Stripe account and finish verification.';
-
-const proceeds = 'You keep your film rights. Rentals and purchases are your sales. Stream sends your proceeds to your connected Stripe account after fees. In your <a href="https://dashboard.stripe.com/settings/payouts">Stripe Dashboard</a>, you can choose weekly bank deposits if your account offers them. Viewers can add an optional tip for Dust Wave in the same payment.';
-
-function payoutCountries() {
-  const names = payoutCountryOptions.map(country => country.label).join(', ');
-  return `<p>The pilot is open to filmmakers in the U.S., Canada, the UK, Switzerland and the European countries listed below. Choose the country where you do business. Stripe guides you through identity and bank verification there. You can sign in to reuse eligible details from an existing Stripe account.</p>
-    <details><summary>Which countries can filmmakers join from?</summary><p>${names}.</p></details>
-    <p>Film prices and dashboard totals are in U.S. dollars. Stripe shows the payout currencies available for your bank account. Cross-border payout fees start at 0.25%, and currency conversion can cost extra. <a href="https://stripe.com/connect/pricing#payouts">Stripe payout pricing</a></p>`;
-}
-
-const pricing = {
-  stripe: {
-    heading: 'Stripe processing fees',
-    summary: 'For a successful online payment with a U.S. domestic card, Stripe’s standard U.S. rate is 2.9% + 30¢. Your country, the card and any custom pricing can change the fee.',
-    example: 'For a U.S. filmmaker’s $0.99 rental paid with a U.S. card, the estimated fee is $0.33 and the filmmaker receives $0.66 before any tax or tip.',
-    url: 'https://stripe.com/us/pricing', link: 'Stripe pricing'
-  },
-  r2: {
-    heading: 'Cloudflare storage fees',
-    summary: 'Cloudflare includes 10 GB of storage free each month across your account on its Standard plan. Extra storage costs $0.015 per GB-month. There’s no bandwidth charge for sending a film to viewers.',
-    example: 'If you keep 20 GB of films online for the whole month and have the full free allowance available, storage costs about $0.15.',
-    details: 'Cloudflare also counts requests to store or read files. The Standard plan includes 1 million Class A requests (such as uploads) and 10 million Class B requests (such as reads) each month. Additional requests cost $4.50 and $0.36 per million, respectively. A single viewing can involve several reads.',
-    url: 'https://developers.cloudflare.com/r2/pricing/', link: 'Cloudflare R2 pricing'
-  }
-};
-
-function feeCopy(provider, expanded = false) {
-  const { summary, example, details, url, link } = pricing[provider];
-  const taxPricing = provider === 'stripe' ? '<p>When Stream uses Stripe Tax, Stripe lists a separate Tax Basic fee of 0.5% of the full checkout total where Dust Wave is registered to collect. You cover the share for the film, and Dust Wave covers the share for the tip. We use each line’s total including tax. Your viewer gets access as soon as payment clears. We send your transfer once the actual fees are confirmed, which can take several days. Stream calculates tax itself for eligible New Mexico orders, which saves that fee. The card processing fee still applies. <a href="https://stripe.com/tax/pricing">Stripe Tax pricing</a></p>' : '';
-  return `<p>${summary} <a href="${url}">${link}</a></p>${taxPricing}${expanded ? `<p>${example}</p>` : ''}
-    ${expanded && details ? `<details><summary>How does Cloudflare count requests?</summary><p>${details}</p></details>` : ''}`;
-}
-
-export function renderSetupCosts(provider) {
-  if (!Object.hasOwn(pricing, provider)) throw new TypeError('Unknown setup cost provider.');
-  const pilot = provider === 'stripe' ? 'Payments in the pilot use test cards. Payments and filmmaker transfers run in the Stripe sandbox.' : 'Your bucket is billed normally during the pilot.';
-  const payouts = provider === 'stripe' ? `<h3>Getting paid</h3><p>${proceeds}</p>${payoutCountries()}` : '';
-  return `<div class="provider-costs"><p>${pilot}</p>${payouts}<h3>${pricing[provider].heading}</h3>${feeCopy(provider)}</div>`;
-}
-
 export function renderFilmmakerFaq() {
+  const countries = payoutCountryOptions.map(country => country.label).join(', ');
   return `<h1>FAQ</h1>
-    <p>Stream lets filmmakers rent or sell a film from a player on their own website. Viewers pay and watch in the same place. <a href="https://github.com/aindaco1/stream">Stream on GitHub</a></p>
+    <p>Stream lets you rent or sell films from a player on your own website. Viewers pay and watch in the same place. <a href="https://github.com/aindaco1/stream">Stream on GitHub</a></p>
     <section><h2>How do I get started?</h2>
-      <p>The pilot is invite-only. Open your invitation and go to Settings. Start in Storage to connect your Cloudflare bucket. Then open Payments to connect the Stripe account where you want to get paid.</p>
-      <p>The pilot uses test cards, so no money changes hands at checkout. Your Cloudflare account still uses real storage.</p>
+      <p>The pilot is invite-only. Open your invitation, connect your storage in Settings, then add a film in the Dashboard. You can upload it and watch a private preview before connecting Stripe. The pilot uses test cards. Your Cloudflare account uses real storage.</p>
     </section>
-    <section><h2>When can I start selling?</h2>
-      <p>${firstSale} Once you publish in the pilot, viewers can try a rental or purchase with a test card.</p>
+    <section id="storage"><h2>How do I connect my storage?</h2>
+      <p>Open <strong>Settings → Storage</strong>. Sign in to Cloudflare or create an account and activate R2. Choose a private bucket for your films, or create one using Standard storage. In its settings, keep the public development URL disabled and custom domains disconnected. Copy the bucket’s dashboard address into Stream. <a href="#storage-pricing">What will storage cost?</a></p>
+      <p>In Cloudflare’s R2 overview, open <strong>Manage API tokens</strong>. Create a token with <strong>Object Read &amp; Write</strong>, choose <strong>Apply to specific buckets only</strong> and select just your film bucket. This key can read and change every file in that bucket. Paste its token value into Stream, or use its access key ID and secret. Stream checks the key before saving it encrypted. <a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare’s R2 token guide</a></p>
+      <p>To rotate a key, create a new token for the same bucket and choose <strong>Replace R2 key</strong> in Storage. Once Stream accepts it, you can revoke the old key in Cloudflare if nothing else uses it. Choose <strong>Use a different bucket</strong> for future uploads. Keep earlier buckets and their keys available for films already using them.</p>
     </section>
-    <section><h2>Can I use Stream outside the United States?</h2>
-      ${payoutCountries()}
+    <section id="payments"><h2>When can I start selling?</h2>
+      <p>Connect Stripe and finish verification before you publish a paid film or program. In the pilot you can try checkout and transfers with test cards. No money reaches a bank account. <a href="#stripe-fees">What are the fees?</a> · <a href="#payouts">How do payouts work?</a> · <a href="#countries">Can I join from my country?</a></p>
+      <p>In <strong>Settings → Payments</strong>, choose the new or existing account option. Enter identity and bank details directly on Stripe. Depending on your account, you can connect it or reuse verified details for a new one. Return to Stream and choose <strong>Check Stripe status</strong> to see whether anything is missing. <a href="https://docs.stripe.com/connect/hosted-onboarding">Stripe’s onboarding guide</a></p>
+      <p>To change accounts, choose <strong>Reset Stripe connection</strong> and confirm the account shown. New sales pause until you reconnect. Your Stripe account stays open, earlier payments stay with their original account, and viewers keep their purchases and unexpired rentals.</p>
     </section>
-    <section><h2>Who owns my film and receives the sale?</h2>
-      <p>${proceeds} You set the price and confirm that you own the film or have permission to distribute it.</p>
+    <section id="countries"><h2>Which countries can filmmakers join from?</h2>
+      <p>Choose the country where you do business. Stripe uses it to verify your identity and bank details. <a href="https://docs.stripe.com/connect/connect-cross-border-payouts">Stripe’s supported regions</a></p>
+      <details><summary>Countries available in the Stream pilot</summary><p>${countries}.</p></details>
+    </section>
+    <section id="payouts"><h2>Who owns my film and how do I get paid?</h2>
+      <p>You keep your film rights and set the price. Confirm that you own the film or have permission to distribute it. Stream charges no royalty. Your film proceeds go to your connected Stripe balance after fees. An optional tip goes to Dust Wave in the same payment.</p>
+      <p>Film prices and Dashboard totals are in U.S. dollars. A transfer to your Stripe balance and a deposit to your bank are separate steps. In live mode, eligible accounts can choose weekly bank deposits in their Stripe Dashboard. Cross-border fees depend on the destination, and currency conversion can cost extra. <a href="https://docs.stripe.com/payouts">Bank payout schedules</a> · <a href="https://stripe.com/connect/pricing#payouts">Stripe payout pricing</a></p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
-      <p>Stream is free. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. The processing fee applies to the full charge, including tax and tip.</p>
-      <h3>${pricing.stripe.heading}</h3>${feeCopy('stripe', true)}
-      <h3>${pricing.r2.heading}</h3>${feeCopy('r2', true)}
+      <p>Stream is free. The optional tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it.</p>
+      <h3 id="stripe-fees">Stripe processing fees</h3>
+      <p>Stripe’s standard U.S. online rate is 2.9% + 30¢ for a domestic card. The fee applies to the full payment, including tax and tip. For a $0.99 rental with a U.S. card and no tax or tip, the estimated fee is $0.33, leaving $0.66 for the filmmaker. International cards and custom pricing can change the fee. <a href="https://stripe.com/pricing?locale=en-US">Stripe pricing</a></p>
+      <p>When checkout uses Stripe Tax Basic, Stripe lists a fee of 0.5% per transaction where Dust Wave is registered to collect. Stream splits the actual fee between the film and the tip in proportion to their totals including tax. Viewers get access when payment clears. The filmmaker transfer waits for confirmed fees, which can take several days. Eligible New Mexico orders use Stream’s own calculation and skip the Stripe Tax Basic fee. Card processing still applies. <a href="https://stripe.com/tax/pricing">Stripe Tax pricing</a></p>
+      <h3 id="storage-pricing">Cloudflare storage fees</h3>
+      <p>R2 Standard includes 10 GB-month of storage per month across your Cloudflare account. That covers 10 GB kept for the entire month. Extra storage costs $0.015 per GB-month. With the full allowance available, 20 GB kept for a month costs about $0.15 in storage. R2 charges no internet egress fee for delivering your films. Infrequent Access has separate rates and no free allowance. <a href="https://developers.cloudflare.com/r2/pricing/">Cloudflare R2 pricing</a></p>
+      <details><summary>Do uploads and views cost extra?</summary><p>Standard includes 1 million Class A requests (such as writes) and 10 million Class B requests (such as reads) per month. Beyond those allowances, Cloudflare bills $4.50 and $0.36 per million respectively, rounding up to the next billing unit. One viewing can involve several reads.</p></details>
     </section>
-    <section><h2>What tax will my viewers pay?</h2>
-      <p>Viewers see the total before they pay. Any film tax is added to your price. Any tax on an optional tip is included in the tip amount the viewer selects. It all goes through as one payment.</p>
-      <p>In New Mexico, Stream looks up the local gross receipts tax rate using the address where the viewer will watch. If Stream can’t match the address, Stripe asks the viewer to confirm or correct it. Elsewhere, Stripe Tax uses the viewer’s billing address.</p>
-      <p>For example, in our downtown Albuquerque test, a 99¢ rental with a 10¢ tip came to $1.17. The viewer paid 8¢ in tax on the film, and 1¢ of the tip went toward tax. Dust Wave’s pilot treats the tip as taxable at the film’s rate.</p>
-      <p>Dust Wave handles checkout tax as the marketplace in the pilot. A test charge can show zero tax where no sandbox registration applies. Dust Wave is responsible for registering and filing wherever it handles marketplace tax. This includes taxable New Mexico film sales even when the viewer leaves no tip. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for platforms and marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
+    <section id="tax"><h2>What tax will my viewers pay?</h2>
+      <p>Viewers see their total before they pay. Any film tax is added to your price. Any tax on an optional tip is included in the tip amount they select. It all goes through as one payment.</p>
+      <p>For eligible New Mexico orders, Stream uses the address where the viewer will watch to look up the local gross receipts tax rate. If the lookup cannot confirm a rate, checkout uses Stripe Tax with a viewing address. Elsewhere, Stripe Tax uses the viewer’s billing address. <a href="https://www.srca.nm.gov/parts/title03/03.001.0004.html">New Mexico reporting locations</a></p>
+      <p>The pilot treats Dust Wave as the marketplace and the tip as taxable at the film’s rate in New Mexico. In our Albuquerque test, a 99¢ rental with a 10¢ tip came to $1.17. That included 8¢ tax on the film and 1¢ within the tip. This example reflects the sandbox policy.</p>
+      <p>A test charge can show zero tax where no sandbox registration applies. For live sales, Dust Wave would need to arrange any required marketplace registrations, filing and remittance. Stripe Tax Basic calculates checkout tax. A sandbox registration creates no live registration. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
     </section>
     <section><h2>What can I upload?</h2>
       <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
-      <p>After you connect your private Cloudflare bucket, you can upload the film and its thumbnail right from Stream, or choose a film already in the bucket. The original stays in your account.</p>
+      <p>After you connect your private Cloudflare bucket, you can upload the film and its thumbnail right from Stream, or choose a film already in the bucket. The original stays in your account. For a thumbnail, use a JPEG, PNG or WebP up to 8 MB. We recommend 1920 × 1080 pixels.</p>
     </section>
     <section><h2>Can viewers turn subtitles on?</h2>
-      <p>Yes. If the film has subtitles, tap or move over the video to show its controls. Choose the captions button to pick a language or turn subtitles off. Stream supports text subtitles and picture subtitles such as the ones on DVDs and Blu-rays.</p>
+      <p>Yes. If the film has subtitles, tap or move over the video to show its controls. Choose the captions button to pick a language or turn subtitles off. Stream supports embedded text subtitles and DVD or Blu-ray picture subtitles. Check the private preview for the tracks available in your file.</p>
     </section>
     <section><h2>Can I keep watching in a floating window?</h2>
       <p>Start the film, then choose the picture-in-picture button on the video. It appears when your browser, device and the site hosting the player allow it.</p>
@@ -86,20 +58,20 @@ export function renderFilmmakerFaq() {
       <p>Open your published film in the Dashboard. Choose the details you want alongside the player and check the live preview. You can include a synopsis, credits or a personal message. Copy the embed code and paste it into your site. Each film has its own checkout, even when several share a page.</p>
     </section>
     <section><h2>How do I offer a double feature or a program of shorts?</h2>
-      <p>Choose <strong>Create program</strong> on your Dashboard. Pick at least two of your films, put them in screening order, and add an opening or closing video if you like. Choose the program image, preview and price, then publish and copy its embed code.</p>
-      <p>Viewers pay once in the player and can move between titles with Previous title and Next title. The player remembers their caption choice when a matching track is available. One rental window covers the lineup. A purchase includes the original videos, in order, in a ZIP.</p>
+      <p>Choose <strong>Create program</strong> on your Dashboard. Pick at least two of your films, put them in screening order, and add an opening or closing video if you like. Choose the program image, preview and price, then publish and copy its embed code. Opening and closing videos you upload for a program are managed in its editor.</p>
+      <p>Viewers pay once in the player and can move between titles with Previous title and Next title. The player remembers their caption choice when a matching track is available. One rental window covers the lineup. A purchase includes the original videos, in order, in a ZIP. After editing prices or the lineup, choose <strong>Publish changes</strong> to update the public embed. Earlier buyers keep their edition.</p>
     </section>
     <section><h2>Can a program save on card fees?</h2>
-      <p>Yes, when the same viewer would otherwise pay for each film separately. Two separate $2 rentals cost about 72¢ in card fees at Stripe’s standard U.S. domestic card rate. One $4 double feature costs about 42¢, leaving about 30¢ more for the filmmaker at the same price. This example assumes no tax or tip. Your actual fees depend on the payment and your pricing. <a href="https://stripe.com/us/pricing">Stripe pricing</a></p>
+      <p>Yes, when the same viewer would otherwise pay for each film separately. Two separate $2 rentals cost about 72¢ in card fees at Stripe’s standard U.S. domestic card rate. One $4 double feature costs about 42¢, leaving about 30¢ more for the filmmaker at the same price. This example assumes no tax or tip. Your actual fees depend on the payment and your pricing. <a href="https://stripe.com/pricing?locale=en-US">Stripe pricing</a></p>
     </section>
     <section><h2>Can someone save a rental?</h2>
-      <p>Rentals use a private video stream, and viewers never see your Cloudflare link. Someone who can watch a film can still record their screen. Buyers get a download button.</p>
+      <p>Stream delivers rentals through a private player. Your bucket address stays private. Someone who can watch a film can still record their screen. Buyers get a download button.</p>
     </section>
     <section><h2>How do I watch again or switch devices?</h2>
       <p>Save the private access link after checkout. Open it on your other device and keep it private. If email recovery is available, choose <strong>Restore access</strong> in the player and enter the email you used to pay. A rental ends at the same time on every device.</p>
     </section>
     <section><h2>What do the numbers in my dashboard mean?</h2>
-      <p>The Dashboard shows rentals and purchases for each film or program. A program sale counts once in the Overview. Preview starts and paid plays appear on the film someone watched, including when they watched it in a program. Repeat plays count. Revenue shows film prices before refunds. Tax and optional tips are tracked separately. Net revenue deducts card fees, your share of confirmed Stripe Tax fees, and recorded refunds up to the film price. The Dashboard marks payments awaiting a tax fee.</p>
+      <p>The Dashboard shows rentals and purchases for each film or program. A program sale counts once in the Overview. Preview starts and paid plays appear on the film someone watched, including when they watched it in a program. Starts for a dedicated opening or closing video count toward its program. Repeat plays count. Revenue shows film prices before refunds. Tax and optional tips are tracked separately. Net revenue deducts card fees, your share of confirmed Stripe Tax fees, and recorded refunds up to the film price. The Dashboard marks payments awaiting a tax fee.</p>
     </section>
     <section><h2>What if I take my film or program offline?</h2>
       <p>Unpublishing stops free previews and new sales. People who bought the film or have time left on a rental can still watch. Keep the original files in your bucket so their access keeps working. Publishing a new lineup preserves the edition earlier viewers paid for.</p>

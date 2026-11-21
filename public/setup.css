@@ -206,11 +206,8 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
   .thumbnail-preview { order: -1; }
 }
 
-.provider-costs { display: grid; gap: .375rem; border-inline-start: 2px solid var(--line); padding-inline-start: 1rem; }
-.provider-costs h3 { font-size: 1rem; }
-.provider-costs p { color: var(--muted); font-size: .9375rem; }
 .filmmaker-help { display: grid; gap: 1.25rem; }
-.provider-costs p, .provider-card p, .filmmaker-help p { max-width: 72ch; }
+.provider-card p, .filmmaker-help p { max-width: 72ch; }
 .filmmaker-help section { display: grid; gap: .625rem; padding-block-start: 1.25rem; border-block-start: 1px solid var(--line); }
 .filmmaker-help h3 { font-size: 1.0625rem; margin-block-start: .5rem; }
 @media (min-width: 60rem) {

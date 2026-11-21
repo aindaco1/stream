@@ -157,7 +157,9 @@ export async function createSetup({
           unsupportedCountry: state.unsupportedCountry,
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
         r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
-        draft: store.storageDraft(session.owner) || {}, ...feedback
+        draft: store.storageDraft(session.owner) || {},
+        chooseBucket: (path === '/setup/settings' && searchParams.get('bucket') === 'change') || ['/setup/r2', '/setup/r2/location'].includes(path),
+        ...feedback
       }));
     };
     if (get && path === '/setup/style.css') return send(200, 'text/css', style, commonHeaders);
@@ -291,7 +293,11 @@ export async function createSetup({
     const upgradeFilm = upgradePath?.[1] || (upgradePath && searchParams.get('film'));
     const upgradeBucket = () => upgradeFilm ? ownedItem(upgradeFilm)?.bucket : store.maker(owner).r2;
     const bucketAction = upgradePath ? '/setup/r2/uploads' + (upgradeFilm ? '/' + encodeURIComponent(upgradeFilm) : '') : '/setup/r2/access';
-    const bucketAccess = (status, location, error) => html(status, step('Connect your private bucket', renderBucketAccess(session.csrf, location, error, bucketAction)));
+    const bucketAccess = (status, location, error) => {
+      const replacing = upgradePath && upgradeBucket()?.uploads;
+      const title = replacing ? 'Replace R2 key' : upgradePath ? 'Enable bucket uploads' : 'Connect your private bucket';
+      return html(status, step(title, renderBucketAccess(session.csrf, location, error, bucketAction, replacing)));
+    };
     if (get && upgradePath) {
       const bucket = upgradeBucket();
       return bucket ? bucketAccess(200, bucket) : reject(404, 'Storage connection unavailable.');
