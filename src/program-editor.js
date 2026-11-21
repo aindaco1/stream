@@ -71,9 +71,9 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
       <label>Preview video<select name="previewFilmId">${options(films, program.previewFilmId, 'First film in the lineup')}</select></label>
       ${priceFields(program, true)}
       <label class="rights-choice"><input type="checkbox" name="rightsAccepted" value="yes"${program.rights ? ' checked' : ''}><span>${esc(programRights)}</span></label>
-      <div class="film-actions"><button name="action" value="save">Save draft</button>
+      <div class="film-actions"><button class="secondary" name="action" value="save">Save draft</button>
         <button class="secondary" name="action" value="preview">Save and preview</button>
-        <button class="secondary" name="action" value="publish">${program.published ? 'Publish changes' : 'Publish program'}</button></div>
+        <button name="action" value="publish">${program.published ? 'Publish changes' : 'Publish program'}</button></div>
     </form>
     ${program.bucket ? `<div class="film-card">${thumbnailEditor({ ...program, uploads: program.bucket.uploads }, csrf)}
       <p class="hint">The first film’s thumbnail appears until you add a program image.</p></div>` :
