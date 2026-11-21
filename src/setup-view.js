@@ -112,7 +112,7 @@ export function filmSection({ r2, rights, draft, csrf }) {
   }
   return `
     <details class="film-guide"><summary>Supported video settings</summary>
-      <p>Choose an MP4, MOV or MKV up to 10 GB and four hours long. Supported video formats are H.264, H.265 (HEVC), AV1 and VP9. Include subtitle tracks in the file if you want viewers to be able to turn them on. <a href="/faq#tv">Recommended export settings for TV viewing</a></p>
+      <p>Choose an MP4, MOV or MKV up to 10 GB and four hours long. Supported video formats are H.264, H.265 (HEVC), AV1 and VP9. Include subtitle tracks in the file if you want viewers to be able to turn them on. <a href="/setup/faq#tv">Recommended export settings for TV viewing</a></p>
     </details>
     <form method="post" action="/setup/film" data-film-form>${fields}
       <label>${draft.programTarget ? 'Video title' : 'Film title'}<input id="film-title" name="title" type="text" maxlength="160" required value="${escapeHtml(draft.title)}"></label>
@@ -153,9 +153,9 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
       ${notice ? `<div class="feedback" role="status">${escapeHtml(notice)}</div>` : ''}
       ${sectionTabs('Settings sections', initial, [
         { id: 'storage', name: 'Storage', content: storageCard(r2, draft, csrf, chooseBucket) +
-          '<a href="/faq#storage">Storage setup and pricing FAQ</a>' },
+          '<a href="/setup/faq#storage">Storage setup and pricing FAQ</a>' },
         { id: 'payments', name: 'Payments', content: stripeCard(stripe, csrf) +
-          '<a href="/faq#payments">Stripe setup, fees and payouts FAQ</a>' }
+          '<a href="/setup/faq#payments">Stripe setup, fees and payouts FAQ</a>' }
       ])}`);
 }
 
@@ -178,7 +178,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>
     <body><a class="skip" href="#main">Skip to content</a>
     <header class="masthead"><div class="bar"><a class="brand" href="${admin ? '/setup/admin' : '/'}" aria-label="Stream home">Stream</a>
-      ${faqLink(faq, csrf && admin ? '/setup/admin/faq' : '/faq')}
+      ${faqLink(faq, admin ? '/setup/admin/faq' : csrf ? '/setup/faq' : '/faq')}
       <label class="appearance" title="Appearance"><span aria-hidden="true">🌓</span><select aria-label="Appearance" data-appearance-select>
         <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
       </select></label>
@@ -246,7 +246,10 @@ function statsList(stats, details = detailLabels, id = 'overview') {
     <details class="analytics-breakdown"${id === 'overview' ? ' open' : ''}><summary>Viewing and sales breakdown</summary>${list(details)}${adjustmentNote}</details></div>`;
 }
 
-const analyticsGuide = '<p class="hint"><a href="/faq#dashboard-analytics">How these numbers are calculated</a></p>';
+function analyticsGuide(admin = false) {
+  const faq = admin ? '/setup/admin/faq' : '/setup/faq';
+  return `<p class="hint"><a href="${faq}#dashboard-analytics">How these numbers are calculated</a></p>`;
+}
 
 export function renderPlatformDashboard(csrf, report, metricsOnly = false) {
   const { owner, rows, page, pages, total, makers } = report;
@@ -273,7 +276,7 @@ export function renderPlatformDashboard(csrf, report, metricsOnly = false) {
     <div class="workspace-intro">${platform ? '' : '<a href="/setup/admin">All filmmakers</a>'}
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
       <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films${total.programs ? ' · ' + total.programs + ' programs' : ''}</p></div>
-    <section class="film-card"><h2>Overview</h2>${overview}${analyticsGuide}
+    <section class="film-card"><h2>Overview</h2>${overview}${analyticsGuide(true)}
       ${total.transfersToReview ? '<p class="hint">Review the affected marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
     <section class="film-list"><h2>${platform ? 'Filmmakers' : total.programs ? 'Films and programs' : 'Films'}</h2>
       ${tableRows ? `<label class="analytics-columns"><input type="checkbox"> Show detailed metrics</label><div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
@@ -371,7 +374,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
     <p class="account">Signed in as ${escapeHtml(owner)}</p></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
     <section class="film-card" id="overview"><h2>Overview</h2>${overview}
-      <div class="analytics-links">${analyticsGuide}<a href="/setup/settings#payments">Payment settings</a></div></section>
+      <div class="analytics-links">${analyticsGuide()}<a href="/setup/settings#payments">Payment settings</a></div></section>
     <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2><div class="film-actions">${add}</div></header>
       ${cards || '<p>You have no saved films yet.</p>'}</section>
     <section class="film-list" id="programs"><header class="film-list-header"><h2>Programs</h2><div class="film-actions">${continueVideo}${createProgram}</div></header>

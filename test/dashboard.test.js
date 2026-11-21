@@ -162,7 +162,7 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   for (const seconds of [0, 10, 20]) catalog.recordView(ada.id, 'paid', randomUUID(), {seconds});
   const timed = (await ada.get()).split('id="overview"')[1].split('</section>')[0];
   assert.match(timed, />Avg\. watch time<\/dt><dd>10 sec<\/dd>/, 'legacy plays stay out of the average');
-  assert.match(overview, /href="\/faq#dashboard-analytics"/);
+  assert.match(overview, /href="\/setup\/faq#dashboard-analytics"/);
   assert.equal((await ada.post('settings', { ...settings, previewSeconds: '0' })).status, 303);
   assert.equal(catalog.recordView(ada.id, 'preview', randomUUID()), false);
   env.STREAM_PUBLIC_FILMS = JSON.stringify([{ owner: 'Alice', id: ada.id }]);

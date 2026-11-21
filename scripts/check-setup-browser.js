@@ -158,7 +158,7 @@ async function checkOverviewHelp(page) {
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-expanded')), 'true');
   await page.keyboard.press('Escape');
   await tip.waitFor({state:'hidden'});
-  assert.equal(await overview.getByRole('link',{name:'How these numbers are calculated'}).getAttribute('href'), '/faq#dashboard-analytics');
+  assert.equal(await overview.getByRole('link',{name:'How these numbers are calculated'}).getAttribute('href'), '/setup/faq#dashboard-analytics');
 }
 
 async function checkTouchHelp(page) {
@@ -842,9 +842,9 @@ try {
       if (first) {
         for (const topic of ['payments', 'storage']) {
           await openSection(page, topic);
-          await page.locator('#' + topic + ' a[href="/faq#' + topic + '"]').click();
+          await page.locator('#' + topic + ' a[href="/setup/faq#' + topic + '"]').click();
           assert.equal(new URL(page.url()).hash, '#' + topic);
-          assert.ok(await page.locator('section:target h2').isVisible());
+          await page.locator('section:target h2').waitFor({state:'visible'});
           assert.ok(await page.getByRole('button',{name:'Sign out'}).isVisible());
           await page.goBack();
         }

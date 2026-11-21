@@ -16,7 +16,7 @@ test('FAQ matches the actual filmmaker country selector and explains the sandbox
 test('settings link into a single public FAQ for provider setup, rates and payout details', () => {
   const faq = renderFilmmakerFaq(), settings = renderSettingsPage({ csrf: 'test' });
   for (const topic of ['storage', 'payments']) {
-    assert.ok(settings.includes(`href="/faq#${topic}"`));
+    assert.ok(settings.includes(`href="/setup/faq#${topic}"`));
     assert.ok(faq.includes(`<section id="${topic}">`));
   }
   for (const [, anchor] of faq.matchAll(/href="#([^"]+)"/g)) {
