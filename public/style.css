@@ -10,6 +10,19 @@ body, p, h1 { margin: 0; }
 main { max-width: 60rem; margin-inline: auto; }
 video { display: block; background: #080808; width: 100%; aspect-ratio: 16 / 9; }
 .video-stage { position: relative; min-height: 0; min-width: 0; background: #080808; }
+/* A paid stream needs a grant before native controls have a source to play. */
+#start-video {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; border: 0;
+  padding: 0; display: grid; place-items: center; background: transparent; color: white;
+}
+#start-video span {
+  display: grid; place-items: center; width: 3.75rem; height: 3.75rem;
+  border: 1px solid #888; border-radius: 50%; background: rgb(0 0 0 / .75);
+}
+#start-video span::after {
+  content: ''; margin-inline-start: .22rem; border-block: .6rem solid transparent; border-inline-start: 1rem solid currentColor;
+}
+#start-video:focus-visible { outline-offset: -3px; }
 .video-tools {
   position: absolute; inset: .4rem .4rem auto auto; display: flex; gap: .125rem;
   transition: opacity .15s ease-out;
@@ -223,19 +236,9 @@ body.paying .film-info { display: none; }
 #program-now { margin-top: .375rem; color: #fafafa; }
 #program-lineup { border-top: 1px solid #484848; padding-top: .875rem; }
 #program-lineup h2 { margin: 0 0 .375rem; font-size: 1rem; font-weight: 600; }
-#program-lineup ol { margin: 0; padding: 0; list-style: none; }
-#program-lineup li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 .4rem; border-bottom: 1px solid #383838; }
-#program-lineup li[aria-current] .program-row-title { color: white; text-decoration: underline; text-underline-offset: .22em; }
-#program-lineup details, .program-row-heading { min-width: 0; flex: 1 1 9rem; }
-#program-lineup summary { padding-block: .65rem; }
-.program-row-heading { padding-block: .65rem; }
-.program-row-title { color: #ddd; font-weight: 600; font-size: .9375rem; overflow-wrap: anywhere; }
-.program-runtime { margin-inline-start: .5rem; font-size: .775rem; white-space: nowrap; color: #aaa; font-variant-numeric: tabular-nums; }
-.program-notes { display: grid; gap: .5rem; margin-bottom: .875rem; }
-.program-notes img { max-width: 100%; max-height: 6rem; aspect-ratio: 16/9; object-fit: cover; }
-.program-notes p { overflow-wrap: anywhere; white-space: pre-line; }
-.program-notes .film-credits { justify-self: start; text-align: start; }
-.program-watch, .program-file { background: transparent; color: #dedede; padding: .375rem .4rem; font-size: .8125rem; }
+#program-lineup { --ink: #f4f4f4; --muted: #bdbdbd; --line: #414141; }
+.program-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .875rem; }
+.program-watch, .program-file { min-height: 2.75rem; padding: .25rem 0; background: transparent; color: #ddd; font-size: .875rem; }
 .program-file { font-weight: normal; text-decoration: underline; text-underline-offset: .2em; }
 .skip-title-icon { display: inline-flex; align-items: center; gap: 2px; }
 .skip-title-icon::before { content: ''; border-block: .34rem solid transparent; border-inline-start: .52rem solid currentColor; }
@@ -249,7 +252,7 @@ body.paying #program-lineup { display: none; }
   body.is-program .details p:not([hidden]) { display: block; }
 }
 @media (min-width: 52rem) {
-  body.is-program:not(.paying) main { grid-template-columns: minmax(0, 1.8fr) minmax(15rem, 1fr); }
+  body.is-program:not(.paying) main { grid-template-columns: minmax(0, 1.55fr) minmax(17rem, 1fr); }
   body.is-program:not(.paying) main > * { grid-column: 1; }
   body.is-program:not(.paying) .program-screening { display: grid; min-width: 0; gap: var(--section-gap); align-self: start; }
   body.is-program:not(.paying) main > #program-lineup {

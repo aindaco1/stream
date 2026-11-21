@@ -1,0 +1,20 @@
+.program-list { container-type: inline-size; margin: 0; padding: 0; list-style: none; }
+.program-list > li { padding-block: .875rem; border-block-end: 1px solid var(--line); }
+.program-list > li:last-child { border-block-end: 0; }
+.program-entry { display: grid; align-items: start; gap: .45rem .875rem; grid-template-columns: minmax(0, 1fr); }
+.program-entry:has(.program-still) { grid-template-columns: minmax(0, 1fr) clamp(4.5rem, 25%, 9rem); }
+.program-entry-heading { align-self: center; min-width: 0; }
+.program-row-title { margin: 0; font-size: 1.125rem; line-height: 1.2; font-weight: 650; letter-spacing: -.018em; color: var(--ink); overflow-wrap: anywhere; }
+.program-runtime { display: block; margin-top: .2rem; font-size: .8125rem; font-variant-numeric: tabular-nums; color: var(--muted); }
+.program-still { grid-column: 2; grid-row: 1; width: 100%; height: auto; aspect-ratio: 16/9; object-fit: cover; }
+.program-list .program-entry .film-info { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr; gap: .375rem; padding: 0; border: 0; }
+.program-entry .film-info p { margin: 0; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; }
+.program-entry .film-synopsis { max-width: 65ch; font-size: .875rem; line-height: 1.45; }
+.program-entry .film-message { max-width: 55ch; padding: 0; border: 0; font: italic 1rem/1.4 Georgia, serif; }
+.program-entry .film-info .film-credits { justify-self: start; color: var(--muted); text-align: start; text-wrap: pretty;
+  font: 600 .75rem/1.45 'Avenir Next Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: .06em; }
+.program-list li[aria-current] .program-row-title { text-decoration: underline; text-underline-offset: .2em; }
+@container (min-width: 25rem) {
+  .program-still { grid-row: 1 / span 2; }
+  .program-list .program-entry .film-info { grid-column: 1; }
+}

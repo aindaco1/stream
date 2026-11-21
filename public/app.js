@@ -5,6 +5,7 @@ import './select-focus.js';
 
 const video = document.querySelector('video');
 const play = document.querySelector('#play');
+const stagePlay = document.querySelector('#start-video');
 const status = document.querySelector('#status');
 const videoControls = attachVideoControls(video, status);
 const filmId = location.pathname.split('/')[2] || 'clock';
@@ -19,7 +20,8 @@ window.addEventListener('hashchange', () => {
 });
 
 let rendition = '', playbackGeneration = 0;
-let stream, renewal, viewId, playGrant, checkout, library;
+let stream, renewal, startupTimer, viewId, playGrant, checkout, library;
+const startupLimit = 45000;
 let counted = false, paid = false, purchase = false;
 let lastSave = 0, savedSecond = -1, resumePosition = 0, purchaseCheckedAt = 0;
 const previewSeconds = Number(document.body.dataset.preview ?? 10);
@@ -30,8 +32,20 @@ document.body.classList.toggle('is-program', Boolean(program));
 
 const mediaPrefix = () => (paid && program?.titleBase) || prefix;
 const renditionQuery = () => rendition ? '?subtitle=' + encodeURIComponent(rendition) : '';
-if (!previewSeconds) play.hidden = true;
+// A public preview is already bounded on the server. Giving the native player
+// that URL with preload=none lets its first Play gesture start the correct media.
+function prepareStart(attachPreview = true) {
+  const preview = !receipt && previewSeconds > 0;
+  const nativePreview = preview && attachPreview;
+  if (nativePreview) video.src = prefix + '/preview.mp4' + renditionQuery();
+  video.controls = nativePreview;
+  stagePlay.hidden = nativePreview || (!receipt && !preview);
+  stagePlay.disabled = false;
+  play.hidden = !(receipt || preview);
+  play.disabled = false;
+}
 if (receipt) play.textContent = 'Play rental';
+prepareStart();
 if (!receipt && document.body.dataset.checkout === 'true') {
   import('/checkout.js').then(async ({ attachViewerCheckout }) => {
     const restoreCode = fragment.get('restore');
@@ -72,9 +86,10 @@ if (!receipt && document.body.dataset.checkout === 'true') {
         if (watchNow && video.paused) startVideo();
         return;
       }
-      if (paid || stream) stopPlayback();
-      play.hidden = false;
-      if (watchNow) { window.scrollTo(0, 0); play.click(); }
+      const playingPreview = !paid && !video.paused && !video.ended;
+      stopPlayback();
+      prepareStart();
+      if (watchNow || playingPreview) { window.scrollTo(0, 0); requestPlayback(); }
     }, () => program?.revision);
     if (video.ended || !previewSeconds) checkout.showOffer();
   }).catch(() => {
@@ -85,6 +100,7 @@ if (!receipt && document.body.dataset.checkout === 'true') {
 function stopPlayback() {
   playbackGeneration++;
   clearTimeout(renewal);
+  clearTimeout(startupTimer);
   subtitles.clear();
   playGrant = undefined;
   const previous = stream;
@@ -98,16 +114,25 @@ function stopPlayback() {
 function fail(message) {
   stopPlayback();
   videoControls.exitPictureInPicture();
-  play.hidden = false;
+  rendition = '';
+  viewId = undefined;
+  prepareStart(false);
   status.textContent = message;
+}
+
+function watchStartup() {
+  clearTimeout(startupTimer);
+  startupTimer = setTimeout(() => fail('Playback took too long to start. Select Play to retry.'), startupLimit);
 }
 
 function loadLibrary() {
   library ??= new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = '/hls.js';
-    script.onload = resolve;
+    const timeout = setTimeout(() => script.onerror(), startupLimit);
+    script.onload = () => { clearTimeout(timeout); resolve(); };
     script.onerror = () => {
+      clearTimeout(timeout);
       script.remove();
       library = undefined;
       reject(new Error('The player could not load. Select ' + play.textContent + ' to try again.'));
@@ -122,12 +147,17 @@ async function startVideo() {
   try {
     await video.play();
     if (generation !== playbackGeneration) return;
+    clearTimeout(startupTimer);
     play.hidden = true;
     status.textContent = '';
-  } catch {
+  } catch (error) {
     if (generation !== playbackGeneration) return;
-    play.hidden = false;
-    status.textContent = 'Select ' + play.textContent + ' to watch.';
+    clearTimeout(startupTimer);
+    if (video.error) { fail('This video could not load. Select Play to retry.'); return; }
+    if (error.name !== 'AbortError') {
+      play.hidden = false;
+      status.textContent = 'Select ' + play.textContent + ' to watch.';
+    }
   } finally {
     if (generation === playbackGeneration) play.disabled = false;
   }
@@ -135,6 +165,8 @@ async function startVideo() {
 
 async function rental(resumeAt = 0, autoplay = true) {
   const generation = ++playbackGeneration;
+  watchStartup();
+  stagePlay.disabled = play.disabled = true;
   const media = mediaPrefix();
   try {
     if (purchase && Date.now() - purchaseCheckedAt > 30000) {
@@ -144,7 +176,7 @@ async function rental(resumeAt = 0, autoplay = true) {
       purchaseCheckedAt = Date.now();
     }
     const [response] = await Promise.all([fetch((program?.versionBase || prefix) + '/session', {
-      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: receipt, credentials: 'omit'
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: receipt, credentials: 'omit', signal: AbortSignal.timeout(startupLimit)
     }), loadLibrary()]);
     if (generation !== playbackGeneration) return;
     if (!response.ok) throw new Error(purchase ? 'This purchase is unavailable.' : 'This rental is unavailable or has expired.');
@@ -183,7 +215,10 @@ async function rental(resumeAt = 0, autoplay = true) {
       play.disabled = false;
       status.textContent = '';
       if (autoplay) startVideo();
+      else clearTimeout(startupTimer);
     });
+    stagePlay.hidden = true;
+    video.controls = true;
     player.attachMedia(video);
     player.loadSource(new URL('index.m3u8' + renditionQuery(), base).href);
     clearTimeout(renewal);
@@ -228,7 +263,9 @@ function newView() {
   counted = false;
   lastSave = 0;
   savedSecond = -1;
-  viewId = crypto.randomUUID();
+  // Older browsers and insecure publisher ancestors can omit randomUUID.
+  viewId = crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint8Array(18)),
+    byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function navigate(id, autoplay) {
@@ -250,29 +287,44 @@ function navigate(id, autoplay) {
   rental(0, shouldPlay);
 }
 
-play.addEventListener('click', async () => {
-  play.disabled = true;
+function requestPlayback() {
+  if (play.disabled || (!receipt && !previewSeconds)) return;
   status.textContent = 'Loading…';
-  if (receipt) {
-    if (paid && stream) { await startVideo(); return; }
-    stopPlayback();
-    paid = true;
-    newView();
-    await rental(resumePosition);
+  if (!receipt || (paid && stream)) {
+    if (!receipt && !video.hasAttribute('src')) prepareStart();
+    play.disabled = true;
+    watchStartup();
+    startVideo();
     return;
   }
-  if (!previewSeconds) return;
+  stopPlayback();
+  paid = true;
   newView();
-  const generation = ++playbackGeneration;
-  try {
-    rendition = await subtitles.show(prefix, 'preview');
+  rental(resumePosition);
+}
+
+play.addEventListener('click', requestPlayback);
+stagePlay.addEventListener('click', requestPlayback);
+
+video.addEventListener('play', () => {
+  watchStartup();
+  if (receipt) return;
+  if (!viewId || video.classList.contains('preview-ended')) newView();
+  video.classList.remove('preview-ended');
+  status.textContent = 'Loading preview…';
+  // Caption discovery and an embedded subtitle read must not hold up first play.
+  const generation = playbackGeneration;
+  subtitles.show(prefix, 'preview').then(bitmap => {
     if (generation !== playbackGeneration) return;
-    video.src = prefix + '/preview.mp4' + renditionQuery();
     subtitles.resume();
-    await startVideo();
-  } catch {
-    if (generation === playbackGeneration) fail('The preview could not play. Please try again.');
-  }
+    if (bitmap !== rendition) switchRendition(bitmap);
+  });
+});
+video.addEventListener('error', () => {
+  if (!receipt && video.error && video.hasAttribute('src')) fail('This preview could not load. Select Play to retry.');
+});
+video.addEventListener('pause', () => {
+  if (video.paused && video.readyState >= 2) clearTimeout(startupTimer);
 });
 
 function bookmark(force = false) {
@@ -301,6 +353,10 @@ document.addEventListener('stream-access-ended', () => {
   checkout?.showOffer();
 });
 video.addEventListener('playing', () => {
+  clearTimeout(startupTimer);
+  play.hidden = true;
+  play.disabled = false;
+  status.textContent = '';
   video.classList.remove('preview-ended');
   if (counted || !viewId || document.body.dataset.checkout !== 'true') return;
   counted = true;

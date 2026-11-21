@@ -108,6 +108,7 @@ export function attachSubtitles(video, setRendition) {
     scope = nextScope;
     grant = nextGrant;
     const controller = request = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
       const response = await read('');
       if (!response.ok) throw Error();
@@ -136,7 +137,7 @@ export function attachSubtitles(video, setRendition) {
     } catch {
       if (request === controller) clear();
       return '';
-    }
+    } finally { clearTimeout(timeout); }
   }
   return { show, clear, suspend() { suspended = true; }, resume() {
     const entry = entries.get(selected);

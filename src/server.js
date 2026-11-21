@@ -14,6 +14,8 @@ import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
+  ['/film-embed.js', ['./film-embed.js', 'text/javascript']],
+  ['/program-lineup.css', ['../public/program-lineup.css', 'text/css']],
   ['/program-player.js', ['../public/program-player.js', 'text/javascript']],
   ['/video-controls.js', ['../public/video-controls.js', 'text/javascript']],
   ['/select-focus.js', ['../public/select-focus.js', 'text/javascript']],
@@ -254,6 +256,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const show = new URL(req.url, origin).searchParams.get('show');
         const fields = selectedFields(show || '');
         const text = { title: escapeHtml(published?.title || 'Private screening'), poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '', filmInfo: renderFilmInfo(published?.info, fields) };
+        text.programStyles = spec.type === 'program' ? '<link rel="stylesheet" href="/program-lineup.css">' : '';
         text.program = spec.type === 'program' ? escapeHtml(JSON.stringify(published ?
           programPresentation(published, show === null ? undefined : fields) : {title:'Private screening',lineup:[]})) : '';
         const html = template.replaceAll('{{checkout}}', String(payable))
@@ -264,7 +267,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           .replaceAll('{{rent}}', String(published?.prices?.rent ?? ''))
           .replaceAll('{{rentalHours}}', String(published?.rentalHours ?? 48))
           .replaceAll('{{buy}}', String(published?.prices?.buy ?? ''))
-          .replace(/\{\{(title|filmInfo|poster|program)\}\}/g, (_, key) => text[key]);
+          .replace(/\{\{(title|filmInfo|poster|program|programStyles)\}\}/g, (_, key) => text[key]);
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
       const versioned = /^\/film\/(p-[a-f0-9-]{36})\/v\/([\w-]{43})(?:\/title\/(f-[a-f0-9-]{36}))?\/(.+)$/.exec(path);

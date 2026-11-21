@@ -10,6 +10,7 @@ import { pictureSubtitles } from '../test/fixtures/picture-subtitles.js';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import sharp from 'sharp';
 import { openFilm } from '../src/media.js';
 import { createRentalAuthority, rentalScope } from '../src/rental.js';
 import { makeServer } from '../src/server.js';
@@ -36,7 +37,9 @@ const offers = new Map(['first', 'second', 'legacy'].map(id => [id, { id, title:
   prices: { rent: 99, buy: 299 }, revision: film.revision, authority: createRentalAuthority(randomBytes(32)) }]));
 const program = await programFixture({ clock, directory, text, picture, path, duration:film.duration });
 offers.set(program.offer.id, program.offer);
+const poster = await sharp({create:{width:160,height:90,channels:3,background:'#777'}}).jpeg().toBuffer();
 const catalog = {
+  poster: () => poster,
   get: (id, options) => id === program.offer.id && program.withdrawn && !options?.entitled ? undefined : offers.get(id),
   verify: id => offers.get(id), list: () => [...offers.values()],
   open: (id, options) => id === program.offer.id ? program.open(options?.memberId) : openFilm(source),
@@ -312,12 +315,19 @@ async function install(context) {
   });
 }
 
-async function preview(frame, captions = false) {
+async function preview(frame, captions = false, native = false) {
   await frame.waitForFunction(() => document.querySelector('#download')?.target.startsWith('stream-file-'));
   assert.equal(await frame.locator('#purchase').isHidden(), true);
   await frame.locator('video').evaluate(video => { video.muted = true; });
-  await frame.getByRole('button', { name: 'Play 10-second preview' }).click();
-  await frame.locator('video').scrollIntoViewIfNeeded();
+  const video = frame.locator('video');
+  if (native) {
+    assert.ok(await video.evaluate(v => v.controls && v.preload === 'none' && v.src.endsWith('/preview.mp4')));
+    // Space invokes the browser's native Play action regardless of the platform's media-bar layout.
+    await video.press('Space');
+  } else {
+    await frame.getByRole('button', { name: 'Play 10-second preview' }).click();
+  }
+  await video.scrollIntoViewIfNeeded();
   try {
     await frame.waitForFunction(() => document.querySelector('video').currentTime > .1, null, { polling: 100, timeout: 12000 });
   } catch (cause) {
@@ -733,6 +743,9 @@ try {
   const nm = await context.newPage();
   await nm.setViewportSize({ width:320, height:240 });
   await nm.goto(app + '/embed/second');
+  await nm.locator('#rent').waitFor();
+  assert.ok(await nm.locator('#start-video').isHidden() && await nm.locator('#play').isHidden());
+  assert.ok(await nm.locator('video').evaluate(v => !v.controls && !v.hasAttribute('src')));
   await nm.locator('#rent').click();
   await nm.locator('#view-in-nm').click();
   await nm.locator('#viewing-street').fill('1 Civic Plaza NW');

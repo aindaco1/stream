@@ -23,6 +23,7 @@ const evidence = process.env.EVIDENCE_DIR ? path.resolve(process.env.EVIDENCE_DI
 const fixture = path.join(temporary, 'clock.mp4');
 const report = { providers: 'Synthetic Stripe and R2', scenarios: [] };
 const savedKey = 'First cut/Short film.mp4';
+const extensionlessKey = 'Masters/Final without extension';
 const accountId = 'a'.repeat(32);
 const bucket = 'screening-room-test';
 const access = testWriterId;
@@ -365,10 +366,13 @@ async function registerFilm(page, shouldRecover, origin, owner) {
   assert.equal(await section.locator('[name="objectKey"]').count(), 0);
   await section.locator('[name="rightsAccepted"]').check();
   await section.getByRole('button', { name: 'Confirm rights and continue' }).click();
-  async function setObjectKey(key) {
-    const object = section.getByLabel('Object key');
+  async function chooseBucketVideo(key) {
+    const object = section.getByLabel('Video in your bucket');
     if (!await object.isVisible()) await section.getByText('Use an existing file', { exact: true }).click();
-    await object.fill(key);
+    if (key === savedKey && !await object.locator('option').evaluateAll((options, key) => options.some(o => o.value === key), key)) {
+      await section.getByRole('button', {name:'Load more files'}).click();
+    }
+    await object.selectOption(key);
   }
   await section.getByLabel('Film title').fill('Projection test <first cut>');
   if (shouldRecover) {
@@ -378,13 +382,26 @@ async function registerFilm(page, shouldRecover, origin, owner) {
     await openWorkspace(page, 'Dashboard');
     await page.getByRole('link', { name: 'Continue film draft' }).click();
     assert.equal(await section.getByLabel('Film title').inputValue(), 'Projection test <first cut>');
-    await setObjectKey('Incorrect/Short film.mp4');
+    await chooseBucketVideo('Incorrect/Short film.mp4');
     await section.getByRole('button', { name: 'Check film and create preview' }).click();
     await page.getByRole('alert').waitFor();
     assert.equal(await section.getByLabel('Film title').inputValue(), 'Projection test <first cut>');
-    assert.equal(await section.getByLabel('Object key').inputValue(), 'Incorrect/Short film.mp4');
+    assert.equal(await section.getByLabel('Video in your bucket').inputValue(), 'Incorrect/Short film.mp4');
   }
-  await setObjectKey(savedKey);
+  await chooseBucketVideo(savedKey);
+  if (shouldRecover) {
+    const picker = section.getByLabel('Video in your bucket');
+    assert.equal(await picker.locator('option[value="art/poster.jpg"]').count(),0);
+    await section.getByLabel('Show all files').check();
+    await chooseBucketVideo('art/poster.jpg');
+    await section.getByRole('button', {name:'Preview selected video'}).click();
+    await section.locator('[data-file-status]').filter({hasText:'This preview could not be prepared'}).waitFor();
+    await chooseBucketVideo(extensionlessKey);
+    await section.getByRole('button', {name:'Preview selected video'}).click();
+    await section.locator('[data-file-preview]').waitFor({ state:'visible' });
+    await page.waitForFunction(() => document.querySelector('[data-file-preview]')?.readyState >= 2);
+    assert.ok(await section.locator('[data-file-preview]').evaluate(video => video.duration > 0 && video.duration <= 3.1));
+  }
   await section.getByRole('button', { name: 'Check film and create preview' }).click();
   const preview = page.getByRole('link', { name: 'Watch private preview' });
   await preview.waitFor();
@@ -466,6 +483,16 @@ async function checkProgramEditor(page) {
   await page.getByRole('button', {name:'Add video to program'}).click();
   await form.waitFor();
   assert.equal(await form.locator('select[name=opening] option:checked').textContent(), 'Meet the director');
+  assert.deepEqual(await form.locator('[data-slot]').evaluateAll(slots => slots.map(slot => slot.dataset.slot)), ['opening','films','closing']);
+  const intro = await form.locator('select[name=opening]').inputValue();
+  assert.equal(await form.locator('.program-library li:visible').filter({hasText:'Meet the director'}).count(), 0);
+  // Reassign an extra. It should appear in exactly one slot and never as a selectable main film.
+  await form.getByLabel('Opening video', {exact:true}).selectOption('');
+  await form.getByLabel('Closing video', {exact:true}).selectOption(intro);
+  assert.equal(await form.locator('select[name=closing] option:checked').textContent(), 'Meet the director');
+  assert.equal(await form.locator('.program-library li:visible').filter({hasText:'Meet the director'}).count(), 0);
+  await form.getByLabel('Closing video', {exact:true}).selectOption('');
+  await form.getByLabel('Opening video', {exact:true}).selectOption(intro);
   await form.getByLabel('Preview video').selectOption({label:'Meet the director'});
   const img = await sharp({create:{width:320,height:180,channels:3,background:'#898989'}}).jpeg().toBuffer();
   await page.getByLabel('Thumbnail image').setInputFiles({name:'program.jpg',mimeType:'image/jpeg',buffer:img});
@@ -474,7 +501,10 @@ async function checkProgramEditor(page) {
   await page.getByText('Thumbnail saved.',{exact:true}).waitFor();
   await form.getByRole('button', {name:'Save and preview'}).click();
   await page.waitForFunction(() => document.querySelector('video')?.duration === 4);
-  assert.match(await page.locator('.private-lineup li').first().textContent(),/Opening · Meet the director/);
+  const entry = page.locator('.private-lineup li').first();
+  assert.equal(await entry.locator('h3').innerText(), 'Meet the director');
+  assert.match(await entry.locator('.program-runtime').innerText(), /^Opening · /);
+  assert.equal(await page.locator('.private-lineup details').count(),0);
   await page.getByRole('link',{name:'Back to program'}).click();
   await form.getByLabel('I own these videos', {exact:false}).check();
   await form.getByRole('button',{name:'Publish program',exact:true}).click();
@@ -528,7 +558,15 @@ try {
   const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' };
   const artwork = thumbnailBucket();
   const movies = filmUploadBucket();
-  setup = await createSetup({ thumbnailFetch: artwork.fetcher, uploadFetch: movies.fetcher,
+  setup = await createSetup({ thumbnailFetch: artwork.fetcher, uploadFetch: async request => {
+    const params = new URL(request.url).searchParams;
+    if (params.get('list-type') !== '2') return movies.fetcher(request);
+    const hasMore = !params.has('continuation-token');
+    const files = hasMore ? ['Incorrect/Short film.mp4', 'art/poster.jpg', extensionlessKey] : [savedKey];
+    return new Response('<ListBucketResult><IsTruncated>' + hasMore + '</IsTruncated>' +
+      files.map(key => '<Contents><Key>' + encodeURIComponent(key) + '</Key><Size>100000</Size></Contents>').join('') +
+      (hasMore ? '<NextContinuationToken>next-page</NextContinuationToken>' : '') + '</ListBucketResult>');
+  },
     directory: path.join(temporary, 'state'), stripe, env,
     async resolveBucket({ bucketUrl: location, privateConfirmed, tokenValue, accessKeyId, secretAccessKey, uploadConsent, storageAccess }) {
       assert.equal(location, bucketUrl);
@@ -550,7 +588,7 @@ try {
     },
     sourceFor(settings) {
       if (movies.objects.has(settings.objectKey)) return createR2Source(settings, movies.fetcher);
-      if (settings.objectKey !== savedKey) throw Error('Unknown test object');
+      if (![savedKey, extensionlessKey].includes(settings.objectKey)) throw Error('Unknown test object');
       return createFileSource(fixture);
     }
   });

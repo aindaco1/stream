@@ -59,13 +59,17 @@ test('guided setup carries an authenticated filmmaker from empty storage to priv
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = join(dir, 'film.mp4');
   execFileSync(process.execPath, ['scripts/fixture.js', file], { stdio: 'pipe' });
-  const reads = [];
+  const reads = [], listings = [];
   const setup = await createSetup({
+    uploadFetch: async request => {
+      listings.push(new URL(request.url).pathname);
+      return new Response('<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>Projects%2FMy%20Film.mp4</Key><Size>4321</Size></Contents><Contents><Key>Projects%2FOld%20cut.final-v2</Key><Size>4567</Size></Contents></ListBucketResult>');
+    },
     directory: join(dir, 'state'), env: {},
     checkBucket: async settings => { if (settings.secretAccessKey !== config.secretAccessKey) throw Error(); },
     sourceFor: settings => {
       reads.push([settings.bucket, settings.objectKey]);
-      if (settings.objectKey !== 'Projects/My Film.mp4') throw Error();
+      if (!['Projects/My Film.mp4', 'Projects/Old cut.final-v2'].includes(settings.objectKey)) throw Error();
       return createFileSource(file);
     }
   });
@@ -97,14 +101,37 @@ test('guided setup carries an authenticated filmmaker from empty storage to priv
   assert.equal(failed.status, 422);
   assert.doesNotMatch(await failed.text(), /incorrect-test-key/);
   assert.equal((await submit('r2', config)).status, 303);
+  const pick = (action, {sessionCookie=cookie, csrfToken=csrf, draftId=id, activeBucket=config.accountId+'/default/'+config.bucket, values={}} = {}) =>
+    fetch(origin + '/setup/bucket/' + action, {method:'POST', headers:{Origin:origin, Cookie:sessionCookie,
+      'X-Stream-CSRF':csrfToken,'X-Draft-Id':draftId,'X-Active-Bucket':activeBucket},body:new URLSearchParams(values)});
+  assert.equal((await pick('files')).status,403);
+  assert.equal((await pick('preview',{values:{key:film.objectKey}})).status,403);
+  assert.deepEqual(listings,[]);
   assert.equal((await submit('film', film)).status, 403);
   assert.equal(reads.length, 0);
   assert.doesNotMatch(await (await get('/setup/dashboard/new')).text(), /Use an existing file/);
   assert.equal((await submit('rights', { draftId: id, rightsAccepted: 'yes' })).status, 303);
+  assert.equal((await pick('files',{csrfToken:'bad-token'})).status,403);
+  assert.equal((await pick('files',{sessionCookie:''})).status,401);
+  const otherSession = await login('Another filmmaker');
+  assert.equal((await pick('files',{sessionCookie:otherSession.cookie,csrfToken:otherSession.csrf})).status,409);
+  assert.equal((await pick('files',{activeBucket:'another-bucket'})).status,409);
+  assert.deepEqual(listings,[]);
+  const listed = await pick('files');
+  assert.equal(listed.status,200);
+  assert.deepEqual(await listed.json(),{files:[{key:'Projects/My Film.mp4',bytes:4321}],next:null});
+  const all = await pick('files',{values:{all:'yes'}});
+  assert.equal((await all.json()).files[1].key,'Projects/Old cut.final-v2');
+  assert.deepEqual(listings,['/'+config.bucket,'/'+config.bucket]);
+  assert.equal((await pick('preview',{values:{key:'../invalid.mp4'}})).status,400);
   assert.match(await (await get('/setup/dashboard/new')).text(), /Use an existing file/);
   assert.equal((await submit('film', { draftId: id, title: 'Working title', intent: 'save' })).status, 200);
   assert.equal(setup.store.maker('Ada').draft.title, 'Working title');
   assert.equal(reads.length, 0);
+  const unusual = await pick('preview',{values:{key:'Projects/Old cut.final-v2'}});
+  assert.equal(unusual.status,200);
+  assert.equal(unusual.headers.get('content-type'),'video/mp4');
+  assert.ok((await unusual.arrayBuffer()).byteLength > 0);
   assert.equal((await submit('film', { ...film, objectKey: 'Missing.mp4' })).status, 422);
   assert.equal((await submit('film', film)).status, 303);
   assert.equal((await submit('film', film)).status, 303);

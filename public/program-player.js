@@ -1,8 +1,6 @@
+import { infoFields, renderProgramEntry, selectedFields } from './film-embed.js';
+
 const byId = id => document.getElementById(id);
-const duration = seconds => {
-  const minutes = Math.floor(seconds / 60);
-  return minutes + ':' + String(Math.floor(seconds % 60)).padStart(2, '0');
-};
 function fileSize(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '';
   const unit = bytes >= 1e9 ? 'GB' : 'MB';
@@ -19,7 +17,8 @@ export function attachProgram(initial, prefix, onNavigate, onDownload) {
   const previous = byId('previous-title'), next = byId('next-title');
   const watching = byId('program-now'), summary = byId('program-summary');
   const zip = byId('download').querySelector('button');
-  const fields = new URLSearchParams(location.search).get('show')?.split(',') ?? ['synopsis','credits','message'];
+  const show = new URLSearchParams(location.search).get('show');
+  const fields = show === null ? infoFields : selectedFields(show);
   let program = initial, current, access;
   const versionBase = () => prefix + '/v/' + encodeURIComponent(program.revision);
   const titleBase = id => versionBase() + '/title/' + encodeURIComponent(id);
@@ -39,42 +38,10 @@ export function attachProgram(initial, prefix, onNavigate, onDownload) {
     for (const item of items) {
       const row = document.createElement('li');
       row.dataset.member = item.id;
-      const meta = document.createElement('span');
-      meta.className = 'program-runtime';
-      const role = item.role === 'opening' ? 'Opening' : item.role === 'closing' ? 'Closing' : '';
-      meta.textContent = (role ? role + ' · ' : '') + duration(item.duration);
-      const title = document.createElement('span');
-      title.className = 'program-row-title';
-      title.textContent = item.title;
-      const details = document.createElement('details');
-      const header = document.createElement('summary');
-      header.append(title, meta);
-      const content = document.createElement('div');
-      content.className = 'program-notes';
-      if (item.thumbnail) {
-        const poster = document.createElement('img');
-        poster.loading = 'lazy';
-        poster.alt = '';
-        poster.src = titleBase(item.id) + '/thumbnail.jpg';
-        poster.addEventListener('error', () => poster.remove(), {once:true});
-        content.append(poster);
-      }
-      for (const field of ['synopsis','message','credits']) {
-        if (!fields.includes(field) || !item.info?.[field]) continue;
-        const para = document.createElement('p');
-        para.className = 'film-' + field;
-        para.textContent = item.info[field];
-        content.append(para);
-      }
-      if (content.childElementCount) {
-        details.append(header, content);
-        row.append(details);
-      } else {
-        const heading = document.createElement('div');
-        heading.className = 'program-row-heading';
-        heading.append(title, meta);
-        row.append(heading);
-      }
+      const posterUrl = item.thumbnail ? titleBase(item.id) + '/thumbnail.jpg' : '';
+      row.innerHTML = renderProgramEntry(item, fields, posterUrl);
+      const still = row.querySelector('img');
+      still?.addEventListener('error', () => still.remove(), {once:true});
       if (access) {
         const choose = document.createElement('button');
         choose.className = 'program-watch';
@@ -82,7 +49,10 @@ export function attachProgram(initial, prefix, onNavigate, onDownload) {
         choose.textContent = 'Play';
         choose.setAttribute('aria-label', 'Play ' + item.title);
         choose.addEventListener('click', () => onNavigate(item.id, true));
-        row.append(choose);
+        const actions = document.createElement('div');
+        actions.className = 'program-actions';
+        actions.append(choose);
+        row.append(actions);
         if (access === 'buy') {
           const save = document.createElement('button');
           save.className = 'program-file';
@@ -90,7 +60,7 @@ export function attachProgram(initial, prefix, onNavigate, onDownload) {
           save.textContent = 'Download';
           save.setAttribute('aria-label', 'Download ' + item.title);
           save.addEventListener('click', () => onDownload(titleBase(item.id) + '/download', save));
-          row.append(save);
+          actions.append(save);
         }
       }
       list.append(row);

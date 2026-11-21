@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile, copyFile, truncate } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -126,4 +127,17 @@ test('overlapping requests for different preview lengths each enforce their own 
     assert.ok(Math.abs(Math.max(...ends) - intervals[index]) < .001);
   }
   for (const invalid of [0, -1, 31, Infinity]) await assert.rejects(film.preview(invalid));
+});
+
+test('separate renders of a rate-limited transcoded preview serve identical bytes for video range requests', async t => {
+  const path = join(directory, 'busy-intro.mp4');
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i',
+    'testsrc2=size=960x540:rate=24,noise=alls=48:allf=t+u:all_seed=42', '-t', '7',
+    '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-profile:v', 'main', '-bf', '2', path]);
+  const source = createFileSource(path);
+  const first = await openFilm(source), second = await openFilm(source);
+  t.after(() => {first.close(); second.close();});
+  const [a,b] = await Promise.all([first.preview(6), second.preview(6)]);
+  assert.equal(createHash('sha256').update(a).digest('hex'), createHash('sha256').update(b).digest('hex'));
+  assert.ok((await first.preview(6)) === a, 'Range requests share the ready preview while the source is current.');
 });

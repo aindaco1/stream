@@ -1,3 +1,4 @@
+import { bucketSelection, hasVideoExtension } from './bucket-videos.js';
 import { sumFilmStats } from './analytics.js';
 import { previewSeconds } from './prices.js';
 import { formatDuration, hidden, priceFields } from './offer-fields.js';
@@ -95,6 +96,7 @@ function priceEditor(film, csrf) {
 
 export function filmSection({ r2, rights, draft, csrf }) {
   const fields = hidden('csrf', csrf) + hidden('draftId', draft.id);
+  const otherFile = draft.objectKey && !hasVideoExtension(draft.objectKey);
   if (r2.status !== 'ready') {
     return '<p>Connect your <a href="/setup/settings#storage">storage bucket</a> to add your first film.</p>';
   }
@@ -118,10 +120,16 @@ export function filmSection({ r2, rights, draft, csrf }) {
         <p data-upload-status role="status" aria-live="polite"></p><progress data-upload-progress value="0" max="1" hidden></progress>
         <button class="secondary" type="button" data-cancel-upload hidden>Discard unfinished upload</button></div>` :
         '<p><a href="/setup/r2/uploads">Enable uploads in Storage settings</a> to choose a video from this device.</p>'}
-      <details class="film-guide"${!r2.uploads ? ' open' : ''}><summary>Use an existing file</summary>
-        <label>Object key<input id="object-key" name="objectKey" type="text" maxlength="1024" spellcheck="false"
-          autocapitalize="none" value="${escapeHtml(draft.objectKey)}"></label>
-        <p class="hint">Enter the exact path of a film already in your connected bucket.</p></details>
+      ${hidden('activeBucket', bucketSelection(r2))}
+      <details class="film-guide file-picker" data-bucket-picker${!r2.uploads || draft.objectKey ? ' open' : ''}><summary>Use an existing file</summary>
+        <label>Video in your bucket<select id="object-key" name="objectKey">
+          <option value="">Choose a video</option>${draft.objectKey ? `<option selected${otherFile ? ' data-other="true"' : ''} value="${escapeHtml(draft.objectKey)}">${escapeHtml(draft.objectKey)}</option>` : ''}</select></label>
+        <label class="rights-choice"><input type="checkbox" data-all-files${otherFile ? ' checked' : ''}>Show all files</label>
+        <p class="hint" role="status" data-file-status></p>
+        <div class="film-actions"><button type="button" class="secondary" data-more-files hidden>Load more files</button>
+          <button type="button" class="secondary" data-preview-file${draft.objectKey ? '' : ' hidden'}>Preview selected video</button></div>
+        <video data-file-preview controls playsinline preload="none" aria-label="Selected file preview" hidden></video>
+      </details>
       ${draft.programTarget ? '' : priceFields(draft)}
       <div class="film-actions"><button type="submit">${draft.programTarget ? 'Add video to program' : 'Check film and create preview'}</button>
         <button class="secondary" type="submit" name="intent" value="save" formnovalidate>Save draft</button></div>
@@ -149,13 +157,14 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
       ])}`);
 }
 
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, admin = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false } = {}) {
   const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="same-origin">
     <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/setup/style.css">
     <link rel="stylesheet" href="/setup/dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
+    ${programPreview ? '<link rel="stylesheet" href="/program-lineup.css">' : ''}
     <script src="/setup/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
     <script type="module" src="/select-focus.js"></script>
     ${!csrf ? '<script src="/setup/sign-in.js" defer></script>' : !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}

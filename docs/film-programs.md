@@ -14,12 +14,12 @@
 
 | Moment | In the embed |
 | --- | --- |
-| Before payment | A program poster overlays the player. Below it, show the title, film count, total runtime, and a compact lineup. Keep each film’s title and runtime visible. Expand a title to see its poster, synopsis, credits, and filmmaker message where supplied and enabled for the embed. Mark opening and closing videos separately. |
+| Before payment | A program poster overlays the player. Below it, show the title, film count, total runtime, and a compact lineup. Keep each film’s title and runtime visible. Display the selected synopsis, credits, and filmmaker message beneath the title, with its thumbnail on the right when available. Mark opening and closing videos separately. |
 | At the paywall | Offer an explicit action such as **Rent both films for $4 · 48 hours** or **Buy program · $8, includes ZIP**. Use the existing inline payment form, optional tip, and tax total. Keep the pay button reachable on a small screen. |
 | After payment | Start at the opening video if supplied, continue in the chosen order, and finish with the closing video. Viewers can skip extras or choose any included film immediately. Use one player with **Previous title** and **Next title** controls. Keep the viewer’s caption language where available, remember it through titles without a matching track, and preserve an explicit Off selection. Track the current title and position so **Continue watching** and the program’s private recovery link return to the right place. The rental clock starts at payment and covers the whole program. |
 | After purchase | Show **Download program (.zip)** with its approximate size. Each original is a separate file, numbered in screening order, including any opening and closing videos. Keep individual downloads available to buyers who need only one film or have an interrupted connection. |
 
-Use the same black-and-white design as the film embed. On a wide site the lineup can sit beside the player. On mobile it sits beneath the offer or player. Opening a film’s credits should expand that row only. A program and a standalone film from another filmmaker must work side by side on the same page.
+Use the same black-and-white design as the film embed. On a wide site the lineup can sit beside the player. On mobile it sits beneath the offer or player. Each title’s selected details stay visible in screening order. A program and a standalone film from another filmmaker must work side by side on the same page.
 
 ## Build sequence and acceptance checks
 

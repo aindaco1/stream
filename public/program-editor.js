@@ -1,10 +1,12 @@
 const form = document.querySelector('.program-editor');
 
 if (form) {
-  const library = form.querySelector('.program-library');
-  const rows = () => [...(library?.children || [])];
+  const library = form.querySelector('[data-slot=films] ol');
+  const choices = form.querySelector('.program-choices');
+  const available = choices.querySelector('ul');
+  const rows = () => [...form.querySelectorAll('.program-library li')];
   const checkbox = row => row.querySelector('input');
-  const chosen = () => rows().filter(row => checkbox(row).checked);
+  const chosen = () => [...library.children];
   const { opening, closing, previewFilmId, rightsAccepted } = form.elements;
   const runtime = form.querySelector('[data-runtime]');
   const previewSeconds = form.elements.previewSeconds;
@@ -16,7 +18,7 @@ if (form) {
     const extras = new Set([opening.value, closing.value].filter(Boolean));
     for (const row of rows()) {
       const input = checkbox(row);
-      input.disabled = extras.has(row.dataset.id);
+      row.hidden = input.disabled = extras.has(row.dataset.id);
       const controls = row.querySelector('.lineup-moves');
       controls.hidden = !input.checked;
       row.draggable = input.checked;
@@ -24,6 +26,8 @@ if (form) {
       before.disabled = row === lineup[0];
       after.disabled = row === lineup.at(-1);
     }
+    form.querySelector('[data-empty-order]').hidden = Boolean(lineup.length);
+    choices.hidden = Boolean(available && !available.querySelector('li:not([hidden])'));
     for (const [menu, other] of [[opening, closing], [closing, opening]]) {
       for (const option of menu.options) option.disabled = Boolean(option.value && (selected.has(option.value) || option.value === other.value));
     }
@@ -35,21 +39,20 @@ if (form) {
     const max = source ? Math.min(30, Math.max(0, Math.ceil(Number(source.dataset.duration)) - 1)) : 30;
     previewSeconds.max = String(max);
     if (!editedPreview && Number(previewSeconds.value) > max) previewSeconds.value = String(max);
-    const seconds = rows().reduce((sum, row) => sum + ((selected.has(row.dataset.id) || extras.has(row.dataset.id)) ? Number(row.dataset.duration) : 0), 0);
+    const seconds = Math.round(rows().reduce((sum, row) => sum + ((selected.has(row.dataset.id) || extras.has(row.dataset.id)) ? Number(row.dataset.duration) : 0), 0));
     runtime.textContent = lineup.length + (lineup.length === 1 ? ' film' : ' films') + ' · ' +
-      Math.floor(seconds / 60) + ' min ' + Math.round(seconds % 60) + ' sec total';
+      Math.floor(seconds / 60) + ' min ' + seconds % 60 + ' sec total';
   }
   function changeLineup() {
     rightsAccepted.checked = false;
     refresh();
   }
-  library?.addEventListener('change', event => {
-    const row = event.target.closest('li');
+  form.addEventListener('change', event => {
+    const row = event.target.closest('.program-library li');
     if (!row) return;
-    const unselected = rows().find(other => other !== row && !checkbox(other).checked);
-    library.insertBefore(row, unselected || null);
-    checkbox(row).focus();
+    (checkbox(row).checked ? library : available).append(row);
     changeLineup();
+    checkbox(row).focus();
   });
   library?.addEventListener('click', event => {
     const button = event.target.closest('[data-move]');

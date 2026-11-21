@@ -12,7 +12,8 @@ import { verifyUploadAccess } from './r2-write.js';
 import { checkR2Bucket, createR2Source } from './source.js';
 import { guidedBucketForm, parseR2BucketUrl, R2SetupError } from './setup-r2.js';
 import { openSetupStore } from './setup-store.js';
-import { isProgramId } from './program-store.js';
+import { bucketSelection, isBucketFileKey, listBucketVideos } from './bucket-videos.js';
+import { isProgramId, validRights } from './program-store.js';
 import { programRights, renderPrivateProgram, renderProgramEditor, submittedLineup } from './program-editor.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
@@ -212,7 +213,7 @@ export async function createSetup({
         r2: r2 ? { ...r2, status: 'ready' } : {}, draft, csrf: session.csrf,
         rights: { accepted: Boolean(draft.rights), statement: rightsStatement }
       }) + '</section><p>' + back + '</p>', { dashboard: true, filmUpload: true }),
-        { 'Content-Security-Policy': csp + "; connect-src 'self'" });
+        { 'Content-Security-Policy': csp.replace("media-src 'self'", "media-src 'self' blob:") + "; connect-src 'self'" });
     };
     const dashboard = (status = 200, error, selectionFilm = searchParams.get('film')) => {
       const viewer = viewerOrigin(env, origin);
@@ -299,7 +300,7 @@ export async function createSetup({
       if (!saved) return reject(404, 'Program unavailable.');
       try {
         const offer = publications.programPreview(owner, saved.id);
-        if (!preview[2]) return html(200, step(saved.title, renderPrivateProgram(saved, store.dashboardFilms(owner), path), { dashboard: true }));
+        if (!preview[2]) return html(200, step(saved.title, renderPrivateProgram(saved, store.dashboardFilms(owner), path), { dashboard: true, programPreview: true }));
         if (!offer.previewSeconds) return reject(404, 'This program opens directly at its offers.');
         const key = saved.id + '/' + saved.version;
         if (!activePreviews.has(key)) {
@@ -325,6 +326,39 @@ export async function createSetup({
       }
       try { return sendMp4((await activePreviews.get(key)).preview, commonHeaders); }
       catch { return reject(409, 'The film changed or storage is unavailable. Check the original in Cloudflare.'); }
+    }
+    if (path === '/setup/bucket/files' || path === '/setup/bucket/preview') {
+      if (method !== 'POST') return reject(405, 'Use the film picker.');
+      if (req.headers['x-stream-csrf'] !== session.csrf) return reject(403, 'Reload the film form.');
+      const { r2, draft } = store.maker(owner);
+      if (!r2 || req.headers['x-draft-id'] !== draft.id || store.film(owner, draft.id) ||
+          req.headers['x-active-bucket'] !== bucketSelection(r2)) return reject(409, 'The film draft or bucket changed. Reload the form.');
+      if (!validRights(draft.rights)) return reject(403, 'Confirm your distribution rights first.');
+      const listing = path === '/setup/bucket/files';
+      try {
+        const data = await readForm(req);
+        const credentials = store.credentials(owner, r2);
+        if (listing) {
+          if ((data.cursor || '').length > 4096) return reject(400, 'Reload the file list.');
+          const { files, next } = await listBucketVideos(credentials, {cursor:data.cursor, allFiles:data.all === 'yes'}, uploadFetch);
+          const titles = store.bucketFilmTitles(owner, r2, files.map(file => file.key));
+          return send(200, 'application/json', JSON.stringify({files:files.map(file => ({...file, title:titles.get(file.key)})), next}), commonHeaders);
+        }
+        if (!isBucketFileKey(data.key)) return reject(400, 'Choose a file from your bucket.');
+        const slot = 'bucket-picker/' + owner;
+        if (activePreviews.has(slot)) return reject(409, 'A preview is being prepared. Try again in a moment.');
+        const render = async () => {
+          const media = await openFilm(sourceFor({...credentials, objectKey:data.key}), { previewSeconds:3 });
+          try { return await media.preview(Math.min(3, media.duration / 2)); }
+          finally { media.close(); }
+        };
+        activePreviews.set(slot, render().finally(() => activePreviews.delete(slot)));
+        return send(200, 'video/mp4', await activePreviews.get(slot), commonHeaders);
+      } catch (e) {
+        if (e instanceof SetupError) return reject(e.statusCode, e.message);
+        return reject(503, listing ? 'Could not list the videos. Check bucket access in Storage or try again.' :
+          'This preview could not be prepared. Try again or choose another video.');
+      }
     }
     const upload = /^\/setup\/upload\/(status|start|part|complete|cancel)$/.exec(path);
     if (upload) {
@@ -509,6 +543,7 @@ export async function createSetup({
         store.saveDraft(owner, draft);
       } else {
         if (!draft.rights) throw new SetupError('Confirm your distribution rights before adding this film.', 403);
+        if (data.activeBucket && data.activeBucket !== bucketSelection(r2)) throw new SetupError('Your connected bucket changed. Reload and choose the video again.', 409);
         const title = (data.title || '').trim();
         const objectKey = data.objectKey || '';
         const saving = data.intent === 'save';
@@ -516,7 +551,7 @@ export async function createSetup({
         if (!saving && transfer && !transfer.complete) throw new SetupError('Finish or discard the current upload before saving this film.', 409);
         if (title.length > 160 || Buffer.byteLength(objectKey) > 1024 || (!saving && (!title || !objectKey)) ||
             /[\u0000-\u001f\u007f]/u.test(title + objectKey) || (objectKey && !saving && objectKey.split('/').some(part => !part || part === '.' || part === '..'))) {
-          throw new SetupError('Enter a film title and the exact object key from your bucket, including any folder.');
+          throw new SetupError('Enter a film title and choose a video from your device or bucket.');
         }
         // Previously saved drafts and older forms retain their rental default.
         const settings = settingsForm(data, draft);
@@ -526,7 +561,7 @@ export async function createSetup({
         try { film = await inspect(owner, r2, objectKey, undefined, settings.previewSeconds); }
         catch (error) {
           if (error instanceof SetupError) throw error;
-          throw new SetupError('Stream could not read this film. Check the exact object key, read access and supported video settings below. You can retry this film.', 422);
+          throw new SetupError('Stream could not read this film. Check bucket access and the supported video settings, or choose another video.', 422);
         }
         store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitles });
       }

@@ -24,7 +24,7 @@ export async function programFixture({ clock, path, directory, text, picture, du
     const size = (await source.head()).size;
     sources.set(id, { source, filename });
     lineup.push({ id, role, title, duration, size, extension:filename.endsWith('mkv') ? 'mkv' : 'mp4',
-      info:{synopsis: title + ' synopsis', credits: 'Directed by Ada'} });
+      thumbnail: role === 'opening', info:{synopsis: title + ' synopsis', credits: 'Directed by Ada', message:'A note from the director.'} });
   }
   const id = 'p-' + randomUUID();
   const offer = {id, type:'program', revision:randomBytes(32).toString('base64url'), title:'Double feature',
@@ -45,22 +45,25 @@ export async function programFixture({ clock, path, directory, text, picture, du
 export async function checkProgramLayout(frames) {
   for (const frame of frames) {
     await frame.locator('#program-lineup li').first().waitFor();
-    const layout = () => frame.evaluate(() => ({
+    const layout = await frame.evaluate(() => ({
       width: innerWidth,
       video: document.querySelector('video').getBoundingClientRect().toJSON(),
       list: document.querySelector('#program-lineup').getBoundingClientRect().toJSON(),
-      play: document.querySelector('#play').getBoundingClientRect().top,
+      title: document.querySelector('.program-row-title').getBoundingClientRect().toJSON(),
+      still: document.querySelector('.program-still').getBoundingClientRect().toJSON(),
       overflow: document.documentElement.scrollWidth - innerWidth
     }));
-    const {width, video, list, play, overflow} = await layout();
+    const {width, video, list, title, still, overflow} = layout;
+    assert.ok(still.left >= title.right && still.width > 0);
+    assert.equal(await frame.locator('#program-lineup details').count(), 0);
+    assert.ok(await frame.locator('#program-lineup .film-synopsis').first().isVisible());
     assert.equal(overflow, 0);
     if (width === 320) {
       assert.ok(list.top >= video.bottom);
     } else {
       assert.equal(width, 900);
       assert.ok(list.left >= video.right);
-      await frame.locator('#program-lineup summary').first().click();
-      assert.equal((await layout()).play, play);
+
     }
   }
 }
@@ -84,10 +87,26 @@ export async function checkProgramPlayer({ frame, neighbor, app, fixture, previe
   assert.deepEqual(await rows.locator('.program-row-title').allTextContents(), offer.lineup.map(item=>item.title));
   assert.equal(await next.count(),0);
   assert.equal(await rows.getByRole('button').count(),0);
-  await rows.first().locator('summary').click();
+  assert.ok(await rows.first().locator('.film-synopsis').isVisible());
   assert.equal(await rows.first().locator('.film-synopsis').textContent(),'Opening remarks synopsis');
   assert.equal(await rows.locator('.film-credits').count(),0);
-  await preview(frame);
+  // Activity tracking must not block playback in an iframe with an HTTP ancestor.
+  await frame.evaluate(() => Object.defineProperty(crypto, 'randomUUID', {value:undefined, configurable:true}));
+  const subtitleList = '**/film/' + offer.id + '/preview/subtitles';
+  let startedWithoutCaptions = false;
+  const holdCaptions = async route => {
+    // The native preview should start before a slow subtitle list returns.
+    await frame.waitForFunction(() => document.querySelector('video').currentTime > .05, null, {timeout:8000});
+    startedWithoutCaptions = true;
+    await route.fulfill({json:[]});
+  };
+  await frame.page().route(subtitleList, holdCaptions);
+  try {
+    await preview(frame, false, true);
+    assert.ok(startedWithoutCaptions);
+  } finally {
+    await frame.page().unroute(subtitleList, holdCaptions);
+  }
   // A filmmaker republishes while the viewer is still looking at the earlier lineup.
   const previousEdition = offer.revision;
   offer.revision = randomBytes(32).toString('base64url');
@@ -98,6 +117,12 @@ export async function checkProgramPlayer({ frame, neighbor, app, fixture, previe
   assert.equal(staleRequest.programRevision, previousEdition);
   await frame.getByRole('button', {name:'Refresh program'}).click();
   await frame.waitForFunction(revision => JSON.parse(document.body.dataset.program || '{}').revision === revision, offer.revision);
+  const clipPath = '**/film/' + offer.id + '/preview.mp4';
+  const unavailable = route => route.fulfill({status:503});
+  await frame.page().route(clipPath, unavailable);
+  await frame.locator('#play').click();
+  await frame.locator('#status').filter({hasText:/could not load/}).waitFor();
+  await frame.page().unroute(clipPath, unavailable);
   await preview(frame);
   await complete(frame,'buy');
   await displayed(opening);
@@ -185,8 +210,12 @@ export async function checkProgramPlayer({ frame, neighbor, app, fixture, previe
   const recovered = await context.newPage();
   await recovered.goto(replay);
   await recovered.locator('#program-now').filter({hasText:first.title}).waitFor();
-  await recovered.getByRole('button', {name:'Continue watching'}).click();
+  const sessions = () => requests.filter(r => r.url.endsWith('/' + offer.revision + '/session')).length;
+  const initialSessions = sessions();
+  await recovered.getByRole('button', {name:'Play in player'}).press('Enter');
+  await recovered.locator('#play').evaluate(button => button.click());
   await recovered.waitForFunction(() => { const v=document.querySelector('video'); return v.readyState >= 2 && v.currentTime >= 22; });
+  assert.equal(sessions(), initialSessions + 1, 'Pressing both Play actions starts one paid session.');
   assert.equal(await recovered.title(), offer.title + ' · Stream');
   assert.equal(await recovered.locator('#film-title').textContent(),offer.title);
   await recovered.evaluate(() => document.dispatchEvent(new Event('stream-access-ended')));

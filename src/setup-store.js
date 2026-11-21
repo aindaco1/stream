@@ -597,6 +597,12 @@ export function openSetupStore(directory) {
     programs(owner) {
       return store.programStats(owner).map(({id,stats}) => ({ ...store.program(owner,id), stats }));
     },
+    bucketFilmTitles(owner, config, keys) {
+      const rows = sql(`SELECT json_extract(metadata,'$.objectKey') AS key, json_extract(metadata,'$.title') AS title
+        FROM films WHERE owner=? AND bucket_id=? AND json_extract(metadata,'$.objectKey') IN (SELECT value FROM json_each(?))
+        ORDER BY rowid`).all(owner, connectionId(owner, config), JSON.stringify(keys));
+      return new Map(rows.map(row => [row.key, row.title]));
+    },
     films(owner) {
       const rows = sql("SELECT id,json_extract(metadata,'$.title') AS title,json_extract(metadata,'$.prices') AS prices,json_extract(metadata,'$.rentalHours') AS hours,json_extract(metadata,'$.previewSeconds') AS seconds FROM films WHERE owner=? ORDER BY rowid DESC").all(owner);
       return rows.map(({ id, title, prices, hours, seconds }) => ({ id, title, prices: prices === null ? undefined : JSON.parse(prices),

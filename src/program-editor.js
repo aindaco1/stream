@@ -1,4 +1,4 @@
-import { escapeHtml as esc, infoFields, renderFilmInfo } from './film-embed.js';
+import { escapeHtml as esc, infoFields, renderProgramEntry } from './film-embed.js';
 import { formatDuration, hidden, priceFields } from './offer-fields.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 
@@ -21,14 +21,16 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
   const ordered = program.members.filter(item => item.role === 'film').map(item => byId.get(item.filmId)).filter(Boolean);
   const selected = new Set(ordered.map(film => film.id));
   const duration = program.members.reduce((sum, item) => sum + (byId.get(item.filmId)?.duration || 0), 0);
-  const extras = ['opening','closing'].map(role => {
-    const title = role === 'opening' ? 'Opening' : 'Closing';
-    return `<div class="program-extra"><label>${title} video <select name="${role}">${options(films, program.members.find(item => item.role === role)?.filmId, 'None')}</select></label>
+  const extras = new Set(program.members.filter(item => item.role !== 'film').map(item => item.filmId));
+  function extraSlot(role, title) {
+    const selectedId = program.members.find(item => item.role === role)?.filmId;
+    return `<div class="program-extra" data-slot="${role}"><div class="extra-picker"><label for="program-${role}">${title} video</label>
+      <select id="program-${role}" name="${role}">${options(films, selectedId, 'None')}</select></div>
       <button class="secondary" name="action" value="upload-${role}">Add a new ${role} video</button></div>`;
-  }).join('');
-  const rows = [...ordered, ...films.filter(film => !selected.has(film.id))].map(film => {
+  }
+  function filmRow(film) {
     const checked = selected.has(film.id);
-    return `<li data-id="${esc(film.id)}" data-duration="${esc(film.duration)}">
+    return `<li data-id="${esc(film.id)}" data-duration="${esc(film.duration)}"${extras.has(film.id) ? ' hidden' : ''}>
       <label><input type="checkbox" name="main-${esc(film.id)}" value="yes"${checked ? ' checked' : ''}><span>${esc(film.title)}</span></label>
       <small>${formatDuration(film.duration)}</small>
       <div class="lineup-moves" hidden>
@@ -36,7 +38,8 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
         <button type="button" class="secondary" data-move="1" aria-label="Move ${esc(film.title)} down">↓</button>
         <span aria-hidden="true" class="drag-handle" title="Drag to reorder">⠿</span>
       </div></li>`;
-  }).join('');
+  }
+  const available = films.filter(film => !selected.has(film.id));
   const id = esc(program.id);
   return `<div class="workspace-intro"><a href="/setup/dashboard#${id}">Back to Dashboard</a>
     <h1>${esc(program.title || 'Create program')}</h1>
@@ -46,11 +49,17 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
       ${hidden('csrf', csrf)}${hidden('version', program.version)}
       <label>Program title<input name="title" maxlength="160" value="${esc(program.title)}"></label>
       <fieldset class="program-lineup"><legend>Screening order</legend><div class="field-stack">
-        <p class="hint">Choose at least two films. Move your selections into screening order.</p>
-        ${rows ? `<ul class="program-library">${rows}</ul>` : '<p>Your library is empty. Add films from the Dashboard to build your lineup.</p>'}
-        <p class="hint" data-runtime aria-live="polite">${ordered.length} films · ${formatDuration(duration) || '0 min'}</p>
+        ${extraSlot('opening', 'Opening')}
+        <div data-slot="films"><strong>Films</strong>
+          <ol class="program-library" aria-label="Films in screening order">${ordered.map(filmRow).join('')}</ol>
+          <p class="hint" data-empty-order${ordered.length ? ' hidden' : ''}>Choose at least two films below.</p>
+        </div>
+        ${extraSlot('closing', 'Closing')}
+        <p class="hint" data-runtime aria-live="polite">${ordered.length} films · ${formatDuration(duration) || '0 min'} total</p>
       </div></fieldset>
-      <fieldset><legend>Opening and closing videos</legend><div class="program-extras">${extras}</div></fieldset>
+      <fieldset class="program-choices"${films.length && available.every(film => extras.has(film.id)) ? ' hidden' : ''}><legend>Films to add</legend>
+        ${films.length ? `<ul class="program-library" aria-label="Available films">${available.map(filmRow).join('')}</ul>` : '<p>Your library is empty. Add films from the Dashboard to build your lineup.</p>'}
+      </fieldset>
       <label>Preview video<select name="previewFilmId">${options(films, program.previewFilmId, 'First film in the lineup')}</select></label>
       ${priceFields(program, true)}
       <label class="rights-choice"><input type="checkbox" name="rightsAccepted" value="yes"${program.rights ? ' checked' : ''}><span>${esc(programRights)}</span></label>
@@ -75,10 +84,11 @@ export function renderPrivateProgram(program, films, path) {
   const items = program.members.map(item => {
     const film = byId.get(item.filmId);
     if (!film) return '';
-    const role = item.role === 'opening' ? 'Opening · ' : item.role === 'closing' ? 'Closing · ' : '';
-    return `<li><details><summary>${role}${esc(film.title)} · ${formatDuration(film.duration)}</summary>
-      ${renderFilmInfo(film.info, infoFields)}</details></li>`;
+    const posterUrl = film.thumbnail ? `/setup/thumbnail/${encodeURIComponent(film.id)}/poster.jpg` : '';
+    return `<li>${renderProgramEntry({...film, role:item.role}, infoFields, posterUrl)}</li>`;
   }).join('');
-  return `<p class="account">Private program preview</p>${video}<p>${esc(offers.join(' / '))}</p>
-    <ol class="private-lineup">${items}</ol><a href="/setup/program/${esc(program.id)}">Back to program</a>`;
+  return `<p class="account">Private program preview</p><div class="private-screening">
+    <div class="private-player">${video}<p>${esc(offers.join(' / '))}</p></div>
+    <section><h2>In this program</h2><ol class="program-list private-lineup" role="list">${items}</ol></section></div>
+    <a href="/setup/program/${esc(program.id)}">Back to program</a>`;
 }
