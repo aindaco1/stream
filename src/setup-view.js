@@ -224,7 +224,7 @@ function statsList(stats, labels = statsLabels) {
   ).join('') + '</dl>';
 }
 
-const analyticsGuide = '<p class="hint">Sandbox amounts in USD. <a href="/faq#dashboard-analytics">How these numbers are calculated</a></p>';
+const analyticsGuide = '<p class="hint"><a href="/faq#dashboard-analytics">How these numbers are calculated</a></p>';
 
 export function renderPlatformDashboard(csrf, report) {
   const { owner, rows, page, pages, total, makers } = report;
