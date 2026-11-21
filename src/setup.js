@@ -166,7 +166,7 @@ export async function createSetup({
       if (seconds > maxPreviewSeconds(film.duration)) throw new SetupError(`Choose a free preview of up to ${maxPreviewSeconds(film.duration)} seconds, or set it to 0.`, 422);
       const preview = seconds ? await film.preview() : null;
       if (!seconds) await film.segment(0);
-      return { revision: film.revision, duration: film.duration, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitleTracks.map(track => track.label), preview };
+      return { probe: film.probe, revision: film.revision, duration: film.duration, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitleTracks.map(track => track.label), preview };
     } finally { film.close(); }
   }
 
@@ -680,7 +680,7 @@ export async function createSetup({
           if (error instanceof SetupError) throw error;
           throw new SetupError('Stream could not read this film. Check bucket access and the supported video settings, or choose another video.', 422);
         }
-        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitles }, draft.programTarget?.id);
+        store.saveFilm(owner, r2, { id: draft.id, title, objectKey, ...settings, rights: draft.rights, duration: film.duration, revision: film.revision, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitles }, draft.programTarget?.id, film.probe);
       }
       if (path === '/setup/film' && draft.programTarget) {
         const { id, role, version } = draft.programTarget;

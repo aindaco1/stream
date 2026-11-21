@@ -5,6 +5,7 @@ import {
   Input, MP4, Mp4OutputFormat, MpegTsOutputFormat, Output
 } from 'mediabunny';
 import { maxPreviewSeconds } from './prices.js';
+import { createSegmentCache } from './segment-cache.js';
 import { BLOCK_SIZE } from './source.js';
 import { picturePackets, probeFilm, renderText, segmentWatermark, transcode } from './media-compat.js';
 
@@ -14,6 +15,7 @@ const MAX_SEGMENTS = 4096;
 const MAX_PACKET_BYTES = 4 * 1024 * 1024;
 const MAX_RENDER_BYTES = 12 * 1024 * 1024;
 const MAX_PACKETS = 8000;
+const openSegmentCache = createSegmentCache(32 * 1024 * 1024, 128);
 // Safari commonly fetches one MP4 in several byte ranges. Share a bounded cache
 // across open films so long previews are encoded once without retaining one per film.
 const MAX_CACHED_PREVIEW_BYTES = 96 * 1024 * 1024;
@@ -203,10 +205,45 @@ async function openRemux(source, head, previewSeconds) {
   }
 }
 
+// The format sniff, FFprobe, packet reader and FFmpeg all start at byte zero.
+// Keep one private prefix per open index and let every reader reuse it.
+async function withMediaPrefix(source, head) {
+  const prefix = await source.read(head, 0, Math.min(BLOCK_SIZE, head.size));
+  const cachedEnd = (h, end) => h.revision === head.revision && h.size === head.size ? Math.min(end, prefix.length) : 0;
+  return {
+    head: () => source.head(),
+    async read(h, start, end) {
+      const stop = cachedEnd(h, end);
+      if (start >= stop) return source.read(h, start, end);
+      const first = prefix.subarray(start, stop);
+      if (stop === end) return first;
+      return Buffer.concat([first, await source.read(h, stop, end)]);
+    },
+    ...(source.stream && {
+      async *stream(h, start, end, signal) {
+        const stop = cachedEnd(h, end);
+        if (start < stop) {
+          signal?.throwIfAborted();
+          yield prefix.subarray(start, stop);
+          start = stop;
+        }
+        if (start < end) yield* source.stream(h, start, end, signal);
+      }
+    })
+  };
+}
+
 export async function openFilm(source, { previewSeconds = 10 } = {}) {
   if (!Number.isFinite(previewSeconds) || previewSeconds < 0 || previewSeconds > maxPreviewSeconds()) throw new Error('Unsupported preview length.');
   const head = await source.head();
-  const media = await probeFilm(source, head);
+  const revision = revisionFor(head);
+  const probeCache = source.probeCache;
+  let media = probeCache?.get(revision, head.size);
+  if (!media) {
+    source = await withMediaPrefix(source, head);
+    media = await probeFilm(source, head);
+    probeCache?.set(revision, head.size, media);
+  }
   // Baseline/AAC with regularly spaced keyframes has a native packet-copy path. Other supported
   // inputs (including Baseline films with long GOPs) get independently seekable H.264/AAC intervals.
   let remux;
@@ -217,6 +254,7 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
     return Object.freeze({ start, end, duration: end - start });
   }));
   const jobs = new Map(), textCache = new Map();
+  const recentSegments = openSegmentCache();
   let closed = false;
   const previewKey = Symbol();
   async function current() {
@@ -260,7 +298,8 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
     // Keep the same encoding throughout a marked rental. Only visible intervals need
     // a separate job per reference; viewers can share the other in-flight intervals.
     const variant = label ?? (watermark ? 'screener' : '');
-    return share([start, end, preview, track?.id, variant].join('/'), async () => {
+    const key = [start, end, preview, track?.id, variant].join('/');
+    async function encode() {
       if (remux && !track && !watermark) {
         try { return await (preview ? remux.preview(end) : remux.segment(index)); }
         catch (error) { if (!/exceeds prototype|read budget|Unsupported packet timing/.test(error.message)) throw error; }
@@ -268,10 +307,23 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
       await current();
       const data = track && (preview ? await picturePackets(source, head, media, track, end) : await pictures(track));
       return transcode(source, head, media, start, end, preview, data, label);
+    }
+    return share(key, async () => {
+      // Public previews have their own cutoff-aware cache. Visible rental marks
+      // are viewer-specific and should not displace reusable output.
+      if (preview || label) return encode();
+      const cached = recentSegments.get(key);
+      if (cached) {
+        await current();
+        return cached;
+      }
+      const bytes = await encode();
+      if (!closed) recentSegments.set(key, bytes);
+      return bytes;
     });
   }
   return Object.freeze({
-    extension: media.extension, revision: revisionFor(head), duration, segments,
+    probe: { size: head.size, media }, extension: media.extension, revision, duration, segments,
     subtitleTracks: Object.freeze(media.subtitleTracks.map(Object.freeze)),
     unsupportedSubtitleTracks: Object.freeze(media.unsupportedSubtitleTracks.map(Object.freeze)),
     async preview(seconds = previewSeconds, { subtitleId } = {}) {
@@ -315,6 +367,6 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
         return result;
       });
     },
-    close() { closed = true; forgetPreview(previewKey); remux?.close(); textCache.clear(); media.subtitleTracks.forEach(forgetPictures); }
+    close() { closed = true; recentSegments.clear(); forgetPreview(previewKey); remux?.close(); textCache.clear(); media.subtitleTracks.forEach(forgetPictures); }
   });
 }

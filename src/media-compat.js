@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { BufferSource, BufferTarget, Conversion, Input, MP4, Mp4OutputFormat, Output } from 'mediabunny';
 import { mediaProcess } from './media-process.js';
 
 const MiB = 1024 * 1024;
@@ -47,7 +48,8 @@ export async function probeFilm(source, head) {
       video.width * video.height > 36_000_000 || !(duration > 0 && duration <= 14400)) throw new Error('Unsupported video codec, dimensions or duration.');
   const tracks = streams.filter(s => s.codec_type === 'subtitle');
   return { format, extension: format === 'matroska' ? 'mkv' : data.format?.tags?.major_brand === 'qt  ' ? 'mov' : 'mp4',
-    video, audio, duration,
+    video: { index: video.index, width: video.width, height: video.height, codec_name: video.codec_name, profile: video.profile },
+    audio: audio && { index: audio.index }, duration,
     baseline: format === 'mov' && video.codec_name === 'h264' && /baseline/i.test(video.profile) &&
       (!audio || audio.codec_name === 'aac' && audio.profile === 'LC'),
     subtitleTracks: tracks.filter(s => textCodecs.has(s.codec_name) || bitmapCodecs.has(s.codec_name)).map(trackInfo),
@@ -94,13 +96,27 @@ export async function transcode(source, head, media, start, end, preview, pictur
     '-c:a', 'aac', '-ac', '2', '-ar', '48000', '-b:a', '112k', '-bsf:a', "noise=drop='lt(pts,0)'"] : ['-an']),
     '-sn', '-dn', '-map_metadata', '-1', '-map_chapters', '-1', '-t', String(length),
     // Frame-threaded VBV can encode the same frame differently on successive MP4 range requests.
-    '-c:v', 'libx264', '-threads', preview ? '1' : '2', '-preset', 'veryfast', '-profile:v', 'baseline', '-bf', '0', '-g', '48', '-crf', '22',
+    '-c:v', 'libx264', '-threads', preview ? '1' : '2', '-preset', preview ? 'superfast' : 'veryfast', '-profile:v', 'baseline', '-bf', '0', '-g', '48', '-crf', '22',
     '-maxrate', '2500k', '-bufsize', '2500k', ...(preview ? ['-movflags', '+empty_moov+frag_keyframe+default_base_moof+negative_cts_offsets', '-f', 'mp4'] :
       ['-muxdelay', '0', '-muxpreload', '0', '-f', 'mpegts']), 'pipe:1'];
   // 2.5 Mbps video plus stereo audio and MP4 overhead, still bounded at three minutes.
   const maxOutput = preview ? Math.max(16 * MiB, Math.ceil(length * 352_000) + MiB) : 16 * MiB;
-  return mediaProcess(source, head, media.format, { before, after: args, stdin: pictureData, maxOutput,
+  const bytes = await mediaProcess(source, head, media.format, { before, after: args, stdin: pictureData, maxOutput,
     maxRead: preview ? previewReadBudget(length) : 512 * MiB, timeout: preview ? Math.max(90000, length * 2000) : 90000 });
+  if (!preview) return bytes;
+  // FFmpeg's stdout is unseekable. Copy its already-trimmed packets to a fast-start
+  // MP4 so the browser can learn the duration and find the first frame in one request.
+  const input = new Input({ formats: [MP4], source: new BufferSource(bytes) });
+  try {
+    const target = new BufferTarget();
+    const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target });
+    const copy = await Conversion.init({ input, output, tags: { creationTime: null }, showWarnings: false });
+    if (!copy.isValid || copy.discardedTracks.length) throw new Error('Could not index the preview tracks.');
+    await copy.execute();
+    return new Uint8Array(target.buffer);
+  } finally {
+    input.dispose();
+  }
 }
 
 function previewReadBudget(seconds, minimum = 512 * MiB) {

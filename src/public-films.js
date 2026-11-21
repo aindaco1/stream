@@ -107,6 +107,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
       throw error;
     }
     return {
+      probeCache: store.filmProbeCache?.(entry.spec.owner, entry.spec.id),
       async head() {
         const live = validate(entry);
         const credentials = store.credentials(live.spec.owner, live.bucket);

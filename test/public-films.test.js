@@ -144,6 +144,24 @@ test('rights, owner, sandbox mode, stored readiness and unique connected-account
   assert.equal(f.sourceCalls.length, 0);
 });
 
+test('saved technical inspection survives reopening the store and belongs to one film revision', async t => {
+  const f = await fixture(t), seller = f.seller('Owner', 'acct_Owner');
+  const revision = revisionFor(head), film = f.film(seller, 'With inspection');
+  const other = f.film(seller, 'Other film');
+  const media = { format: 'mov', duration: 136, subtitleTracks: [] };
+  f.store.filmProbeCache(film.owner, film.id).set(revision, head.size, media);
+  const reopened = openSetupStore(f.root);
+  try {
+    const saved = reopened.filmProbeCache(film.owner, film.id);
+    assert.deepEqual(saved.get(revision, head.size), media);
+    assert.equal(saved.get(revision, head.size + 1), undefined);
+    saved.set('different', head.size, media);
+    assert.equal(saved.get('different', head.size), undefined);
+    assert.equal(reopened.filmProbeCache('Other owner', film.id).get(revision, head.size), undefined);
+    assert.equal(reopened.filmProbeCache(film.owner, other.id).get(revision, head.size), undefined);
+  } finally { reopened.close(); }
+});
+
 test('the indexed private film honors key rotation, replacement and unpublication on a cached renderer', async t => {
   const f = await fixture(t), seller = f.seller('Original owner', 'acct_Source');
   const path = join(f.root, 'fixture.mp4');

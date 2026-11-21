@@ -7,7 +7,7 @@ import { mkdtemp, rm, writeFile, copyFile, truncate } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openFilm } from '../src/media.js';
-import { createFileSource } from '../src/source.js';
+import { BLOCK_SIZE, createFileSource } from '../src/source.js';
 
 let directory, film, original;
 before(async () => {
@@ -65,12 +65,25 @@ test('rental streams the full timeline with decodable late segments', async () =
   await assert.rejects(film.segment(34));
 });
 
+test('a fresh inspection and the first preview share the private source prefix', async t => {
+  const file = createFileSource(original), starts = [];
+  const source = { ...file, read(head, start, end) {
+    starts.push(start);
+    return file.read(head, start, end);
+  } };
+  const film = await openFilm(source);
+  t.after(() => film.close());
+  await film.preview();
+  assert.deepEqual(starts.filter(start => start < BLOCK_SIZE), [0]);
+});
+
 test('source replacement invalidates subsequent renders including cached input blocks', async () => {
   const path = join(directory, 'replace.mp4');
   await copyFile(original, path);
   const temporaryFilm = await openFilm(createFileSource(path));
   try {
     await temporaryFilm.preview();
+    await temporaryFilm.segment(0);
     await truncate(path, 96);
     await assert.rejects(temporaryFilm.preview(), /replaced/);
     await assert.rejects(temporaryFilm.segment(0), /replaced/);
@@ -92,7 +105,8 @@ test('concurrent viewers share identical remuxes and distinct intervals queue wi
     assert.ok(first.every(bytes => bytes === first[0]));
     const unique = await Promise.all(Array.from({ length: 8 }, (_, i) => film.segment(i)));
     assert.equal(heads, 10);
-    for (const [i, bytes] of unique.entries()) assert.deepEqual(bytes, await film.segment(i));
+    for (const [i, bytes] of unique.entries()) assert.strictEqual(bytes, await film.segment(i));
+    assert.equal(heads, 18, 'completed segments are reused only after rechecking the private source');
   } finally {
     film.close();
   }
@@ -135,10 +149,33 @@ test('separate renders of a rate-limited transcoded preview serve identical byte
     'testsrc2=size=960x540:rate=24,noise=alls=48:allf=t+u:all_seed=42', '-t', '7',
     '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-profile:v', 'main', '-bf', '2', path]);
   const source = createFileSource(path);
-  const first = await openFilm(source), second = await openFilm(source);
-  t.after(() => {first.close(); second.close();});
+  const first = await openFilm(source);
+  t.after(() => first.close());
+  let reads = 0, checks = 0;
+  const second = await openFilm({
+    head: async () => { checks++; return source.head(); },
+    read: (...range) => { reads++; return source.read(...range); },
+    probeCache: { get(revision, size) {
+      assert.equal(revision, first.revision);
+      assert.equal(size, first.probe.size);
+      return first.probe.media;
+    } }
+  });
+  t.after(() => second.close());
+  assert.equal(checks, 1, 'a reopened index still validates the original');
+  assert.equal(reads, 0, 'the saved inspection skips a byte probe before encoding');
   const [a,b] = await Promise.all([first.preview(6), second.preview(6)]);
   assert.equal(createHash('sha256').update(a).digest('hex'), createHash('sha256').update(b).digest('hex'));
+  const bytes = Buffer.from(a);
+  const boxes = [];
+  for (let at = 0; at < bytes.length;) {
+    const size = bytes.readUInt32BE(at);
+    assert.ok(size >= 8 && at + size <= bytes.length);
+    boxes.push(bytes.toString('ascii', at + 4, at + 8));
+    at += size;
+  }
+  assert.ok(boxes.includes('moov') && boxes.indexOf('moov') < boxes.indexOf('mdat'));
+  assert.ok(!boxes.includes('moof'), 'the browser can find every sample in the front index');
   assert.ok((await first.preview(6)) === a, 'Range requests share the ready preview while the source is current.');
 });
 

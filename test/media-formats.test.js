@@ -162,6 +162,9 @@ test('rental references survive seeking and picture captions, with isolated visi
     assert.ok(changed(corner(late,1,'right'),clear)<10);
     const quiet = await Promise.all([first,second].map(watermark => film.segment(1,{watermark})));
     assert.strictEqual(quiet[0],quiet[1], 'quiet intervals share a single in-flight encoding');
+    assert.strictEqual(await film.segment(1,{watermark:second}), quiet[0], 'quiet screener intervals are reusable');
+    assert.notStrictEqual(await film.segment(0,{watermark:first}), await film.segment(0,{watermark:first}),
+      'completed viewer-specific marks are not retained');
     for (const watermark of ['toolong123','<markup>',null]) {
       await assert.rejects(film.segment(1,{watermark}),/reference/);
     }

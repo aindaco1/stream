@@ -51,8 +51,11 @@ export async function mediaProcess(source, head, format, { probe = false, before
           // a metadata probe or abandoned seek never requests an entire feature from R2.
           for (let offset = start; offset < end;) {
             signal.throwIfAborted();
-            const next = Math.min(end, offset + (offset === start ? BLOCK_SIZE : 2 * 1024 * 1024));
-            if (total + next - offset > maxRead) throw new Error('Source read budget exceeded.');
+            // Probe/seek requests may quit as soon as the header arrives. An encoder
+            // reading frames benefits from one continuous, still bounded transfer.
+            const rangeSize = probe ? (offset === start ? BLOCK_SIZE : 2 * 1024 * 1024) : 4 * 1024 * 1024;
+            const next = Math.min(end, offset + rangeSize, offset + maxRead - total);
+            if (next <= offset) throw new Error('Source read budget exceeded.');
             total += next - offset;
             for await (const data of source.stream(head, offset, next, signal)) yield data;
             offset = next;

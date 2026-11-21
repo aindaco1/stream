@@ -74,6 +74,8 @@ export function openSetupStore(directory) {
     CREATE TABLE IF NOT EXISTS claims (mode TEXT NOT NULL, account TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(mode, account));
     CREATE TABLE IF NOT EXISTS buckets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, config TEXT NOT NULL, sealed BLOB NOT NULL);
     CREATE TABLE IF NOT EXISTS films (id TEXT PRIMARY KEY, owner TEXT NOT NULL, bucket_id TEXT NOT NULL, metadata TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS film_probes (filmId TEXT PRIMARY KEY REFERENCES films(id) ON DELETE CASCADE,
+      revision TEXT NOT NULL, size INTEGER NOT NULL, version INTEGER NOT NULL, media TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS film_uploads (owner TEXT NOT NULL, draftId TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(owner,draftId));
     CREATE TABLE IF NOT EXISTS thumbnail_edits (filmId TEXT PRIMARY KEY, lock TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS film_publication (
@@ -630,9 +632,34 @@ export function openSetupStore(directory) {
     },
     saveDraft(owner, draft) { sql('UPDATE makers SET draft=? WHERE id=?').run(JSON.stringify(draft), owner); },
     nextDraft(owner) { store.saveDraft(owner, newDraft()); },
-    saveFilm(owner, bucket, film, programId) {
+    // Only Stream's inspector writes this data. A changed probe schema must force a fresh inspection.
+    filmProbeCache(owner, filmId) {
+      const version = 1;
+      return {
+        get(revision, size) {
+          const row = sql(`SELECT media FROM film_probes p JOIN films f ON f.id=p.filmId
+            WHERE f.owner=? AND p.filmId=? AND p.revision=? AND p.size=? AND p.version=?`)
+            .get(owner, filmId, revision, size, version);
+          return row && JSON.parse(row.media);
+        },
+        set(revision, size, media) {
+          try {
+            sql(`INSERT INTO film_probes(filmId,revision,size,version,media)
+              SELECT id,?,?,?,? FROM films WHERE owner=? AND id=? AND metadata->>'$.revision'=?
+              ON CONFLICT(filmId) DO UPDATE SET revision=excluded.revision,size=excluded.size,
+                version=excluded.version,media=excluded.media`)
+              .run(revision, size, version, JSON.stringify(media), owner, filmId, revision);
+          } catch (error) {
+            // A busy, locked or read-only catalog can still serve this inspection.
+            if (![5, 6, 8].includes(error.errcode & 255)) throw error;
+          }
+        }
+      };
+    },
+    saveFilm(owner, bucket, film, programId, probe) {
       transaction(() => {
         sql('INSERT INTO films VALUES(?,?,?,?)').run(film.id, owner, connectionId(owner, bucket), JSON.stringify(film));
+        if (probe) store.filmProbeCache(owner, film.id).set(film.revision, probe.size, probe.media);
         if (programId) {
           const assigned = sql('INSERT INTO program_videos(filmId,programId) SELECT ?,id FROM programs WHERE id=? AND owner=?')
             .run(film.id, programId, owner);
