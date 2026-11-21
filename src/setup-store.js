@@ -533,9 +533,10 @@ export function openSetupStore(directory) {
       return sql("UPDATE films SET metadata=json_set(metadata, '$.prices', json(?)) WHERE owner=? AND id=?")
         .run(JSON.stringify(prices), owner, id).changes === 1;
     },
-    setFilmSettings(owner, id, { prices, rentalHours, previewSeconds }) {
-      return sql("UPDATE films SET metadata=json_set(metadata,'$.prices',json(?),'$.rentalHours',?,'$.previewSeconds',?) WHERE owner=? AND id=?")
-        .run(JSON.stringify(prices), rentalHours, previewSeconds, owner, id).changes === 1;
+    setFilmSettings(owner, id, { prices, rentalHours, previewSeconds, screenerWatermark }) {
+      if (screenerWatermark !== undefined && typeof screenerWatermark !== 'boolean') throw new Error('Invalid screener watermark setting.');
+      return sql("UPDATE films SET metadata=json_set(metadata,'$.prices',json(?),'$.rentalHours',?,'$.previewSeconds',?,'$.screenerWatermark',json(COALESCE(?,metadata->'$.screenerWatermark','false'))) WHERE owner=? AND id=?")
+        .run(JSON.stringify(prices), rentalHours, previewSeconds, JSON.stringify(screenerWatermark) ?? null, owner, id).changes === 1;
     },
     setFilmInfo(owner, id, info) {
       return sql("UPDATE films SET metadata=json_set(metadata,'$.info',json(?)) WHERE owner=? AND id=?")

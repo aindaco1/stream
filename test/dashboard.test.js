@@ -40,7 +40,7 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
       status: 'ready', chargesEnabled: true, payoutsEnabled: true } } });
     store.saveBucket(name, { ...bucket, accessKeyId: 'test', secretAccessKey: 'local-test' });
     const id = 'f-' + randomUUID();
-    store.saveFilm(name, bucket, { id, title, objectKey: 'private.mp4', revision: revisionFor(head), duration: 12,
+    store.saveFilm(name, bucket, { id, title, objectKey: 'private.mp4', revision: revisionFor(head), duration: 12.6,
       rights: { acceptedAt: new Date().toISOString(), version: 'v1', statement: 'Confirmed' } });
     const cookie = 'stream_setup=' + token;
     return { id, account, cookie, csrf: session.csrf, get: () => fetch(origin + '/setup/dashboard', { headers: { Cookie: cookie } }).then(r => r.text()),
@@ -80,10 +80,26 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.equal(invalidPreview.status, 422);
   assert.ok((await invalidPreview.text()).includes('id="' + ada.id + '" open>'), 'Show the film whose settings need correction');
   assert.equal((await ada.post('settings', { ...settings, rentalHours: '721' })).status, 422);
+  assert.equal((await ada.post('settings', { ...settings, previewSeconds:'11' })).status, 303);
   assert.equal((await ada.post('settings', settings)).status, 303);
   assert.equal((await ada.post('publication', { visibility: 'public' })).status, 303);
   const spec = catalog.get(ada.id);
+  assert.equal(spec.screenerWatermark, false);
+  assert.equal((await ada.post('settings', { ...settings, screenerWatermark: 'invalid' })).status, 422);
+  assert.equal((await ben.post('settings', { ...settings, filmId: ada.id, screenerWatermark: 'on' })).status, 404);
+  assert.equal((await ada.post('settings', { ...settings, screenerWatermark: 'on' })).status, 303);
+  assert.equal(catalog.get(ada.id).screenerWatermark, true);
+  assert.match(await ada.get(), /name="screenerWatermark"[\s\S]*?<option value="on" selected>/);
+  assert.equal((await ada.post('settings', settings)).status, 303);
+  assert.equal(catalog.get(ada.id, { entitled: true }).screenerWatermark, true, 'older open forms preserve the setting');
+  assert.equal((await ada.post('settings', { ...settings, screenerWatermark: 'off' })).status, 303);
+  assert.equal(catalog.get(ada.id).screenerWatermark, false);
   assert.equal(spec.previewSeconds, 5);
+  // A previously valid 12-second offer on a 12.6-second film remains sellable.
+  store.setFilmSettings(spec.owner, ada.id, {prices:spec.prices, rentalHours:24, previewSeconds:12});
+  assert.equal(catalog.get(ada.id).previewSeconds, 11);
+  assert.match(await ada.get(), /name="previewSeconds" min="0" max="11" step="1" required value="11"/);
+  assert.equal((await ada.post('settings', settings)).status, 303);
   assert.equal(spec.rentalHours, 24);
   page = await ada.get();
   assert.ok(page.includes(env.STREAM_VIEWER_ORIGIN + '/embed/' + ada.id));
@@ -172,6 +188,21 @@ test('program editor protects private drafts, enforces ownership and rejects sta
     };
   }
   const maker = actor('Programs owner'), other = actor('Another owner');
+  const button = /<button[^>]*class="primary"[^>]*>Create program<\/button>/;
+  const dashboard = async () => (await maker.get('/setup/dashboard')).text();
+  assert.doesNotMatch(await dashboard(),/action="\/setup\/program\/create"/);
+  assert.equal((await maker.post('/setup/program/create')).status,422);
+  const bucket = { accountId:'b'.repeat(32), bucket:'library', jurisdiction:'default' };
+  for (const owner of ['Programs owner','Another owner']) {
+    setup.store.saveBucket(owner,{...bucket,accessKeyId:'test',secretAccessKey:'test'});
+    setup.store.saveFilm(owner,bucket,{id:'f-'+randomUUID(),title:'First film',objectKey:'first.mp4',revision:'1',duration:12});
+  }
+  assert.doesNotMatch(await dashboard(),/action="\/setup\/program\/create"/);
+  assert.equal((await maker.post('/setup/program/create')).status,422);
+  setup.store.saveFilm('Programs owner',bucket,{id:'f-'+randomUUID(),title:'Second film',objectKey:'second.mp4',revision:'1',duration:12});
+  const [beforePrograms, programs] = (await dashboard()).split('id="programs"');
+  assert.doesNotMatch(beforePrograms,button);
+  assert.match(programs,button);
   const created = await maker.post('/setup/program/create');
   assert.equal(created.status,303);
   const path = created.headers.get('Location');
@@ -185,11 +216,14 @@ test('program editor protects private drafts, enforces ownership and rejects sta
   assert.equal((await maker.post(path,fields,'https://publisher.example')).status,403);
   assert.equal((await maker.post(path,{...fields,csrf:'stale'})).status,403);
   assert.equal((await other.post(path,fields)).status,404);
-  assert.equal((await maker.post(path,fields)).status,303);
+  assert.equal((await maker.post(path,{...fields,screenerWatermark:'invalid'})).status,422);
+  assert.equal((await maker.post(path,{...fields,screenerWatermark:'on'})).status,303);
   assert.equal((await maker.post(path,{...fields,title:'Old edit'})).status,409);
   assert.equal((await maker.post(path,{...fields,version:'2',opening:'f-'+randomUUID()})).status,422);
   const saved = setup.store.program('Programs owner',id);
   assert.equal(saved.title,'Screening A');
+  assert.equal(saved.screenerWatermark,true);
+  assert.match(await (await maker.get(path)).text(), /name="screenerWatermark"[^>]*>\s*<option value="off">Off<\/option>\s*<option value="on" selected>/);
   assert.equal(saved.published,false);
   assert.equal((await maker.get('/setup/preview/'+id)).status,422);
   assert.equal((await maker.get('/embed/'+id)).status,404);

@@ -39,7 +39,7 @@ test('the public FAQ explains costs, the pilot and how to sell films', () => {
     assert.ok(faq.includes(text), text);
   }
   assert.doesNotMatch(faq, /<form\b|<script\b/);
-  for (const text of ['invite-only','permission to distribute','10 GB','30 seconds','starts when they pay','original file',
+  for (const text of ['invite-only','permission to distribute','10 GB','180 seconds','starts when they pay','original file',
     'embed code','record their screen','private access link','text subtitles','picture subtitles']) assert.ok(faq.includes(text),text);
 });
 

@@ -1,5 +1,6 @@
 import { escapeHtml as esc, infoFields, renderProgramEntry } from './film-embed.js';
 import { formatDuration, hidden, priceFields, programOfferSummary } from './offer-fields.js';
+import { maxPreviewSeconds } from './prices.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 
 export const programRights = 'I own these videos or have permission to offer the entire lineup for the rental and purchase options I selected.';
@@ -16,14 +17,15 @@ export function submittedLineup(data) {
 }
 
 function options(films, selected, empty) {
-  return '<option value="">' + empty + '</option>' + films.map(film =>
-    `<option value="${esc(film.id)}" data-duration="${esc(film.duration)}"${selected === film.id ? ' selected' : ''}>${esc(film.title)}</option>`).join('');
+  return '<option value="" data-preview-max="' + maxPreviewSeconds() + '">' + empty + '</option>' + films.map(film =>
+    `<option value="${esc(film.id)}" data-duration="${esc(film.duration)}" data-preview-max="${maxPreviewSeconds(film.duration)}"${selected === film.id ? ' selected' : ''}>${esc(film.title)}</option>`).join('');
 }
 
 export function renderProgramEditor(program, films, csrf, error, notice) {
   const byId = new Map(films.map(film => [film.id, film]));
   const ordered = program.members.filter(item => item.role === 'film').map(item => byId.get(item.filmId)).filter(Boolean);
   const selected = new Set(ordered.map(film => film.id));
+  const previewSource = byId.get(program.previewFilmId) ?? ordered[0];
   const duration = program.members.reduce((sum, item) => sum + (byId.get(item.filmId)?.duration || 0), 0);
   const extras = new Set(program.members.filter(item => item.role !== 'film').map(item => item.filmId));
   function extraSlot(role, title) {
@@ -38,7 +40,7 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
   }
   function filmRow(film) {
     const checked = selected.has(film.id);
-    return `<li data-id="${esc(film.id)}" data-duration="${esc(film.duration)}"${extras.has(film.id) ? ' hidden' : ''}>
+    return `<li data-id="${esc(film.id)}" data-duration="${esc(film.duration)}" data-preview-max="${maxPreviewSeconds(film.duration)}"${extras.has(film.id) ? ' hidden' : ''}>
       <label><input type="checkbox" name="main-${esc(film.id)}" value="yes"${checked ? ' checked' : ''}><span>${esc(film.title)}</span></label>
       <small>${formatDuration(film.duration)}</small>
       <div class="lineup-moves" hidden>
@@ -69,7 +71,7 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
         ${films.length ? `<ul class="program-library" aria-label="Available films">${available.map(filmRow).join('')}</ul>` : '<p>Your library is empty. Add films from the Dashboard to build your lineup.</p>'}
       </fieldset>
       <label>Preview video<select name="previewFilmId">${options(films, program.previewFilmId, 'First film in the lineup')}</select></label>
-      ${priceFields(program, true)}
+      ${priceFields({ ...program, duration:previewSource?.duration }, true)}
       <label class="rights-choice"><input type="checkbox" name="rightsAccepted" value="yes"${program.rights ? ' checked' : ''}><span>${esc(programRights)}</span></label>
       <div class="film-actions"><button class="secondary" name="action" value="save">Save draft</button>
         <button class="secondary" name="action" value="preview">Save and preview</button>

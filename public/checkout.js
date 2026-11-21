@@ -262,6 +262,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
         ownership.hidden = !buying;
         accessTools.hidden = false;
         restoreTools.hidden = true;
+        byId('tv-help').hidden = buying || Boolean(document.body.dataset.program);
         byId('save-label').textContent = buying ? 'Save purchase link' : 'Watch on another device';
         accessTools.querySelector('label').textContent = buying ? 'Private purchase link' : 'Private rental link';
         byId('access-link').value = location.origin + '/embed/' + encodeURIComponent(film) + '#attempt=' + attempt;

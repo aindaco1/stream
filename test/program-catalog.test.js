@@ -26,7 +26,7 @@ async function workspace(t) {
   const owner = 'First maker',
     account = 'acct_first';
   const originals = new Map();
-  function film(owner, title, programId) {
+  function film(owner, title, programId, duration = 45) {
     const id = 'f-' + randomUUID(),
       objectKey = id + '.mov',
       bytes = Buffer.from('original ' + id);
@@ -39,7 +39,7 @@ async function workspace(t) {
       title,
       objectKey,
       revision: revisionFor(head),
-      duration: 45,
+      duration,
       extension: 'mov',
       rights
     }, programId);
@@ -128,6 +128,7 @@ test('drafts are private, author-owned and support a selected preview before Str
   const { store, id, owner, first, second, opening, foreign, save, data, catalog, enablePayments } =
     await workspace(t);
   assert.equal(store.program('Other', id), undefined);
+  assert.throws(() => save({ screenerWatermark: 'yes' }), /watermark/i);
   assert.throws(() => save({ members: [{ filmId: foreign, role: 'film' }] }), /own library/);
   assert.throws(
     () =>
@@ -187,6 +188,7 @@ test('orders pin the lineup, terms, originals and member play counts across edit
   store.bindViewerSession(order.orderId, 'cs_test_program');
   save({
     title: 'New double bill',
+    screenerWatermark: true,
     members: data.members.slice(1).reverse(),
     previewFilmId: second,
     previewSeconds: 5,
@@ -195,9 +197,11 @@ test('orders pin the lineup, terms, originals and member play counts across edit
   assert.equal(catalog.get(id).title, initial.title, 'draft edits do not silently change published offers');
   await catalog.publish(owner, id);
   assert.notEqual(catalog.get(id).revision, initial.revision);
+  assert.equal(catalog.get(id).screenerWatermark, true);
   assert.equal(catalog.get(id, { revision: initial.revision }), undefined);
   const historical = catalog.get(id, { entitled: true, revision: initial.revision });
   assert.equal(historical.title, initial.title);
+  assert.equal(historical.screenerWatermark, false);
   assert.equal(historical.account, null);
   assert.equal(historical.lineup[0].id, opening);
   assert.equal(historical.prices.buy, 800);
@@ -341,6 +345,7 @@ test('program uploads have one editor, keep their original edition, and count to
   save({members, previewFilmId:clip});
   assert.ok(store.programLibrary(owner,id).some(f => f.id === clip));
   assert.ok(!store.programLibrary(owner,other.id).some(f => f.id === clip));
+  assert.ok(!store.programLibrary(owner,null).some(f => f.id === clip), 'an opening video cannot qualify its owner to create another program');
   assert.ok(!store.dashboardFilms(owner).some(f => f.id === clip));
   assert.throws(() => store.saveProgram(owner,other.id,{...data,members},other.version),/own library/);
   assert.throws(() => save({members:[{filmId:clip,role:'film'}],previewFilmId:clip}), /own library/);
@@ -398,4 +403,19 @@ test('legacy program uploads are classified once without reclassifying a standal
     assert.ok(reopened.dashboardFilms(owner).some(f=>f.id===later));
     assert.ok(!reopened.programLibrary(owner,id).some(f=>f.id===opening));
   } finally { reopened.close(); }
+});
+
+test('a program caps its preview against its selected title, including an opening video', async t => {
+  const {owner,id,film,save,catalog,first,second,enablePayments} = await workspace(t);
+  const short = film(owner, 'Opening', id, 8.7), feature = film(owner, 'Feature', undefined, 201);
+  const members = [{filmId:short,role:'opening'}, ...[feature,first,second].map(filmId => ({filmId,role:'film'}))];
+  assert.throws(() => save({members, previewFilmId:short, previewSeconds:8}), /7 seconds/);
+  save({members, previewFilmId:short, previewSeconds:7});
+  assert.equal(catalog.programPreview(owner,id).previewSeconds, 7);
+  assert.throws(() => save({members, previewFilmId:null, previewSeconds:181}), /preview length/);
+  save({members, previewFilmId:null, previewSeconds:180});
+  enablePayments();
+  await catalog.publish(owner,id);
+  assert.equal(catalog.get(id).previewId, feature);
+  assert.equal((await (await catalog.open(id)).preview()).seconds, 180);
 });

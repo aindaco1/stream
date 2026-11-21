@@ -1,4 +1,5 @@
 import { attachSubtitles } from './subtitles.js';
+import { attachAirPlay, requestAirPlayLease } from './airplay.js';
 import { attachVideoControls } from './video-controls.js';
 import { attachProgram } from './program-player.js';
 import './select-focus.js';
@@ -8,6 +9,7 @@ const play = document.querySelector('#play');
 const stagePlay = document.querySelector('#start-video');
 const status = document.querySelector('#status');
 const videoControls = attachVideoControls(video, status);
+const airPlay = attachAirPlay(video, status);
 const filmId = location.pathname.split('/')[2] || 'clock';
 const prefix = '/film/' + encodeURIComponent(filmId);
 const subtitles = attachSubtitles(video, switchRendition);
@@ -97,8 +99,9 @@ if (!receipt && document.body.dataset.checkout === 'true') {
   });
 }
 
-function stopPlayback() {
+function stopPlayback(keepNativeSource = false) {
   playbackGeneration++;
+  airPlay.setRentalActive(false);
   clearTimeout(renewal);
   clearTimeout(startupTimer);
   subtitles.clear();
@@ -106,8 +109,11 @@ function stopPlayback() {
   const previous = stream;
   stream = undefined;
   previous?.destroy();
-  video.removeAttribute('src');
-  video.load();
+  if (keepNativeSource) video.pause();
+  else {
+    video.removeAttribute('src');
+    video.load();
+  }
   play.disabled = false;
 }
 
@@ -153,7 +159,10 @@ async function startVideo() {
   } catch (error) {
     if (generation !== playbackGeneration) return;
     clearTimeout(startupTimer);
-    if (video.error) { fail('This video could not load. Select Play to retry.'); return; }
+    if (video.error) {
+      if (!stream?.selectAirPlaySubtitle) fail('This video could not load. Select Play to retry.');
+      return;
+    }
     if (error.name !== 'AbortError') {
       play.hidden = false;
       status.textContent = 'Select ' + play.textContent + ' to watch.';
@@ -163,7 +172,7 @@ async function startVideo() {
   }
 }
 
-async function rental(resumeAt = 0, autoplay = true) {
+async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
   const generation = ++playbackGeneration;
   watchStartup();
   stagePlay.disabled = play.disabled = true;
@@ -175,20 +184,46 @@ async function rental(resumeAt = 0, autoplay = true) {
       receipt = checked;
       purchaseCheckedAt = Date.now();
     }
+    const eligibleBrowser = !purchase && airPlay.supported && nativeAttempt < 2;
     const [response] = await Promise.all([fetch((program?.versionBase || prefix) + '/session', {
       method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: receipt, credentials: 'omit', signal: AbortSignal.timeout(startupLimit)
-    }), loadLibrary()]);
+    }), eligibleBrowser ? null : loadLibrary()]);
     if (generation !== playbackGeneration) return;
     if (!response.ok) throw new Error(purchase ? 'This purchase is unavailable.' : 'This rental is unavailable or has expired.');
-    const { grant, expiresAt, rentalExpiresAt } = await response.json();
+    const { grant, expiresAt, rentalExpiresAt, orderId, access } = await response.json();
     if (generation !== playbackGeneration) return;
-    if (!window.Hls?.isSupported()) throw new Error('Open this prototype in a browser with Media Source playback.');
+    const lease = eligibleBrowser && orderId && access === 'rent' &&
+      await requestAirPlayLease(media, receipt, rentalExpiresAt);
+    if (generation !== playbackGeneration) return;
+    airPlay.setRentalActive(false);
     stream?.destroy();
     stream = undefined;
+    clearTimeout(renewal);
     playGrant = grant;
-    const bitmap = await subtitles.show(media, 'play', grant);
+    const selected = await subtitles.show(media, 'play', grant, lease?.path);
     if (generation !== playbackGeneration) return;
-    rendition = bitmap;
+    rendition = selected;
+    stagePlay.hidden = true;
+    video.controls = true;
+    const ready = (shouldPlay) => {
+      if (generation !== playbackGeneration) return;
+      subtitles.resume();
+      play.hidden = true;
+      play.disabled = false;
+      status.textContent = '';
+      if (shouldPlay) startVideo();
+      else clearTimeout(startupTimer);
+    };
+    if (lease) {
+      stream = airPlay.open(lease, {caption:rendition, position:resumeAt, autoplay, ready,
+        retry: (at, shouldPlay) => rental(at, shouldPlay, nativeAttempt + 1),
+        expire: () => { fail('Your rental has expired.'); checkout?.checkAccess(); }
+      });
+      return;
+    }
+    await loadLibrary();
+    if (generation !== playbackGeneration) return;
+    if (!window.Hls?.isSupported()) throw new Error('Open this player in a browser with Media Source playback.');
     const base = new URL(media + '/play/', location.origin);
     const player = new window.Hls({
       enableWorker: false, maxBufferLength: 12, maxMaxBufferLength: 20, startPosition: resumeAt,
@@ -210,15 +245,9 @@ async function rental(resumeAt = 0, autoplay = true) {
     });
     player.on(window.Hls.Events.MANIFEST_PARSED, () => {
       if (stream !== player) return;
-      subtitles.resume();
-      play.hidden = true;
-      play.disabled = false;
-      status.textContent = '';
-      if (autoplay) startVideo();
-      else clearTimeout(startupTimer);
+      airPlay.setRentalActive(Boolean(!purchase && orderId && access === 'rent'));
+      ready(autoplay);
     });
-    stagePlay.hidden = true;
-    video.controls = true;
     player.attachMedia(video);
     player.loadSource(new URL('index.m3u8' + renditionQuery(), base).href);
     clearTimeout(renewal);
@@ -244,7 +273,10 @@ function switchRendition(next) {
   const playing = !video.paused && !video.ended;
   if (paid && stream) {
     subtitles.suspend();
-    rental(position, playing);
+    if (stream.selectAirPlaySubtitle) {
+      watchStartup();
+      stream.selectAirPlaySubtitle(next, position, playing);
+    } else rental(position, playing);
   } else if (!paid && video.currentSrc && !video.ended) {
     const generation = ++playbackGeneration;
     subtitles.suspend();
@@ -275,7 +307,8 @@ function navigate(id, autoplay) {
     if (shouldPlay) startVideo();
     return;
   }
-  stopPlayback();
+  // Loading an empty source between titles can dismiss Safari’s wireless route.
+  stopPlayback(Boolean(stream?.selectAirPlaySubtitle || video.webkitCurrentPlaybackTargetIsWireless));
   program.activate(id);
   resumePosition = 0;
   paid = true;

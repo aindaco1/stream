@@ -1,23 +1,27 @@
-// Native selects can match :focus-visible after a mouse or touch selection.
-// Keep native focus so Tab continues from the selected control.
-let pointerSelect;
+// Native menus and TV pickers can return keyboard-style focus after a click.
+// Keep the native focus and tab order when the picker closes.
+let pointerControl;
 
 function restoreFocusRing() {
-  if (!pointerSelect) return;
-  delete pointerSelect.dataset.pointerFocus;
-  pointerSelect = null;
+  if (!pointerControl) return;
+  delete pointerControl.dataset.pointerFocus;
+  pointerControl = null;
 }
 
 document.addEventListener('pointerdown', event => {
   if (!(event.target instanceof Element)) return;
-  const select = event.target.closest('select') ?? event.target.closest('label')?.control;
-  if (!(select instanceof HTMLSelectElement) || select === pointerSelect) return;
+  const control = event.target.closest('select, button.video-tool') ?? event.target.closest('label')?.control;
+  if (control === pointerControl) return;
   restoreFocusRing();
-  select.dataset.pointerFocus = '';
-  pointerSelect = select;
+  if (control?.matches('select, button.video-tool')) {
+    control.dataset.pointerFocus = '';
+    pointerControl = control;
+  }
 }, true);
 
-document.addEventListener('keydown', restoreFocusRing, true);
-document.addEventListener('focusout', event => {
-  if (event.target === pointerSelect) restoreFocusRing();
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') restoreFocusRing();
+}, true);
+document.addEventListener('focusin', event => {
+  if (event.target !== pointerControl) restoreFocusRing();
 }, true);

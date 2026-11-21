@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { localPreviewPort } from './config.js';
 import { operatorDirectory } from './operator.js';
 import { openFilm } from './media.js';
-import { filmPrices, priceFromInput, previewSeconds, rentalHours } from './prices.js';
+import { filmPrices, priceFromInput, maxPreviewSeconds, previewSeconds, savedPreviewSeconds, rentalHours } from './prices.js';
 import { createPublicFilms } from './public-films.js';
 import { createThumbnails, maxThumbnailBytes, ThumbnailError } from './thumbnails.js';
 import { createFilmUploads, FilmUploadError, UPLOAD_PART_BYTES } from './film-upload.js';
@@ -65,14 +65,20 @@ function priceForm(data) {
 function settingsForm(data, saved) {
   const read = (name, validate) => data[name] === undefined ? validate(saved[name]) :
     /^\d{1,3}$/.test(data[name]) ? validate(Number(data[name])) : null;
-  const seconds = read('previewSeconds', previewSeconds), hours = read('rentalHours', rentalHours);
-  if (seconds === null || (saved.duration && seconds >= saved.duration)) {
-    throw new SetupError('Choose 0 to 30 seconds for the free preview. The preview must be shorter than the film.', 422);
+  const seconds = data.previewSeconds === undefined
+    ? savedPreviewSeconds(saved.previewSeconds, saved.duration) : read('previewSeconds', previewSeconds);
+  const hours = read('rentalHours', rentalHours);
+  if (seconds === null || seconds > maxPreviewSeconds(saved.duration)) {
+    throw new SetupError(`Choose 0 to ${maxPreviewSeconds(saved.duration)} whole seconds and leave at least one second after the preview.`, 422);
   }
   if (hours === null) throw new SetupError('Choose a rental duration from 1 to 720 whole hours.', 422);
   const prices = data.buyPrice === undefined && data.rentPrice === undefined ? filmPrices(saved.prices) : priceForm(data);
   if (!prices) throw new SetupError('Check the film prices.', 422);
-  return { prices, previewSeconds: seconds, rentalHours: hours };
+  if (data.screenerWatermark !== undefined && !['on', 'off'].includes(data.screenerWatermark)) {
+    throw new SetupError('Choose On or Off for the rental screener watermark.', 422);
+  }
+  const screenerWatermark = data.screenerWatermark === undefined ? saved.screenerWatermark === true : data.screenerWatermark === 'on';
+  return { prices, previewSeconds: seconds, rentalHours: hours, screenerWatermark };
 }
 
 function viewerOrigin(env, origin) {
@@ -122,7 +128,7 @@ export async function createSetup({
     const film = await openFilm(sourceFor({ ...store.credentials(owner, bucket), objectKey }), { previewSeconds: seconds });
     try {
       if (expectedRevision && film.revision !== expectedRevision) throw new Error('The original changed.');
-      if (seconds >= film.duration) throw new SetupError('Choose a free preview shorter than this film, or set the preview to 0.', 422);
+      if (seconds > maxPreviewSeconds(film.duration)) throw new SetupError(`Choose a free preview of up to ${maxPreviewSeconds(film.duration)} seconds, or set it to 0.`, 422);
       const preview = seconds ? await film.preview() : null;
       if (!seconds) await film.segment(0);
       return { revision: film.revision, duration: film.duration, extension: film.extension, unsupportedSubtitles: film.unsupportedSubtitleTracks.map(track => track.label), preview };
@@ -326,7 +332,7 @@ export async function createSetup({
     }
     if (get && preview) {
       const film = store.film(owner, preview[1]);
-      const seconds = film && previewSeconds(film.previewSeconds);
+      const seconds = film && savedPreviewSeconds(film.previewSeconds, film.duration);
       if (!film || !seconds) return reject(404, 'Preview unavailable.');
       const poster = film.thumbnail ? ' poster="/setup/thumbnail/' + film.id + '/poster.jpg"' : '';
       if (!preview[2]) return html(200, step(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata"' + poster + ' src="' +
@@ -360,8 +366,11 @@ export async function createSetup({
         if (activePreviews.has(slot)) return reject(409, 'A preview is being prepared. Try again in a moment.');
         const render = async () => {
           const media = await openFilm(sourceFor({...credentials, objectKey:data.key}), { previewSeconds:3 });
-          try { return await media.preview(Math.min(3, media.duration / 2)); }
-          finally { media.close(); }
+          try {
+            const seconds = Math.min(3, maxPreviewSeconds(media.duration));
+            if (!seconds) throw new SetupError('This video is too short for a preview. You can still select it.', 422);
+            return await media.preview(seconds);
+          } finally { media.close(); }
         };
         activePreviews.set(slot, render().finally(() => activePreviews.delete(slot)));
         return send(200, 'video/mp4', await activePreviews.get(slot), commonHeaders);
@@ -415,6 +424,7 @@ export async function createSetup({
       const data = callback ? {} : await readForm(req, path === '/setup/dashboard/info' ? 32768 : 8192);
       if (!callback && data.csrf !== session.csrf) return reject(403, 'Reload the page before submitting this form.');
       if (path === '/setup/program/create') {
+        if (store.programLibrary(owner, null).length < 2) return dashboard(422, 'Save at least two films to create a program.');
         const created = store.createProgram(owner);
         return redirect('/setup/program/' + created.id);
       }
@@ -432,8 +442,15 @@ export async function createSetup({
         const rights = data.rightsAccepted === 'yes' ? { version:'program-distribution-v1', statement: programRights, acceptedAt: new Date().toISOString() } : null;
         const removing = data.action.startsWith('remove-');
         const removedId = removing ? data[data.action.slice(7)] : undefined;
-        const saved = store.saveProgram(owner, program.id, { title:data.title || '', members:submittedLineup(data),
-          ...settingsForm(data, {}), previewFilmId:data.previewFilmId === removedId ? null : data.previewFilmId || null,
+        const members = submittedLineup(data);
+        const settings = settingsForm(data, {screenerWatermark:program.screenerWatermark});
+        const removedPreview = removing && removedId && data.previewFilmId === removedId;
+        if (removedPreview) {
+          const first = members.find(member => member.role === 'film');
+          settings.previewSeconds = savedPreviewSeconds(settings.previewSeconds, first && store.film(owner, first.filmId)?.duration);
+        }
+        const saved = store.saveProgram(owner, program.id, { title:data.title || '', members,
+          ...settings, previewFilmId: removedPreview ? null : data.previewFilmId || null,
           rights:removing ? null : rights }, version);
         if (data.action === 'publish') {
           const result = await provider.refresh(store.stripeContext(owner, mode));
@@ -588,8 +605,9 @@ export async function createSetup({
           const extra = {filmId:draft.id, role};
           if (role === 'opening') members.unshift(extra);
           else members.push(extra);
+          const replacesPreview = previous && previous.filmId === target.previewFilmId;
           store.saveProgram(owner, id, { ...target, members, rights:null,
-            previewFilmId: previous && previous.filmId === target.previewFilmId ? draft.id : target.previewFilmId }, version);
+            ...(replacesPreview && {previewFilmId:draft.id, previewSeconds:savedPreviewSeconds(target.previewSeconds, store.film(owner, draft.id).duration)}) }, version);
         }
         if (target) return redirect('/setup/program/' + id + (target.version === version ? '?saved=1' : '?uploaded=1'));
       }

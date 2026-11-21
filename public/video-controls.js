@@ -1,6 +1,25 @@
 export function attachVideoControls(video, status) {
   const stage = video.closest('.video-stage');
   const button = stage.querySelector('#picture-in-picture');
+  const safari = typeof video.webkitShowPlaybackTargetPicker === 'function';
+  if (safari) {
+    stage.classList.add('safari-controls');
+    const tools = stage.querySelector('.video-tools');
+    const finePointer = matchMedia('(hover: hover) and (pointer: fine)');
+    // Touch controls use a speaker. Desktop WebKit expands its 135px slider
+    // when both the picture and its native corner controls have room.
+    function layout() {
+      const { width, height } = video.getBoundingClientRect();
+      const expanded = finePointer.matches && width >= 265 && height >= 136;
+      const volumeSpace = expanded ? 200 : 60;
+      stage.classList.toggle('compact-volume', !expanded);
+      stage.classList.toggle('wrapped-tools', width < 92 + tools.offsetWidth + volumeSpace);
+    }
+    const observer = new ResizeObserver(layout);
+    observer.observe(video);
+    observer.observe(tools);
+    finePointer.addEventListener('change', layout);
+  }
   const standard = typeof video.requestPictureInPicture === 'function' && typeof document.exitPictureInPicture === 'function';
   const inPip = () => standard ? document.pictureInPictureElement === video : video.webkitPresentationMode === 'picture-in-picture';
   let hideTimer;
@@ -15,7 +34,7 @@ export function attachVideoControls(video, status) {
     const active = inPip();
     const available = standard ? document.pictureInPictureEnabled :
       typeof video.webkitSetPresentationMode === 'function' && video.webkitSupportsPresentationMode?.('picture-in-picture');
-    button.hidden = !active && (!available || video.readyState < 1 || !video.videoWidth || video.ended);
+    button.hidden = safari || !active && (!available || video.readyState < 1 || !video.videoWidth || video.ended);
     button.setAttribute('aria-pressed', String(active));
   }
 

@@ -9,8 +9,8 @@ export function renderFilmmakerFaq() {
     </section>
     <section id="storage"><h2>How do I connect my storage?</h2>
       <p>Open <strong>Settings → Storage</strong>. Sign in to Cloudflare or create an account and activate R2. Choose a private bucket for your films, or create one using Standard storage. In its settings, keep the public development URL disabled and custom domains disconnected. Copy the bucket’s dashboard address into Stream. <a href="#storage-pricing">What will storage cost?</a></p>
-      <p>In Cloudflare’s R2 overview, open <strong>Manage API tokens</strong>. Create a token with <strong>Object Read &amp; Write</strong>, choose <strong>Apply to specific buckets only</strong> and select just your film bucket. This key can read and change every file in that bucket. Paste its token value into Stream, or use its access key ID and secret. Stream checks the key before saving it encrypted. <a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare’s R2 token guide</a></p>
-      <p>To rotate a key, create a new token for the same bucket and choose <strong>Replace R2 key</strong> in Storage. Once Stream accepts it, you can revoke the old key in Cloudflare if nothing else uses it. Choose <strong>Use a different bucket</strong> for future uploads. Keep earlier buckets and their keys available for films already using them.</p>
+      <p>Stream opens Cloudflare’s token form for the account that owns your bucket. Choose <strong>Create an account token</strong> if you manage the account, or <strong>Create a user token</strong> if someone gave you access. Select <strong>Object Read &amp; Write</strong>, change the scope to <strong>Apply to specific buckets only</strong> and select just your film bucket. Paste the token value into Stream, or use your existing access key pair. Stream checks access to the bucket. You confirm the full permission scope in Cloudflare. <a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare’s R2 token guide</a></p>
+      <p>To rotate a key, choose <strong>Replace R2 key</strong> in Storage. The link opens Cloudflare for the same bucket’s account. Once Stream accepts it, you can revoke the old key in Cloudflare if nothing else uses it. Choose <strong>Use a different bucket</strong> for future uploads. Keep earlier buckets and their keys available for films already using them.</p>
     </section>
     <section id="payments"><h2>When can I start selling?</h2>
       <p>Connect Stripe and finish verification before you publish a paid film or program. In the pilot you can try checkout and transfers with test cards. No money reaches a bank account. <a href="#stripe-fees">What are the fees?</a> · <a href="#payouts">How do payouts work?</a> · <a href="#countries">Can I join from my country?</a></p>
@@ -44,21 +44,30 @@ export function renderFilmmakerFaq() {
       <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
       <p>After you connect your private Cloudflare bucket, you can upload the film and its thumbnail right from Stream, or choose a film already in the bucket. The original stays in your account. For a thumbnail, use a JPEG, PNG or WebP up to 8 MB. We recommend 1920 × 1080 pixels.</p>
     </section>
+    <section><h2>Can I watermark a rental screener?</h2>
+      <p>Yes. In Prices and playback for a film or program, turn on <strong>Rental screener watermark</strong>. A short, anonymous rental reference appears in an upper corner for four seconds each minute. It travels with the video during playback and uses no viewer name or email address. Previews, purchases and original downloads keep their usual picture.</p>
+    </section>
     <section><h2>Can viewers turn subtitles on?</h2>
       <p>Yes. If the film has subtitles, tap or move over the video to show its controls. Choose the captions button to pick a language or turn subtitles off. Stream supports embedded text subtitles and DVD or Blu-ray picture subtitles. Check the private preview for the tracks available in your file.</p>
+    </section>
+    <section id="tv"><h2>Can I watch a rental on my TV?</h2>
+      <p>Start your film or program rental on the same Wi-Fi network as your TV. In Safari, choose <strong>AirPlay</strong> in the video controls. In Opera and other browsers, choose <strong>Play on TV</strong>. The devices you see depend on your browser. If your AirPlay TV isn’t listed, open <strong>Watch on another device</strong> and use your private rental link in Safari. For programs, use Previous title and Next title in the Stream player. Your caption language carries over to each title that offers it. You can keep watching until the original rental ends.</p>
+      <h3>What should I export for TV viewing?</h3>
+      <p>For the widest compatibility, export an <strong>MP4 with H.264 video and stereo AAC-LC audio</strong>. Use standard dynamic range (SDR), 8-bit color and up to 1080p at 24, 25 or 30 frames per second. Keep your film’s original frame rate if it’s one of those.</p>
+      <p>You can also upload HEVC, AV1 or VP9. Stream prepares H.264 video for the rental, so the TV doesn’t need to read your original file. When Stream converts a film, the viewing copy is up to 720p at 24 frames per second. Viewers who buy a download receive the original. Before a screening, try a rental on the intended TV and check the picture, sound and any captions.</p>
     </section>
     <section><h2>Can I keep watching in a floating window?</h2>
       <p>Start the film, then choose the picture-in-picture button on the video. It appears when your browser, device and the site hosting the player allow it.</p>
     </section>
     <section><h2>What’s the difference between renting and buying?</h2>
       <p>A rental lets someone watch for the time you choose, from one hour to 30 days. Their time starts when they pay. Buying lets them watch and download the original file. You can offer either option or both. Sales are final.</p>
-      <p>You can give people up to 30 seconds to watch for free. The default is 10 seconds. Choose zero to show the offers immediately.</p>
+      <p>You can offer up to 180 seconds (3 minutes) for free. Leave at least one full second of the film after the preview. For a program, use the length of the video you chose for the preview. The usual default is 10 seconds. Choose zero to show the offers immediately.</p>
     </section>
     <section><h2>How do I put a film on my site?</h2>
       <p>Open your published film in the Dashboard. Choose the details you want alongside the player and check the live preview. You can include a synopsis, credits or a personal message. Copy the embed code and paste it into your site. Each film has its own checkout, even when several share a page.</p>
     </section>
     <section><h2>How do I offer a double feature or a program of shorts?</h2>
-      <p>Choose <strong>Create program</strong> on your Dashboard. Pick at least two of your films, put them in screening order, and add an opening or closing video if you like. Choose the program image, preview and price, then publish and copy its embed code. Opening and closing videos you upload for a program are managed in its editor.</p>
+      <p>Once you’ve saved two films, choose <strong>Create program</strong> in the Programs section of your Dashboard. Pick at least two of your films, put them in screening order, and add an opening or closing video if you like. Choose the program image, preview and price, then publish and copy its embed code. Opening and closing videos you upload for a program are managed in its editor.</p>
       <p>Viewers pay once in the player and can move between titles with Previous title and Next title. The player remembers their caption choice when a matching track is available. One rental window covers the lineup. A purchase includes the original videos, in order, in a ZIP. After editing prices or the lineup, choose <strong>Publish changes</strong> to update the public embed. Earlier buyers keep their edition.</p>
     </section>
     <section><h2>Can a program save on card fees?</h2>

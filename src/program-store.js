@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { filmPrices, previewSeconds, rentalHours } from './prices.js';
+import { filmPrices, maxPreviewSeconds, previewSeconds, rentalHours } from './prices.js';
 
 export const isProgramId = id => typeof id === 'string' && /^p-[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/.test(id);
 const filmId = /^f-[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/;
@@ -176,6 +176,11 @@ export function programStore(db, transaction, filmFor) {
           seconds = previewSeconds(data.previewSeconds);
         if (!prices || hours === null || seconds === null)
           throw invalid('Check the program prices, rental duration, and preview length.');
+        const sourceId = previewFilmId ?? members.find(member => member.role === 'film')?.filmId;
+        const limit = maxPreviewSeconds(sourceId ? filmFor(owner, sourceId).duration : undefined);
+        if (seconds > limit) throw invalid(`Choose a preview of up to ${limit} seconds for the selected video.`);
+        if (data.screenerWatermark !== undefined && typeof data.screenerWatermark !== 'boolean')
+          throw invalid('Choose On or Off for the rental screener watermark.');
         if (data.rights && !validRights(data.rights)) throw invalid('Confirm your program distribution rights.');
         const updated = {
           title: data.title.trim(),
@@ -184,6 +189,7 @@ export function programStore(db, transaction, filmFor) {
           previewSeconds: seconds,
           prices,
           rentalHours: hours,
+          screenerWatermark: data.screenerWatermark ?? (current.screenerWatermark === true),
           rights: data.rights || null
         };
         if (current.thumbnail) updated.thumbnail = current.thumbnail;
