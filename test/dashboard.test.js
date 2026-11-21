@@ -17,7 +17,10 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   const sourceFor = () => ({ head: async () => currentHead });
   const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_fixture', STREAM_VIEWER_ORIGIN: 'https://viewer.example', STREAM_LOCAL_PREVIEW_PORT: '8795' };
   const withdrawals = [];
-  const setup = await createSetup({ directory, env, sourceFor, viewerCheckout:{
+  let stripeStatus = 'ready';
+  const setup = await createSetup({ directory, env, sourceFor, stripe:{
+    async refresh() { return { status: stripeStatus }; }
+  }, viewerCheckout:{
     async closeWithdrawnSessions(owner,id) { withdrawals.push([owner,id]); return 0; }
   }});
   const { store } = setup;
@@ -64,6 +67,10 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.doesNotMatch(page, /Other private title|Copy embed code/);
   assert.equal((await ben.post('publication', { filmId: ada.id, visibility: 'public' })).status, 404);
   assert.equal((await ada.post('publication', { csrf: 'wrong', visibility: 'public' })).status, 403);
+  stripeStatus = 'restricted';
+  assert.equal((await ada.post('publication', { visibility: 'public' })).status, 422);
+  assert.deepEqual(catalog.list(), []);
+  stripeStatus = 'ready';
   currentHead = { ...head, revision: '"replacement"' };
   assert.equal((await ada.post('publication', { visibility: 'public' })).status, 422);
   assert.deepEqual(catalog.list(), []);

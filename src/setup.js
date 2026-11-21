@@ -150,6 +150,7 @@ export async function createSetup({
         initialSection: path.startsWith('/setup/stripe/') ? 'payments' : path.startsWith('/setup/r2') ? 'storage' : undefined,
         stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
           canReset: Boolean(state.accountId || state.flow || state.createRequest),
+          unsupportedCountry: state.unsupportedCountry,
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
         r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
         draft: store.storageDraft(session.owner) || {}, ...feedback
@@ -409,7 +410,11 @@ export async function createSetup({
             }
           }
           else if (data.visibility === 'public') {
-            try { await publications.publish(owner, saved.id); }
+            try {
+              const result = await provider.refresh(store.stripeContext(owner, mode));
+              if (result.status !== 'ready') throw new Error('Payments unavailable');
+              await publications.publish(owner, saved.id);
+            }
             catch { throw new SetupError('Publishing requires a ready Stripe test account, confirmed rights and access to the saved original in R2. Check your connections and try again.', 422); }
           } else throw new SetupError('Choose whether to publish this film.');
         } else store.setFilmSettings(owner, saved.id, settingsForm(data, saved));

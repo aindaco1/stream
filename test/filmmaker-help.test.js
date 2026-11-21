@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { renderFilmmakerFaq, renderSetupCosts } from '../src/filmmaker-help.js';
+import { renderStripeCountryForm } from '../src/setup-view.js';
+import { payoutCountryOptions } from '../src/payout-countries.js';
+
+test('Payments and FAQ match the country selector and explain filmmaker ownership and sandbox proceeds', () => {
+  const form = renderStripeCountryForm('csrf','new');
+  const selection = [...form.matchAll(/<option value="([A-Z]{2})"/g)].map(match => match[1]).sort();
+  assert.equal(selection.join(' '), 'AT BE BG CA CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IT LI LT LU LV MT NL NO PL PT RO SE SI SK US');
+  for (const page of [renderSetupCosts('stripe'), renderFilmmakerFaq()]) {
+    for (const {label} of payoutCountryOptions) assert.ok(page.includes(label), label);
+    for (const text of ['You keep your film rights', 'your sales', 'U.S. dollars', 'currency conversion', 'test cards']) assert.ok(page.includes(text),text);
+  }
+});
 
 test('provider settings and public FAQ disclose the same provider rates and link to official terms', () => {
   const stripe = renderSetupCosts('stripe'), r2 = renderSetupCosts('r2');

@@ -1,10 +1,21 @@
+import { payoutCountryOptions } from './payout-countries.js';
+
 export const firstSale = 'You can upload a film and watch a private preview before connecting Stripe. To publish and get paid for rentals or purchases, first connect your Stripe account and finish verification.';
+
+const proceeds = 'You keep your film rights. Rentals and purchases are your sales. Stream sends your proceeds to your connected Stripe account after fees. Viewers can add an optional tip for Dust Wave in the same payment.';
+
+function payoutCountries() {
+  const names = payoutCountryOptions.map(country => country.label).join(', ');
+  return `<p>The pilot is open to filmmakers in the U.S., Canada, the UK, Switzerland and the European countries listed below. Choose the country where you do business. Stripe guides you through identity and bank verification there. You can sign in to reuse eligible details from an existing Stripe account.</p>
+    <details><summary>Which countries can filmmakers join from?</summary><p>${names}.</p></details>
+    <p>Film prices and dashboard totals are in U.S. dollars. Stripe shows the payout currencies available for your bank account. Cross-border payout fees start at 0.25%, and currency conversion can cost extra. <a href="https://stripe.com/connect/pricing#payouts">Stripe payout pricing</a></p>`;
+}
 
 const pricing = {
   stripe: {
     heading: 'Stripe processing fees',
     summary: 'For a successful online payment with a U.S. domestic card, Stripe’s standard U.S. rate is 2.9% + 30¢. Your country, the card and any custom pricing can change the fee.',
-    example: 'On a $0.99 rental with no tax or tip, the estimated fee is $0.33 and the filmmaker receives $0.66.',
+    example: 'For a U.S. filmmaker’s $0.99 rental paid with a U.S. card, the estimated fee is $0.33 and the filmmaker receives $0.66 before any tax or tip.',
     url: 'https://stripe.com/us/pricing', link: 'Stripe pricing'
   },
   r2: {
@@ -26,21 +37,28 @@ function feeCopy(provider, expanded = false) {
 export function renderSetupCosts(provider) {
   if (!Object.hasOwn(pricing, provider)) throw new TypeError('Unknown setup cost provider.');
   const pilot = provider === 'stripe' ? 'Payments in the pilot use test cards. Payments and filmmaker transfers run in the Stripe sandbox.' : 'Your bucket is billed normally during the pilot.';
-  return `<div class="provider-costs"><h3>${pricing[provider].heading}</h3>${feeCopy(provider)}<p>${pilot}</p></div>`;
+  const payouts = provider === 'stripe' ? `<h3>Getting paid</h3><p>${proceeds}</p>${payoutCountries()}` : '';
+  return `<div class="provider-costs"><p>${pilot}</p>${payouts}<h3>${pricing[provider].heading}</h3>${feeCopy(provider)}</div>`;
 }
 
 export function renderFilmmakerFaq() {
   return `<h1>FAQ</h1>
     <p>Stream lets filmmakers rent or sell a film from a player on their own website. Viewers pay and watch in the same place. <a href="https://github.com/aindaco1/stream">Stream on GitHub</a></p>
     <section><h2>How do I get started?</h2>
-      <p>The pilot is invite-only. Open your invitation and go to Settings. Start in Storage to connect your Cloudflare bucket. Then open Payments to connect the Stripe account where you want to get paid. You can use accounts you already have. <a href="https://stripe.com/global">Where Stripe is available</a></p>
+      <p>The pilot is invite-only. Open your invitation and go to Settings. Start in Storage to connect your Cloudflare bucket. Then open Payments to connect the Stripe account where you want to get paid.</p>
       <p>The pilot uses test cards, so no money changes hands at checkout. Your Cloudflare account still uses real storage.</p>
     </section>
     <section><h2>When can I start selling?</h2>
-      <p>${firstSale} Viewers can pay as soon as you publish.</p>
+      <p>${firstSale} Once you publish in the pilot, viewers can try a rental or purchase with a test card.</p>
+    </section>
+    <section><h2>Can I use Stream outside the United States?</h2>
+      ${payoutCountries()}
+    </section>
+    <section><h2>Who owns my film and receives the sale?</h2>
+      <p>${proceeds} You set the price and confirm that you own the film or have permission to distribute it.</p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
-      <p>Stream is free. You set the film price. For new marketplace orders, Dust Wave transfers the film price less the card fee and your share of any Stripe Tax fee to your connected Stripe account. Viewers can add an optional tip for Dust Wave when they rent or buy. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. The processing fee applies to the full charge, including tax and tip.</p>
+      <p>Stream is free. The tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it. The processing fee applies to the full charge, including tax and tip.</p>
       <h3>${pricing.stripe.heading}</h3>${feeCopy('stripe', true)}
       <h3>${pricing.r2.heading}</h3>${feeCopy('r2', true)}
     </section>

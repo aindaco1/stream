@@ -43,7 +43,7 @@ const stripe = {
     assert.ok(['new', 'existing', 'reuse', 'resume'].includes(intent));
     if (['new', 'reuse'].includes(intent) && !ctx.state.accountId) {
       if (!country) return { countryRequired: true };
-      assert.equal(country, 'US');
+      assert.equal(country, intent === 'new' ? 'CA' : 'FR');
     }
     starts.push(intent);
     ctx.state.accountId ||= 'acct_qa' + intent + ctx.creatorId.replace(/[^a-z0-9]/gi, '');
@@ -198,7 +198,7 @@ async function finishStripe(page, mode, shouldResume) {
   if (mode !== 'existing') {
     const choice = page.getByLabel('Business country or region');
     assert.equal(await choice.inputValue(), '');
-    await choice.selectOption('US');
+    await choice.selectOption(mode === 'new' ? 'CA' : 'FR');
     await page.getByRole('button', { name: 'Continue to Stripe' }).click();
   }
   await providerReturn.click();
