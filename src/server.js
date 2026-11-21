@@ -277,7 +277,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       }
       const versioned = /^\/film\/(p-[a-f0-9-]{36})\/v\/([\w-]{43})(?:\/title\/(f-[a-f0-9-]{36}))?\/(.+)$/.exec(path);
       const mediaPath = versioned ? '/film/' + versioned[1] + '/' + versioned[4] : path;
-      const receiver = /^\/film\/([a-z0-9-]+)\/airplay\/([A-Za-z0-9_-]{43})\/(index\.m3u8|video\.m3u8|captions\.(?:m3u8|vtt)|key|(?:0|[1-9]\d{0,3})\.(?:ts|vtt))$/.exec(path);
+      const receiver = /^\/film\/([a-z0-9-]+)\/airplay\/([A-Za-z0-9_-]{43})\/(index\.m3u8|video\.m3u8|captions\.(?:m3u8|vtt)|key|(?:0|[1-9]\d{0,3})\.(?:ts|vtt))$/.exec(mediaPath);
       const route = receiver ? [path, receiver[1], 'play/' + receiver[3], undefined, receiver[3]] : /^\/film\/([a-z0-9-]+)\/(checkout|buy|abandon|order|session|airplay|download|restore|redeem|position|view|preview\.mp4|(?:preview|play)\/subtitles(?:\/([a-zA-Z0-9_-]{1,64})\.vtt)?|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(mediaPath);
       if (!route) return fail(404);
       const [, id, action, trackId, asset] = route;
@@ -285,9 +285,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       const revision = versioned?.[2], memberId = versioned?.[3];
       const spec = lookup(id, entitled, revision);
       if (!spec) return fail(404);
-      if ((action === 'airplay' || receiver) && (!checkout || !spec.id || spec.type === 'program')) return fail(404);
+      if ((action === 'airplay' || receiver) && (!checkout || !spec.id)) return fail(404);
       if (spec.type === 'program') {
-        const memberAction = action.startsWith('play/') || action === 'position';
+        const memberAction = action.startsWith('play/') || action === 'position' || action === 'airplay';
         if ((revision && revision !== spec.revision) ||
             (memberAction && !memberId) ||
             (memberId && (!spec.lineup.some(member => member.id === memberId) || !(memberAction || ['view','download'].includes(action)))) ||
@@ -428,9 +428,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           if (spec.id && !await checkout.verifyPlayback({ offer: spec, kind: grant.access || 'rent',
             orderId: grant.orderId, rentalExpiresAt: grant.rentalExpiresAt })) return fail(403);
           if (action === 'airplay') {
-            const lease = receivers.issue(spec, grant);
+            const lease = receivers.issue(spec, grant, memberId);
             if (!lease) return fail(403);
-            return send(200, 'application/json', JSON.stringify({ path: '/film/' + id + '/airplay/' + lease.token + '/index.m3u8', expiresAt: lease.rentalExpiresAt }));
+            return send(200, 'application/json', JSON.stringify({ path: path + '/' + lease.token + '/index.m3u8', expiresAt: lease.rentalExpiresAt }));
           }
           return send(200, 'application/json', JSON.stringify(grant));
         } catch (error) { return fail(error.statusCode === 429 ? 429 : 403); }
@@ -475,7 +475,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       const authorized = () => !spec.id || ((receiver ? receivers.active(access) : access.expiresAt > Date.now()/1000) && checkout.accessAllowed(order()));
       try {
         if (receiver) {
-          access = receivers.read(receiver[2], spec);
+          access = receivers.read(receiver[2], spec, memberId);
           if (!access || !authorized() || !await checkout.verifyPlayback(order()) || !authorized()) return fail(403);
           if (castRead) {
             res.setHeader('Access-Control-Allow-Origin', 'https://www.gstatic.com');
@@ -501,12 +501,13 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         return authorized() && access.expiresAt > Date.now() / 1000 && live?.scope === spec.scope && live.revision === spec.revision;
       });
       const hlsType = 'application/vnd.apple.mpegurl';
-      if (receiver && rendition && film.subtitleTracks?.some(track => track.id === rendition && track.format === 'text')) {
+      const receiverText = receiver && rendition && film.subtitleTracks?.find(track => track.id === rendition && track.format === 'text');
+      if (receiverText) {
         if (asset === 'captions.vtt') {
           const track = await film.subtitles(rendition);
           return authorized() ? send(200, 'text/vtt; charset=utf-8', track) : fail(403);
         }
-        if (asset === 'index.m3u8') return send(200, hlsType, captionMaster({id:rendition}));
+        if (asset === 'index.m3u8') return send(200, hlsType, captionMaster(receiverText));
         if (asset === 'captions.m3u8') return send(200, hlsType, playlist(film.segments, rendition, true));
         if (!asset.endsWith('.vtt')) return fail(404);
         const interval = film.segments[Number.parseInt(asset, 10)];

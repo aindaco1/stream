@@ -11,27 +11,28 @@ export function airplayLeases({ now = Date.now, capacity = 512 } = {}) {
     return session;
   }
   return {
-    issue(offer, access) {
-      if (!offer.id || offer.type === 'program' || access.access !== 'rent' || !access.orderId ||
+    issue(offer, access, memberId) {
+      if (!offer.id || access.access !== 'rent' || !access.orderId ||
           !Number.isSafeInteger(access.rentalExpiresAt) || access.rentalExpiresAt * 1000 <= now()) return;
+      if (offer.type === 'program' && !offer.lineup?.some(member => member.id === memberId)) return;
       let current;
       for (const [token, item] of sessions) {
         if (!active(item)) sessions.delete(token);
         else if (item.orderId === access.orderId && item.id === offer.id && item.revision === offer.revision &&
-          item.scope === offer.scope && item.rentalExpiresAt === access.rentalExpiresAt) current = item;
+          item.scope === offer.scope && item.memberId === memberId && item.rentalExpiresAt === access.rentalExpiresAt) current = item;
       }
       if (current) return touch(current);
       if (sessions.size >= capacity) throw Object.assign(new Error('Receiver sessions busy.'), { statusCode: 429 });
       const token = randomBytes(32).toString('base64url');
-      const session = touch({ token, key: randomBytes(16), id: offer.id, revision: offer.revision, scope: offer.scope,
+      const session = touch({ token, key: randomBytes(16), id: offer.id, revision: offer.revision, scope: offer.scope, memberId,
         access: 'rent', orderId: access.orderId, rentalExpiresAt: access.rentalExpiresAt });
       sessions.set(token, session);
       return session;
     },
-    read(token, offer) {
+    read(token, offer, memberId) {
       const session = sessions.get(token);
       if (!active(session)) { sessions.delete(token); return; }
-      if (session.id === offer.id && session.scope === offer.scope && session.revision === offer.revision) return session;
+      if (session.id === offer.id && session.scope === offer.scope && session.revision === offer.revision && session.memberId === memberId) return session;
     },
     active, touch
   };
@@ -45,8 +46,10 @@ export function screenerReference(offer, access) {
 
 export function captionMaster(track) {
   const suffix = '?subtitle=' + track.id;
+  const name = track.label?.replace(/["\r\n]/g, '').trim() || 'Selected captions';
+  const language = track.language ? ',LANGUAGE="' + track.language + '"' : '';
   return ['#EXTM3U', '#EXT-X-VERSION:3',
-    '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="cc",NAME="Selected captions",DEFAULT=YES,AUTOSELECT=YES,URI="captions.m3u8' + suffix + '"',
+    '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="cc",NAME="' + name + '"' + language + ',DEFAULT=YES,AUTOSELECT=YES,URI="captions.m3u8' + suffix + '"',
     '#EXT-X-STREAM-INF:BANDWIDTH=12000000,SUBTITLES="cc"', 'video.m3u8', ''].join('\n');
 }
 

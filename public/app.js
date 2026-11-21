@@ -99,7 +99,7 @@ if (!receipt && document.body.dataset.checkout === 'true') {
   });
 }
 
-function stopPlayback() {
+function stopPlayback(keepNativeSource = false) {
   playbackGeneration++;
   airPlay.setRentalActive(false);
   clearTimeout(renewal);
@@ -109,8 +109,11 @@ function stopPlayback() {
   const previous = stream;
   stream = undefined;
   previous?.destroy();
-  video.removeAttribute('src');
-  video.load();
+  if (keepNativeSource) video.pause();
+  else {
+    video.removeAttribute('src');
+    video.load();
+  }
   play.disabled = false;
 }
 
@@ -181,7 +184,7 @@ async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
       receipt = checked;
       purchaseCheckedAt = Date.now();
     }
-    const eligibleBrowser = !program && !purchase && airPlay.supported && nativeAttempt < 2;
+    const eligibleBrowser = !purchase && airPlay.supported && nativeAttempt < 2;
     const [response] = await Promise.all([fetch((program?.versionBase || prefix) + '/session', {
       method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: receipt, credentials: 'omit', signal: AbortSignal.timeout(startupLimit)
     }), eligibleBrowser ? null : loadLibrary()]);
@@ -190,7 +193,7 @@ async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
     const { grant, expiresAt, rentalExpiresAt, orderId, access } = await response.json();
     if (generation !== playbackGeneration) return;
     const lease = eligibleBrowser && orderId && access === 'rent' &&
-      await requestAirPlayLease(prefix, receipt, rentalExpiresAt);
+      await requestAirPlayLease(media, receipt, rentalExpiresAt);
     if (generation !== playbackGeneration) return;
     airPlay.setRentalActive(false);
     stream?.destroy();
@@ -242,7 +245,7 @@ async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
     });
     player.on(window.Hls.Events.MANIFEST_PARSED, () => {
       if (stream !== player) return;
-      airPlay.setRentalActive(Boolean(!program && !purchase && orderId && access === 'rent'));
+      airPlay.setRentalActive(Boolean(!purchase && orderId && access === 'rent'));
       ready(autoplay);
     });
     player.attachMedia(video);
@@ -304,7 +307,8 @@ function navigate(id, autoplay) {
     if (shouldPlay) startVideo();
     return;
   }
-  stopPlayback();
+  // Loading an empty source between titles can dismiss Safari’s wireless route.
+  stopPlayback(Boolean(stream?.selectAirPlaySubtitle || video.webkitCurrentPlaybackTargetIsWireless));
   program.activate(id);
   resumePosition = 0;
   paid = true;

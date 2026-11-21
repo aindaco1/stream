@@ -109,3 +109,61 @@ test('anonymous screener references distinguish rentals and are off for other ac
   assert.equal(screenerReference({...spec,screenerWatermark:false},rent),undefined);
   assert.equal(screenerReference(spec,{access:'buy',orderId:'first'}),undefined);
 });
+
+test('a program rental plays each member of its paid edition with its own receiver URL and key', async t => {
+  const id = 'p-00000000-0000-4000-8000-000000000001';
+  const member = n => 'f-00000000-0000-4000-8000-' + String(n).padStart(12,'0');
+  const edition = 'a'.repeat(43), newer = 'b'.repeat(43);
+  const expires = Math.floor(Date.now()/1000) + 3600;
+  let paid = true;
+  const authority = { exchange(receipt, scope) {
+    assert.equal(receipt,'settled rental');
+    assert.deepEqual(scope,{film:'owner/shorts',revision:edition});
+    return {access:'rent',orderId:'order',rentalExpiresAt:expires};
+  }};
+  const opened = [];
+  const catalog = {
+    get(product, {revision = newer}) {
+      if (product === id) return {id, type:'program', scope:'owner/shorts', revision, authority,
+        lineup:[{id:member(1)}, {id:member(2)}]};
+    },
+    open(_, {revision,memberId}) {
+      opened.push([revision,memberId]);
+      return {segments:[{start:0,end:3,duration:3}], segment:() => Buffer.from(memberId),
+        subtitleTracks:[{id:'s1',format:'text',language:'en',label:'English "SDH"'}], subtitles:() => 'WEBVTT\n\n', close() {}};
+    }
+  };
+  const server = await makeServer(null,{catalog, checkout:{verifyPlayback:() => paid,accessAllowed:() => paid}});
+  await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const film = '/film/' + id, base = film + '/v/' + edition;
+  const issue = path => fetch(origin + path + '/airplay', {method:'POST',body:'settled rental',
+    headers:{Origin:origin,'Content-Type':'text/plain'}});
+  for (const path of [film,base,base + '/title/' + member(3)]) assert.equal((await issue(path)).status,404);
+  const paths = [];
+  const keys = [];
+  for (const n of [1,2]) {
+    const title = base + '/title/' + member(n);
+    const lease = await issue(title);
+    assert.equal(lease.status,200);
+    const {path,expiresAt} = await lease.json();
+    assert.ok(path.startsWith(title + '/airplay/'));
+    assert.equal(expiresAt,expires);
+    const manifest = new URL(path,origin);
+    assert.match(await (await fetch(manifest + '?subtitle=s1')).text(),/NAME="English SDH",LANGUAGE="en",DEFAULT=YES/);
+    const key = Buffer.from(await (await fetch(new URL('key',manifest))).arrayBuffer());
+    const enc = Buffer.from(await (await fetch(new URL('0.ts',manifest))).arrayBuffer());
+    const cipher = createDecipheriv('aes-128-cbc',key,Buffer.alloc(16));
+    assert.equal(Buffer.concat([cipher.update(enc),cipher.final()]).toString(),member(n));
+    keys.push(key);
+    paths.push(path);
+  }
+  assert.notDeepEqual(keys[0],keys[1]);
+  assert.notEqual(paths[0].split('/').at(-2),paths[1].split('/').at(-2));
+  assert.deepEqual(opened,[[edition,member(1)],[edition,member(2)]]);
+  for (const path of [paths[0].replace(member(1),member(2)),paths[0].replace(edition,newer)])
+    assert.equal((await fetch(origin + path)).status,403);
+  paid = false;
+  assert.equal((await fetch(origin + paths[1])).status,403);
+});
