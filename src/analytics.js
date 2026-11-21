@@ -4,7 +4,7 @@ function estimateStripeFee(chargedCents) {
 }
 
 const viewing = ['previews','plays','timedPlays','watchSeconds'];
-const metrics = [...viewing, 'rentals', 'purchases', 'revenue', 'netRevenue', 'processingFees', 'reportedFees', 'refundAdjustments',
+const metrics = [...viewing, 'rentals', 'purchases', 'revenue', 'netRevenue', 'processingFees', 'reportedFees', 'paymentAdjustments',
   'filmTaxFees', 'tipTaxFees', 'pendingTaxFees', 'platformTips', 'taxCollected', 'estimatedOrders', 'transfersToReview'];
 
 export function sumFilmStats(films) {
@@ -15,7 +15,7 @@ export function sumFilmStats(films) {
 // page should only read the settled ledger entries for the films being shown.
 function filmStats(filter = '', includeLineup = false) {
   const estimated = 'stream_fee_estimate(COALESCE(o.chargedTotalCents,o.amount + o.tipAmount))';
-  return `SELECT amounts.*, revenue - processingFees - filmTaxFees - refundAdjustments AS netRevenue
+  return `SELECT amounts.*, revenue - processingFees - filmTaxFees - paymentAdjustments AS netRevenue
     FROM (SELECT f.owner, f.id, json_extract(f.metadata, '$.title') AS title,
     ${viewing.map(key => `${includeLineup ? `COALESCE(pc.${key},0) + ` : ''}COALESCE(c.${key},0) + COALESCE((SELECT SUM(ec.${key}) FROM program_videos v
       JOIN film_counts ec ON ec.filmId=v.filmId WHERE v.programId=f.id),0) AS ${key}`).join(', ')},
@@ -26,7 +26,7 @@ function filmStats(filter = '', includeLineup = false) {
     COUNT(*) FILTER (WHERE o.paidAt IS NOT NULL AND o.taxBasicFeeCents IS NULL) AS pendingTaxFees,
     COALESCE(SUM(o.taxCents),0) AS taxCollected, COALESCE(SUM(o.cardProcessingCents),0) AS reportedFees,
     COALESCE(SUM(COALESCE(o.cardProcessingCents, ${estimated})) FILTER (WHERE o.intentId IS NOT NULL),0) AS processingFees,
-    COALESCE(SUM(MIN(o.amount,o.refundedAmount)),0) AS refundAdjustments,
+    COALESCE(SUM(MIN(o.amount,o.refundedAmount)),0) AS paymentAdjustments,
     COUNT(*) FILTER (WHERE o.intentId IS NOT NULL AND o.cardProcessingCents IS NULL) AS estimatedOrders,
     COUNT(*) FILTER (WHERE o.taxPolicy='marketplace-v1' AND COALESCE(o.transferId,'')!='no_proceeds' AND
       (o.refundedAmount>0 OR o.revocationReason IS NOT NULL OR o.disputeStatus NOT IN ('won','prevented','warning_closed'))) AS transfersToReview

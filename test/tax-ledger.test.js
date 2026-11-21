@@ -56,7 +56,8 @@ test('tax policy and verified charges survive restart, receipt replay, fee delay
   assert.equal(report().total.netRevenue,936);
   assert.equal(report().total.processingFees,64);
   assert.equal(report().total.estimatedOrders,1);
-  assert.equal(ctx.store.pendingViewerTransfers(ctx.platform)[0].orderId,order.orderId);
+  assert.equal(ctx.store.pendingViewerTransfers(ctx.platform).length,0);
+  assert.deepEqual(ctx.store.claimProcessingFeeChecks(ctx.platform).map(o=>o.orderId),[order.orderId]);
   assert.equal(ctx.store.pendingViewerTransfers('acct_Other').length,0);
   assert.equal(ctx.store.setViewerTransfer(order.orderId,'tr_TooEarly'),false);
   ctx.restart();
@@ -87,7 +88,7 @@ test('tax policy and verified charges survive restart, receipt replay, fee delay
   assert.equal(reversed.transferId,'tr_Seller');
   assert.equal(report().total.transfersToReview,1);
   assert.equal(report().total.netRevenue,-55);
-  assert.equal(report().total.refundAdjustments,1000);
+  assert.equal(report().total.paymentAdjustments,1000);
   assert.equal(report().total.platformTips,90);
   assert.equal(report().total.taxCollected,90);
   const admin = renderPlatformDashboard('test', report());

@@ -171,6 +171,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     <script type="module" src="/select-focus.js"></script>
     ${csrf ? '<script type="module" src="/setup/field-help.js"></script>' : ''}
     ${!csrf ? '<script src="/setup/sign-in.js" defer></script>' : !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}
+    ${(builder || admin) && csrf ? '<script type="module" src="/setup/analytics-refresh.js"></script>' : ''}
     ${builder ? '<script type="module" src="/setup/dashboard.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${programEditor ? '<script type="module" src="/setup/program-editor.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>
@@ -206,17 +207,17 @@ function displayStat(stats, key) {
   }
   return moneyFields.has(key) ? usd.format(stats[key] / 100) : String(stats[key]);
 }
-function statsList(stats, details = detailLabels) {
+function statsList(stats, details = detailLabels, id = 'overview') {
   const reported = stats.rentals + stats.purchases - stats.estimatedOrders;
   const payments = n => n + (n === 1 ? ' payment' : ' payments');
   const explanations = {
     previews: 'How many times a free preview started. Someone can watch more than once.',
     plays: 'How many times a rented or purchased video started playing. Watching another title in a program can count as another play.',
     averageWatch: 'How long viewers watched, on average, each time they played a paid title. Pauses, buffering and skipped footage add no time. A dash means no plays have been timed yet.',
-    rentals: 'Completed rentals, including any later refunded. Renting a program counts once.',
-    purchases: 'Completed download purchases, including any later refunded. Buying a program counts once.',
-    revenue: 'The film and program prices viewers paid, before fees or refunds. Tips and sales tax are counted separately.',
-    netRevenue: 'What filmmakers keep after card fees, their share of confirmed Stripe Tax fees, and any recorded refunds up to the film price.' +
+    rentals: 'Completed rental payments. Renting a program counts once.',
+    purchases: 'Completed download purchases. Buying a program counts once.',
+    revenue: 'The film and program prices viewers paid, before fees and payment adjustments. Tips and sales tax are counted separately.',
+    netRevenue: 'What filmmakers keep after card fees, their share of confirmed Stripe Tax fees, and any adjustments Stripe has recorded against the sale.' +
       (stats.estimatedOrders ? ' Card fees are still estimated for ' + payments(stats.estimatedOrders) + '.' : '') +
       (stats.pendingTaxFees ? ' The Stripe Tax fee is still pending for ' + payments(stats.pendingTaxFees) + '.' : ''),
     processingFees: 'Card processing fees deducted from revenue. Stream estimates each fee until Stripe reports the actual amount.' +
@@ -227,23 +228,23 @@ function statsList(stats, details = detailLabels) {
     taxCollected: 'Tax charged at checkout, including any tax already included in a platform tip. This shows the original tax at the time of sale.',
     platformTips: 'Optional tips left for Dust Wave, after any tax included in the tip and the tip’s share of confirmed Stripe Tax fees.',
     tipTaxFees: 'The part of the confirmed Stripe Tax fee paid from Dust Wave’s tip.',
-    transfersToReview: 'Payments with refunds or disputes that may need a transfer adjustment. Open Stripe to review them.'
+    transfersToReview: 'Payments with an external adjustment that may affect a transfer. Open Stripe to review them.'
   };
   const list = labels => '<dl class="film-stats">' + Object.entries(labels).map(([key, label]) =>
-    `<div><dt data-field-help="${escapeHtml(explanations[key])}">${label}</dt><dd>${displayStat(stats, key)}</dd></div>`
+    `<div data-stat="${key}"><dt data-field-help="${escapeHtml(explanations[key])}">${label}</dt><dd>${displayStat(stats, key)}</dd></div>`
   ).join('') + '</dl>';
   const taxFee = stats.filmTaxFees ? ' − ' + displayStat(stats, 'filmTaxFees') + ' Stripe Tax fees' : '';
-  const refundNote = stats.refundAdjustments > 0
+  const adjustmentNote = stats.paymentAdjustments > 0
     ? `<p class="hint net-calculation">${displayStat(stats, 'revenue')} revenue − ${displayStat(stats, 'processingFees')} Stripe fees` +
-      `${taxFee} − ${usd.format(stats.refundAdjustments / 100)} refunded = <strong>${displayStat(stats, 'netRevenue')} net revenue</strong></p>`
+      `${taxFee} − ${usd.format(stats.paymentAdjustments / 100)} Stripe adjustment = <strong>${displayStat(stats, 'netRevenue')} net revenue</strong></p>`
     : '';
-  return `<div class="analytics-summary">${list(primaryLabels)}
-    <details class="analytics-breakdown"><summary>Viewing and sales breakdown</summary>${list(details)}${refundNote}</details></div>`;
+  return `<div class="analytics-summary" data-report="${escapeHtml(id)}"${stats.estimatedOrders ? ' data-pending-fees' : ''}>${list(primaryLabels)}
+    <details class="analytics-breakdown"><summary>Viewing and sales breakdown</summary>${list(details)}${adjustmentNote}</details></div>`;
 }
 
 const analyticsGuide = '<p class="hint"><a href="/faq#dashboard-analytics">How these numbers are calculated</a></p>';
 
-export function renderPlatformDashboard(csrf, report) {
+export function renderPlatformDashboard(csrf, report, metricsOnly = false) {
   const { owner, rows, page, pages, total, makers } = report;
   const url = (maker, number = 1) => {
     const query = new URLSearchParams();
@@ -257,8 +258,10 @@ export function renderPlatformDashboard(csrf, report) {
   const tableRows = rows.map(row => {
     const name = platform ? `<a href="${url(row.name)}">${escapeHtml(row.name)}</a>` : escapeHtml(row.title);
     const cells = Object.keys(platformLabels).map(key => `<td${detailColumn(key)}>${displayStat(row, key)}</td>`).join('');
-    return `<tr><th scope="row">${name}</th>${platform ? `<td>${row.films}</td>` : ''}${cells}</tr>`;
+    return `<tr data-report-row="${escapeHtml(platform ? row.name : row.id)}"><th scope="row">${name}</th>${platform ? `<td>${row.films}</td>` : ''}${cells}</tr>`;
   }).join('');
+  const overview = statsList(total, platformDetails);
+  if (metricsOnly) return overview + '<table><tbody>' + tableRows + '</tbody></table>';
   const paging = pages > 1 ? `<nav class="film-actions" aria-label="Report pages">
     ${page > 1 ? `<a href="${url(owner, page - 1)}">Previous</a>` : ''} Page ${page} of ${pages}
     ${page < pages ? `<a href="${url(owner, page + 1)}">Next</a>` : ''}</nav>` : '';
@@ -266,8 +269,8 @@ export function renderPlatformDashboard(csrf, report) {
     <div class="workspace-intro">${platform ? '' : '<a href="/setup/admin">All filmmakers</a>'}
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
       <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films${total.programs ? ' · ' + total.programs + ' programs' : ''}</p></div>
-    <section class="film-card"><h2>Overview</h2>${statsList(total, platformDetails)}${analyticsGuide}
-      ${total.transfersToReview ? '<p class="hint">Review refunded or disputed marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
+    <section class="film-card"><h2>Overview</h2>${overview}${analyticsGuide}
+      ${total.transfersToReview ? '<p class="hint">Review the affected marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
     <section class="film-list"><h2>${platform ? 'Filmmakers' : total.programs ? 'Films and programs' : 'Films'}</h2>
       ${tableRows ? `<label class="analytics-columns"><input type="checkbox"> Show detailed metrics</label><div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
         <th scope="col">${platform ? 'Filmmaker' : 'Film'}</th>${platform ? '<th scope="col">Films</th>' : ''}${headers}</tr></thead><tbody>${tableRows}</tbody></table></div>` : '<p>No results yet.</p>'}
@@ -317,8 +320,11 @@ function embedBuilder(film, url, previewUrl, selection, program = false) {
     </section>`;
 }
 
-export function renderDashboard({ csrf, owner, error, films, programs = [], origin, previewOrigin = origin, draft, completedDraft = films.some(film => film.id === draft.id), selectionFilm, selection = '', infoSaved = false }) {
-  const totals = sumFilmStats([...films, ...programs]);
+export function renderDashboard({ csrf, owner, error, films, programs = [], origin, previewOrigin = origin, draft, completedDraft = films.some(film => film.id === draft.id), selectionFilm, selection = '', infoSaved = false, metricsOnly = false }) {
+  const items = [...films, ...programs];
+  const overview = statsList(sumFilmStats(items));
+  const reports = new Map(items.map(item => [item.id, statsList({...item.stats, ...item.lineupViews}, detailLabels, item.id)]));
+  if (metricsOnly) return overview + [...reports.values()].join('');
   const cards = films.map(film => {
     const path = '/embed/' + encodeURIComponent(film.id);
     const fields = selectionFilm === film.id ? selection : '';
@@ -329,7 +335,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
       <summary><span class="film-title">${escapeHtml(film.title)}</span><span class="film-meta">${film.published ? 'Published' : 'Private'} · ${formatDuration(film.duration)}</span></summary>
       <div class="film-panel">${preview}
       ${film.unsupportedSubtitles?.length ? '<p class="hint">The player could not use these subtitle tracks: ' + film.unsupportedSubtitles.map(escapeHtml).join(', ') + '. Include a text, DVD or Blu-ray subtitle track when preparing the film.</p>' : ''}
-      ${statsList(film.stats)}${thumbnailEditor(film, csrf)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, infoSaved && selectionFilm === film.id)}
+      ${reports.get(film.id)}${thumbnailEditor(film, csrf)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, infoSaved && selectionFilm === film.id)}
       ${film.published ? embedBuilder(film, origin + path, previewOrigin + path, fields) : ''}
       <form class="film-publication" action="/setup/dashboard/publication" method="post">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
         <p class="hint">${terms}</p><button type="submit" class="${film.published ? 'secondary' : 'primary'}" name="visibility" value="${film.published ? 'private' : 'public'}">
@@ -345,7 +351,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
       <div class="film-panel">${program.unavailableTitle ? `<p class="feedback error">Sales are paused because the original file for <strong>${escapeHtml(program.unavailableTitle)}</strong> changed or is missing. Restore the original in storage, or edit the lineup to replace or remove this title. Publish the program again to reopen sales.</p>` : ''}
       <div class="film-actions"><a class="primary-link" href="/setup/program/${id}">Edit program</a>
       ${count >= 2 ? `<a href="/setup/preview/${id}">Private program preview</a>` : ''}</div>
-      ${statsList({...program.stats, ...program.lineupViews})}
+      ${reports.get(program.id)}
       ${program.published ? embedBuilder(program, origin + path, previewOrigin + path, fields, true) +
         `<form method="post" action="/setup/program/${id}">${hidden('csrf', csrf)}${hidden('version', program.version)}
         <button class="secondary" name="action" value="unpublish">Unpublish program</button></form>` : ''}
@@ -360,7 +366,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
   return workspacePage('Dashboard', csrf, `<div class="workspace-intro"><h1>Dashboard</h1>
     <p class="account">Signed in as ${escapeHtml(owner)}</p></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
-    <section class="film-card" id="overview"><h2>Overview</h2>${statsList(totals)}
+    <section class="film-card" id="overview"><h2>Overview</h2>${overview}
       <div class="analytics-links">${analyticsGuide}<a href="/setup/settings#payments">Payment settings</a></div></section>
     <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2><div class="film-actions">${add}</div></header>
       ${cards || '<p>You have no saved films yet.</p>'}</section>

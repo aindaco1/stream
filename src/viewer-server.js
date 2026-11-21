@@ -25,21 +25,21 @@ const secret = process.env.STREAM_RENTAL_SECRET ||
 const store = openSetupStore(join(directory, 'filmmakers'));
 const catalog = createPublicFilms({ store, authority: createRentalAuthority(secret) });
 const checkout = createViewerCheckout({ store });
-let withdrawalSweep;
-const retryWithdrawals = () => {
-  withdrawalSweep ??= Promise.allSettled([checkout.closeWithdrawnSessions(), checkout.retryFilmmakerTransfers()])
+let paymentSweep;
+const retryPayments = () => {
+  paymentSweep ??= Promise.allSettled([checkout.closeWithdrawnSessions(), checkout.retryProcessingFees(), checkout.retryFilmmakerTransfers()])
     .then(results => { if (results.some(result => result.status === 'rejected')) console.error('Checkout reconciliation interrupted.'); })
-    .finally(() => { withdrawalSweep = undefined; });
+    .finally(() => { paymentSweep = undefined; });
 };
-retryWithdrawals();
-const withdrawalTimer = setInterval(retryWithdrawals,15_000);
-withdrawalTimer.unref();
+retryPayments();
+const paymentTimer = setInterval(retryPayments,15_000);
+paymentTimer.unref();
 const recovery = createViewerRecovery({ store });
 if (recovery) checkout.indexPreviousOrders().catch(() => console.error('Recovery indexing interrupted.'));
 const server = await makeServer(null, { catalog, checkout, recovery, publicOrigin: process.env.STREAM_PUBLIC_ORIGIN });
 server.on('close', () => {
-  clearInterval(withdrawalTimer);
-  if (withdrawalSweep) withdrawalSweep.finally(() => store.close());
+  clearInterval(paymentTimer);
+  if (paymentSweep) paymentSweep.finally(() => store.close());
   else store.close();
 });
 const port = Number(process.env.PORT || 8793);

@@ -146,6 +146,8 @@ export function openSetupStore(directory) {
     if (!columns.has('taxBasicFeeCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN taxBasicFeeCents INTEGER DEFAULT 0');
     if (!columns.has('filmTaxFeeCents')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN filmTaxFeeCents INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('taxFeeReference')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN taxFeeReference TEXT');
+    if (!columns.has('feeCheckAfter')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN feeCheckAfter INTEGER NOT NULL DEFAULT 0');
+    db.exec('CREATE INDEX IF NOT EXISTS viewer_missing_fee ON viewer_test_orders(platform,feeCheckAfter,paidAt) WHERE stripeFeeCents IS NULL AND paidAt IS NOT NULL');
     if (!columns.has('chargeBalanceId')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN chargeBalanceId TEXT');
     if (!columns.has('cardProcessingCents')) db.exec(`ALTER TABLE viewer_test_orders ADD COLUMN cardProcessingCents INTEGER
       GENERATED ALWAYS AS (stripeFeeCents - CASE WHEN chargeBalanceId=taxFeeReference THEN taxBasicFeeCents ELSE 0 END) VIRTUAL`);
@@ -351,6 +353,24 @@ export function openSetupStore(directory) {
         AND (intentId=:intent OR chargeId=:charge) AND (:intent IS NULL OR intentId=:intent) AND (:charge IS NULL OR chargeId=:charge)`)
         .get({ platform, intent: intentId ?? null, charge: chargeId ?? null });
     },
+    claimProcessingFeeChecks(platform) {
+      const now = Date.now();
+      // An atomic lease prevents two viewer processes from polling the same orders.
+      return sql(`UPDATE viewer_test_orders SET feeCheckAfter=:now + CASE WHEN paidAt*1000 > :now-3600000 THEN 60000 ELSE 3600000 END
+        WHERE orderId IN (SELECT orderId FROM viewer_test_orders WHERE platform=:platform AND feeCheckAfter<=:now
+          AND stripeFeeCents IS NULL AND paidAt IS NOT NULL AND intentId IS NOT NULL
+          ORDER BY feeCheckAfter,paidAt LIMIT 4) RETURNING *`).all({platform,now});
+    },
+    recordProcessingFee(order, chargeId, balanceId, cents) {
+      if (!Number.isSafeInteger(cents) || cents < 0 || !/^ch_[a-zA-Z0-9]+$/.test(chargeId) || !/^txn_[a-zA-Z0-9]+$/.test(balanceId)) {
+        throw Error('Invalid Stripe charge fee.');
+      }
+      // This update owns only fee evidence. A late response cannot change access or a transfer.
+      return sql(`UPDATE viewer_test_orders SET stripeFeeCents=?,chargeId=COALESCE(chargeId,?),chargeBalanceId=?,ledgerVersion=ledgerVersion+1
+        WHERE orderId=? AND platform=? AND account=? AND intentId=? AND paidAt IS NOT NULL AND stripeFeeCents IS NULL
+          AND (chargeId IS NULL OR chargeId=?) AND (chargeBalanceId IS NULL OR chargeBalanceId=?)`)
+        .run(cents, chargeId, balanceId, order.orderId, order.platform, order.account, order.intentId, chargeId, balanceId).changes === 1;
+    },
     pendingTaxFees(platform) {
       return sql(`SELECT chargeId, sessionId, paidAt, chargedTotalCents FROM viewer_test_orders
         WHERE platform=? AND paidAt IS NOT NULL AND taxBasicFeeCents IS NULL ORDER BY paidAt,orderId`).all(platform);
@@ -379,7 +399,7 @@ export function openSetupStore(directory) {
     pendingViewerTransfers(platform = null) {
       // Rental access can expire independently of a filmmaker's payment. Only financial adjustments hold a transfer.
       return sql(`SELECT * FROM viewer_test_orders WHERE taxPolicy='marketplace-v1' AND paidAt IS NOT NULL
-        AND (taxBasicFeeCents IS NOT NULL OR stripeFeeCents IS NULL) AND transferId IS NULL AND transferRetryAt<=? AND (? IS NULL OR platform=?)
+        AND taxBasicFeeCents IS NOT NULL AND cardProcessingCents IS NOT NULL AND transferId IS NULL AND transferRetryAt<=? AND (? IS NULL OR platform=?)
         AND intentId IS NOT NULL AND chargeId IS NOT NULL AND chargedTotalCents IS NOT NULL
         AND refundedAmount=0 AND revocationReason IS NULL AND (disputeStatus IS NULL OR disputeStatus IN ('won','prevented','warning_closed'))
         ORDER BY transferRetryAt,createdAt,orderId LIMIT 20`).all(Date.now(), platform, platform);

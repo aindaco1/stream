@@ -296,6 +296,66 @@ test('a voluntary tip travels as a direct application fee and reconciles indepen
   }
 });
 
+test('older direct charges replace estimates in the background, even after the rental ends', async t => {
+  const c = await context(t, {legacy:true});
+  const now = Date.now();
+  t.mock.timers.enable({apis:['Date'],now});
+  c.pay();
+  await c.checkout.webhook(...c.sign(c.event()));
+  const order = c.store.viewerOrderBySession(c.first().id);
+  const initial = [order.paidAt,order.status,order.transferId];
+  await c.checkout.retryProcessingFees();
+  assert.equal(c.store.viewerOrderById(order.orderId).stripeFeeCents,null);
+  const charge = c.intents.get(order.intentId).latest_charge;
+  charge.balance_transaction = {id:'txn_late',object:'balance_transaction',type:'charge',status:'available',
+    source:charge.id,amount:99,fee:35,net:64,currency:'usd',fee_details:[{type:'stripe_fee',amount:35,currency:'usd'}]};
+  t.mock.timers.tick(49 * 3600000);
+  const restarted = createViewerCheckout({store:c.store,env:c.env,fetchImpl:c.fetchImpl});
+  const writesBefore = c.calls.filter(call=>call.method==='POST').length;
+  await Promise.all([restarted.retryProcessingFees(),c.checkout.retryProcessingFees()]);
+  const saved = c.store.viewerOrderById(order.orderId);
+  assert.deepEqual([saved.paidAt,saved.status,saved.transferId],initial);
+  assert.deepEqual([saved.stripeFeeCents,saved.chargeBalanceId],[35,'txn_late']);
+  assert.equal(c.calls.filter(call=>call.method==='POST').length,writesBefore);
+  const total = c.store.platformReport(c.offer.owner).total;
+  assert.deepEqual([total.processingFees,total.estimatedOrders,total.netRevenue],[35,0,64]);
+  const calls = c.calls.length;
+  await restarted.retryProcessingFees();
+  assert.equal(c.calls.length,calls);
+});
+
+test('charge.updated confirms fees from Stripe on the correct account and tolerates replay', async t => {
+  for (const marketplace of [false,true]) {
+    const c = await context(t,{marketplace});
+    const opened = marketplace
+      ? await c.checkout.start({offer:c.offer,token:c.token,origin,kind:'buy',tipPercent:10})
+      : await c.start();
+    const charge = marketplace ? completeTaxedPurchase(c).charge : c.intents.get(c.first().payment_intent).latest_charge;
+    const balance = marketplace ? charge.balance_transaction : {id:'txn_direct',object:'balance_transaction',type:'charge',
+      status:'pending',source:charge.id,amount:99,fee:32,net:67,currency:'usd',fee_details:[{type:'stripe_fee',amount:32,currency:'usd'}]};
+    charge.balance_transaction = null;
+    c.pay();
+    await c.status();
+    // The signed notification is a hint. Ignore its fee and re-read the actual transaction.
+    const event = {...c.event(),type:'charge.updated',data:{object:{...charge,balance_transaction:{fee:1}}}};
+    if (marketplace) delete event.account;
+    const deliver = (payload,platform = marketplace) =>
+      c.checkout.webhook(...c.sign(payload,undefined,platform ? 'whsec_platform' : undefined),platform);
+    charge.balance_transaction = balance;
+    await deliver({...event,account:'acct_other'},false);
+    await deliver({...event,data:{object:{...charge,id:'ch_other'}}});
+    assert.equal(c.store.viewerOrderById(opened.orderId).stripeFeeCents,null);
+    await deliver(event);
+    const saved = c.store.viewerOrderById(opened.orderId);
+    assert.equal(saved.stripeFeeCents,balance.fee);
+    assert.equal(saved.chargeBalanceId,balance.id);
+    const calls = c.calls.length;
+    await deliver(event);
+    assert.equal(c.calls.length,calls);
+    assert.equal(c.transfers.length,0);
+  }
+});
+
 test('editing a tip closes the old form and preserves an order that settles during the change', async t => {
   const c=await context(t);
   const first={offer:c.offer,token:c.token,origin,kind:'rent',tipPercent:5};

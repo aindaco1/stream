@@ -13,6 +13,8 @@ import { resolveNewMexicoQuote, newMexicoTotals } from './new-mexico-grt.js';
 
 const LEGACY_FLOW = 'stream-viewer-rental';
 const FLOW = 'stream-viewer-checkout';
+const sessionEvents = ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed'];
+export const viewerWebhookEvents = ['charge.updated', ...sessionEvents, ...adjustmentEvents];
 const CHECKOUT_API = { stripeVersion: '2026-10-28.endive' };
 const SESSION = /^cs_test_[a-zA-Z0-9]+$/;
 const INTENT = /^pi_[a-zA-Z0-9]+$/;
@@ -459,6 +461,25 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     store.notePaymentEvent(eventAccount,event.id,order.orderId);
   }
 
+  async function refreshProcessingFee(order) {
+    const stripe = await client(order);
+    const intent = await stripe.paymentIntents.retrieve(order.intentId, {expand:['latest_charge.balance_transaction']},
+      order.uiMode === 'hosted' ? undefined : CHECKOUT_API);
+    const total = order.chargedTotalCents ?? (isMarketplace(order) ? null : orderTotal(order));
+    const applicationFee = isMarketplace(order) ? 0 : order.tipAmount;
+    checkIntent(intent, order, order.intentId, total, applicationFee);
+    const charge = checkCharge(intent, order, total, applicationFee);
+    if (order.chargeId && charge.id !== order.chargeId) throw mismatch();
+    const fee = processingFee(order, charge, total, applicationFee);
+    if (fee !== null) store.recordProcessingFee(order, charge.id, charge.balance_transaction.id, fee);
+  }
+
+  async function retryProcessingFees() {
+    const orders = store.claimProcessingFeeChecks(await checkingPlatform());
+    const results = await Promise.allSettled(orders.map(refreshProcessingFee));
+    if (results.some(result => result.status === 'rejected')) console.error('A Stripe processing fee could not yet be verified.');
+  }
+
   async function webhook(rawBody, signature, platformEvent = false) {
     const secret = platformEvent ? env.STRIPE_PLATFORM_WEBHOOK_SECRET : webhookSecret;
     if (!serverConfigured || !secret) throw new ViewerCheckoutError('Sandbox webhook is unavailable.', 503);
@@ -473,8 +494,18 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     if (event?.object !== 'event' || event.livemode !== false || !/^evt_[a-zA-Z0-9]+$/.test(event.id) ||
         (platformEvent ? event.account != null : !/^acct_[a-zA-Z0-9]+$/.test(event.account))) return {received:true};
     const eventAccount = platformEvent ? await checkingPlatform() : event.account;
+    if (event.type === 'charge.updated') {
+      if (object?.object === 'charge' && object.livemode === false && /^ch_[a-zA-Z0-9]+$/.test(object.id) && INTENT.test(object.payment_intent)) {
+        const order = platformEvent ? store.viewerOrderByPlatformPayment(eventAccount,object.payment_intent,object.id) :
+          store.viewerOrderByPayment(eventAccount,object.payment_intent,object.id);
+        if (order?.paidAt && order.stripeFeeCents === null && order.intentId === object.payment_intent && (!order.chargeId || order.chargeId === object.id)) {
+          await refreshProcessingFee(order);
+        }
+      }
+      return {received:true};
+    }
     if (adjustmentEvents.has(event.type)) { await adjustmentWebhook(event,platformEvent,eventAccount); return {received:true}; }
-    if (!['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed'].includes(event.type) ||
+    if (!sessionEvents.includes(event.type) ||
         ![FLOW, LEGACY_FLOW].includes(object?.metadata?.flow) || !SESSION.test(object.id)) return { received: true };
     const order = store.viewerOrderById(object.metadata.order);
     if (!order || platformEvent !== isMarketplace(order) || eventAccount !== (platformEvent ? order.platform : order.account)) return { received: true };
@@ -521,6 +552,6 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     };
   }
 
-  return { configured, manualNmEnabled, indexPreviousOrders, retryFilmmakerTransfers, closeWithdrawnSessions, start: guarded(start), abandon: guarded(abandon), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
+  return { configured, manualNmEnabled, indexPreviousOrders, retryProcessingFees, retryFilmmakerTransfers, closeWithdrawnSessions, start: guarded(start), abandon: guarded(abandon), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
     verifyPurchase: guarded(verifyPurchase), webhook: guarded(webhook) };
 }

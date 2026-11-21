@@ -109,6 +109,7 @@ export async function createSetup({
     '/setup/film-embed.js': new URL('./film-embed.js', import.meta.url),
     '/setup/program-editor.js': new URL('../public/program-editor.js', import.meta.url),
     '/setup/field-help.js': new URL('../public/field-help.js', import.meta.url),
+    '/setup/analytics-refresh.js': new URL('../public/analytics-refresh.js', import.meta.url),
     '/setup/dashboard.js': new URL('../public/setup-dashboard.js', import.meta.url),
     '/setup/thumbnail.js': new URL('../public/thumbnail.js', import.meta.url),
     '/setup/thumbnail-frame.js': new URL('./thumbnail-frame.js', import.meta.url),
@@ -186,11 +187,16 @@ export async function createSetup({
         return redirect(admin ? basePath : '/setup/settings', { 'Set-Cookie': cookie(id, admin ? 12 * 3600 : 14 * 86400) });
       } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
     }
+    const metricsOnly = get && req.headers['x-stream-analytics'] !== undefined;
+    if (metricsOnly && (!session || req.headers['x-stream-analytics'] !== session.csrf)) return reject(401, 'Sign in again.');
+    const metrics = markup => html(200, markup, {'X-Stream-Analytics':'1', 'Cache-Control':'no-store'});
     if (admin) {
       if (!session) return get ? redirect(basePath + '/sign-in') : reject(401, 'Sign in as a super admin.');
       if (get && path === basePath) {
         const report = store.platformReport(searchParams.get('maker'), Number(searchParams.get('page') || 1));
-        return report ? html(200, renderPlatformDashboard(session.csrf, report)) : reject(404, 'Filmmaker unavailable.');
+        if (!report) return reject(404, 'Filmmaker unavailable.');
+        if (metricsOnly) return metrics(renderPlatformDashboard(session.csrf, report, true));
+        return html(200, renderPlatformDashboard(session.csrf, report), {'Content-Security-Policy': csp + "; connect-src 'self'"});
       }
       if (method === 'POST' && path === basePath + '/sign-out') {
         let form;
@@ -226,6 +232,8 @@ export async function createSetup({
         { 'Content-Security-Policy': csp.replace("media-src 'self'", "media-src 'self' blob:") + "; connect-src 'self'" });
     };
     const dashboard = (status = 200, error, selectionFilm = searchParams.get('film')) => {
+      if (metricsOnly) return metrics(renderDashboard({metricsOnly:true, completedDraft:false,
+        films:store.dashboardFilms(owner), programs:store.programStats(owner)}));
       const viewer = viewerOrigin(env, origin);
       const port = localPreviewPort(env);
       const previewOrigin = port && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin) ? 'http://127.0.0.1:' + port : viewer;
