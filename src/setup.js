@@ -155,7 +155,7 @@ export async function createSetup({
         stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
           canReset: Boolean(state.accountId || state.flow || state.createRequest),
           unsupportedCountry: state.unsupportedCountry,
-          status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName || state.accountId, checkedAt: state.checkedAt },
+          status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName, accountId: state.accountId },
         r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
         draft: store.storageDraft(session.owner) || {},
         chooseBucket: (path === '/setup/settings' && searchParams.get('bucket') === 'change') || ['/setup/r2', '/setup/r2/location'].includes(path),

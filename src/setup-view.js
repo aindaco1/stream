@@ -23,7 +23,6 @@ export function renderStripeCountryForm(csrf, mode) {
 
 function stripeCard(stripe, csrf) {
   const ready = stripe.status === 'ready';
-  const payments = stripe.mode === 'test' ? 'test payments' : 'payments';
   const statuses = {
     unconnected: 'Not connected',
     ready: 'Connected',
@@ -34,7 +33,10 @@ function stripeCard(stripe, csrf) {
   };
   let description = 'Connect Stripe to publish and get paid.';
   if (!stripe.configured) description = 'Dust Wave is still setting up Stripe for this workspace.';
-  else if (ready) description = stripe.businessName ? `Payments account for ${stripe.businessName}.` : `Your Stripe account is ready for ${payments}.`;
+  else if (ready) {
+    description = stripe.businessName && stripe.businessName !== stripe.accountId ? stripe.businessName : '';
+    if (!description && stripe.accountId) description = `Account ending in ${stripe.accountId.slice(-4)}`;
+  }
   else if (stripe.status === 'pending') description = 'Stripe is reviewing your account information.';
   else if (stripe.status === 'unavailable') description = 'Check the connection again. If Stripe asks, reconnect the same account.';
   else if (stripe.reason) description = stripe.reason;
