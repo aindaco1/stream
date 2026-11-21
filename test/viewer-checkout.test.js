@@ -11,6 +11,7 @@ import { revisionFor } from '../src/media.js';
 import { createPublicFilms } from '../src/public-films.js';
 import { openSetupStore } from '../src/setup-store.js';
 import { createViewerCheckout } from '../src/viewer-checkout.js';
+import { createViewerRecovery } from '../src/viewer-recovery.js';
 import { makeServer } from '../src/server.js';
 
 const origin = 'http://127.0.0.1:8787';
@@ -145,7 +146,7 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
       } else {
         assert.equal(uiMode,'elements');
         assert.equal(form.has('redirect_on_completion'),false);
-        assert.equal(form.get('return_url'),behavior.origin + '/embed/' + offer.id + '?order=' + form.get('client_reference_id'));
+        assert.equal(form.get('return_url'),behavior.origin + '/embed/' + (behavior.productId ?? offer.id) + '?order=' + form.get('client_reference_id'));
       }
       assert.equal(form.has('payment_method_types[0]'),false);
       const methods = [...form].filter(([name]) => name.startsWith('allowed_payment_method_types')).map(([,value])=>value);
@@ -1108,6 +1109,99 @@ test('a merchant-only filmmaker cannot sell a marketplace rental before transfer
   c.behavior.transferCapability=false;
   await assert.rejects(c.start(),{statusCode:503});
   assert.equal(c.sessions.size,0);
+});
+
+test('one paid program keeps its edition, filmmaker proceeds, title position and recovery link across republication and withdrawal', async t => {
+  const c = await context(t, {marketplace:true});
+  const {store, checkout, token} = c;
+  const {owner, account, authority} = c.offer;
+  const first = store.film(owner, c.offer.id);
+  const ids = [first.id, 'f-' + randomUUID(), 'f-' + randomUUID()];
+  for (const [index, id] of ids.slice(1).entries()) {
+    store.saveFilm(owner, first.bucket, {...first, id, objectKey:id + '.mp4', title:'Short ' + (index + 2)});
+  }
+  store.setFilmPublication(owner, first.id, true);
+  const catalog = createPublicFilms({store, env:c.env, authority,
+    sourceFor:() => ({head:async () => sourceHead, read:async () => Buffer.from('film')}),
+    openMedia:async () => ({revision:first.revision, segments:[{duration:1}], close(){}})});
+  const program = store.createProgram(owner);
+  const {id} = program;
+  async function publish(title, members, prices) {
+    const current = store.program(owner, id);
+    store.saveProgram(owner, id, {title, prices, previewSeconds:5, rentalHours:24, rights:first.rights,
+      members:members.map(filmId => ({filmId,role:'film'}))}, current.version);
+    return catalog.publish(owner, id);
+  }
+  const editionA = await publish('Original double feature', ids.slice(0, 2), c.offer.prices);
+  let recoveryMessage;
+  const recovery = createViewerRecovery({store, env:{STREAM_RECOVERY_FROM:'Stream <restore@example.test>', RESEND_API_KEY:'fixture'},
+    fetchImpl:async (_, request) => { recoveryMessage = JSON.parse(request.body); return Response.json({id:'sent'}); }});
+  const server = await makeServer(null, {catalog, checkout, recovery});
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  Object.assign(c.behavior, {origin:base, productId:id});
+  const offer = base + '/film/' + id;
+  const versionA = offer + '/v/' + editionA;
+  const post = (url, body, contentType = 'text/plain') => fetch(url, {method:'POST', headers:{Origin:base, 'Content-Type':contentType}, body});
+  const buy = (revision, viewer = token) => post(offer + '/buy', JSON.stringify({token:viewer, tipPercent:10, programRevision:revision}), 'application/json');
+  async function state(viewer = token) {
+    const response = await post(offer + '/order', viewer);
+    assert.equal(response.status, 200);
+    return response.json();
+  }
+  const opened = await buy(editionA);
+  assert.equal(opened.status, 200);
+  const {orderId} = await opened.json();
+  assert.equal((await (await buy(editionA)).json()).orderId, orderId);
+  assert.equal(c.sessions.size, 1);
+  const {session,charge} = completeTaxedPurchase(c);
+  session.customer_details = {email:'viewer@example.test'};
+  const paid = await state();
+  assert.deepEqual([paid.status,paid.kind,paid.revision,paid.memberId], ['paid','buy',editionA,ids[0]]);
+  assert.deepEqual(paid.program.lineup.map(m => m.id), ids.slice(0, 2));
+  store.recordTaxFees('acct_platform', [{chargeId:charge.id, feeCents:8, reference:'txn_taxbasic'}]);
+  await checkout.retryFilmmakerTransfers();
+  assert.deepEqual(c.transfers.map(t => [t.destination,t.amount]), [[account,445]]);
+  const editionB = await publish('Revised double feature', ids.slice(1), {rent:200,buy:800});
+  assert.notEqual(editionB, editionA);
+  const stale = await buy(editionA, viewerToken());
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).code, 'program_revision_changed');
+  assert.equal(c.sessions.size, 1);
+  const owned = await state();
+  assert.equal(owned.revision, editionA);
+  assert.equal(owned.title, 'Original double feature');
+  assert.equal((await post(versionA + '/title/' + ids[1] + '/position', token + ' 41')).status, 200);
+  assert.equal((await post(versionA + '/title/' + ids[2] + '/position', token + ' 41')).status, 404);
+  assert.equal((await post(offer + '/v/' + editionB + '/title/' + ids[1] + '/position', token + ' 80')).status, 403);
+  assert.equal((await post(offer + '/v/' + editionB + '/session', owned.receipt)).status, 403);
+  const standalone = base + '/film/' + ids[0];
+  assert.equal((await post(standalone + '/session', owned.receipt)).status, 403);
+  store.unpublishProgram(owner, id);
+  assert.equal((await buy(editionB, viewerToken())).status, 404);
+  const shell = await fetch(base + '/embed/' + id);
+  assert.equal(shell.status, 200);
+  assert.doesNotMatch(await shell.text(), /Original double feature|Revised double feature/);
+  assert.equal((await post(offer + '/restore', session.customer_details.email)).status, 202);
+  const link = new URL(recoveryMessage.text.match(/https?:\/\/\S+/)[0]);
+  assert.equal(link.pathname, '/embed/' + id);
+  const code = link.hash.slice('#restore='.length);
+  assert.equal((await post(standalone + '/redeem', code)).status, 403);
+  const redeem = await post(offer + '/redeem', code);
+  assert.equal(redeem.status, 200);
+  const {token:returned} = await redeem.json();
+  assert.equal((await post(offer + '/redeem', code)).status, 403);
+  const restored = await state(returned);
+  assert.deepEqual([restored.revision,restored.title,restored.memberId,restored.position],
+    [editionA,'Original double feature',ids[1],41]);
+  const exchange = await post(versionA + '/session', restored.receipt);
+  assert.equal(exchange.status, 200);
+  const {grant} = await exchange.json();
+  const playback = {headers:{Authorization:'Bearer ' + grant}};
+  assert.equal((await fetch(versionA + '/title/' + ids[0] + '/play/index.m3u8', playback)).status, 200);
+  assert.equal((await fetch(versionA + '/title/' + ids[2] + '/play/index.m3u8', playback)).status, 404);
+  assert.equal((await fetch(standalone + '/play/index.m3u8', playback)).status, 403);
 });
 
 test('new marketplace checkouts recheck the filmmaker country even when the stored connection is ready',async t => {

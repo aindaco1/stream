@@ -61,7 +61,8 @@ export async function transcode(source, head, media, start, end, preview, pictur
   const args = [...pictureInput, ...filters, ...(media.audio ? ['-map', '0:' + media.audio.index, '-af', (pictureData ? 'asetpts=PTS-STARTPTS,' : '') + 'atrim=end=' + length + ',asetpts=PTS-STARTPTS',
     '-c:a', 'aac', '-ac', '2', '-ar', '48000', '-b:a', '112k', '-bsf:a', "noise=drop='lt(pts,0)'"] : ['-an']),
     '-sn', '-dn', '-map_metadata', '-1', '-map_chapters', '-1', '-t', String(length),
-    '-c:v', 'libx264', '-threads', '2', '-preset', 'veryfast', '-profile:v', 'baseline', '-bf', '0', '-g', '48', '-crf', '22',
+    // Frame-threaded VBV can encode the same frame differently on successive MP4 range requests.
+    '-c:v', 'libx264', '-threads', preview ? '1' : '2', '-preset', 'veryfast', '-profile:v', 'baseline', '-bf', '0', '-g', '48', '-crf', '22',
     '-maxrate', '2500k', '-bufsize', '2500k', ...(preview ? ['-movflags', '+empty_moov+frag_keyframe+default_base_moof+negative_cts_offsets', '-f', 'mp4'] :
       ['-muxdelay', '0', '-muxpreload', '0', '-f', 'mpegts']), 'pipe:1'];
   return mediaProcess(source, head, media.format, { before, after: args, stdin: pictureData, maxOutput: 16 * MiB, maxRead: 512 * MiB });

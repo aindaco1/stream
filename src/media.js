@@ -13,6 +13,7 @@ const MAX_SEGMENTS = 4096;
 const MAX_PACKET_BYTES = 4 * 1024 * 1024;
 const MAX_RENDER_BYTES = 12 * 1024 * 1024;
 const MAX_PACKETS = 8000;
+const MAX_CACHED_PREVIEW_BYTES = 8 * 1024 * 1024;
 const pictureCache = new Map();
 let pictureBytes = 0;
 function forgetPictures(key) {
@@ -211,6 +212,7 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
   }));
   const jobs = new Map(), textCache = new Map();
   let closed = false;
+  let lastPreview;
   async function current() {
     if (closed) throw new Error('Film is closed.');
     const fresh = await source.head();
@@ -266,7 +268,15 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
       if (!Number.isFinite(seconds) || seconds < 0 || seconds > 30) throw new Error('Unsupported preview length.');
       if (!seconds) throw new Error('Preview is disabled.');
       if (seconds >= duration) throw new Error('Preview must end before the film ends.');
-      return render(0, seconds, true, 0, bitmap(subtitleId));
+      const cached = lastPreview;
+      if (cached && cached.seconds === seconds && cached.subtitleId === subtitleId) {
+        await current();
+        return cached.bytes;
+      }
+      const bytes = await render(0, seconds, true, 0, bitmap(subtitleId));
+      // Browsers commonly read the same preview in several ranges. Keep one bounded rendition per open film.
+      if (!closed && bytes.byteLength <= MAX_CACHED_PREVIEW_BYTES) lastPreview = {seconds, subtitleId, bytes};
+      return bytes;
     },
     async segment(index, { subtitleId } = {}) {
       if (!Number.isInteger(index) || index < 0 || index >= segments.length) throw new Error('Unknown segment.');
@@ -287,6 +297,6 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
         return result;
       });
     },
-    close() { closed = true; remux?.close(); textCache.clear(); media.subtitleTracks.forEach(forgetPictures); }
+    close() { closed = true; lastPreview = undefined; remux?.close(); textCache.clear(); media.subtitleTracks.forEach(forgetPictures); }
   });
 }

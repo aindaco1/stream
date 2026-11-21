@@ -23,10 +23,12 @@ const evidence = process.env.EVIDENCE_DIR ? path.resolve(process.env.EVIDENCE_DI
 const fixture = path.join(temporary, 'clock.mp4');
 const report = { providers: 'Synthetic Stripe and R2', scenarios: [] };
 const savedKey = 'First cut/Short film.mp4';
+const extensionlessKey = 'Masters/Final without extension';
 const accountId = 'a'.repeat(32);
 const bucket = 'screening-room-test';
 const access = testWriterId;
 const secret = testWriterSecret;
+const replacementId = '9'.repeat(32);
 const bucketUrl = `https://dash.cloudflare.com/${accountId}/r2/default/buckets/${bucket}`;
 const readToken = 'syntheticbucketreadtoken'.repeat(2);
 let browser, server, viewer, setup;
@@ -287,8 +289,8 @@ async function confirmStorageAccess(form) {
   await form.locator('[name="uploadConsent"]').check();
 }
 
-async function submitKeyPair(form, key, buttonLabel) {
-  await form.locator('[name="accessKeyId"]').fill(access);
+async function submitKeyPair(form, key, buttonLabel, keyId = access) {
+  await form.locator('[name="accessKeyId"]').fill(keyId);
   await form.locator('[name="secretAccessKey"]').fill(key);
   await confirmStorageAccess(form);
   await form.getByRole('button', { name: buttonLabel }).click();
@@ -338,11 +340,6 @@ async function connectBucket(page, method, recover) {
     }
     if (recover) {
       await card.getByText('Enter connection details manually', { exact: true }).click();
-      await card.getByText('Choose a Cloudflare account and bucket', { exact: true }).click();
-      assert.ok(await card.getByText('New bucket.', { exact: true }).isVisible());
-      assert.ok(await card.getByText('Existing bucket.', { exact: true }).isVisible());
-      await card.getByText('Get an upload key for this bucket', { exact: true }).click();
-      assert.ok(await card.getByRole('link', { name: 'Cloudflare’s R2 token guide' }).isVisible());
       await fill('intentionally-wrong-fixture-key');
       await page.getByRole('alert').waitFor();
       assert.equal(await card.locator('[name="secretAccessKey"]').inputValue(), '');
@@ -357,6 +354,36 @@ async function connectBucket(page, method, recover) {
   assert.ok([secret, access, readToken].every(value => !markup.includes(value)), 'Credentials stay out of rendered HTML');
 }
 
+async function replaceBucketKey(page, owner) {
+  const storage = page.locator('#storage');
+  await storage.getByRole('link', { name: 'Use a different bucket' }).click();
+  assert.ok(await storage.getByLabel('Bucket dashboard URL').isVisible());
+  await page.reload();
+  await storage.getByRole('link', { name: 'Cancel bucket change' }).click();
+  assert.equal(await storage.getByLabel('Bucket dashboard URL').count(), 0);
+  await storage.getByRole('link', { name: 'Replace R2 key' }).click();
+  await page.getByRole('heading', { name: 'Replace R2 key' }).waitFor();
+  const token = page.getByLabel('R2 token value');
+  const form = page.locator('form').filter({ has: token });
+  assert.equal(await form.locator('[name=bucketUrl]').inputValue(), bucketUrl);
+  assert.equal(await page.locator('[name=accountId], input[type=url]').count(), 0);
+  const active = setup.store.maker(owner).r2;
+  const previous = setup.store.uploadCredentials(owner, active);
+  await token.fill('invalidsyntheticreplacementtoken'.repeat(2));
+  await confirmStorageAccess(form);
+  await form.getByRole('button', { name: 'Save replacement key' }).click();
+  await page.getByRole('alert').waitFor();
+  assert.deepEqual(setup.store.uploadCredentials(owner, active), previous);
+  assert.equal(await token.inputValue(), '');
+  await page.getByText('Use an existing access key pair', { exact: true }).click();
+  const pair = page.locator('form').filter({ has: page.locator('[name=accessKeyId]') });
+  await submitKeyPair(pair, secret, 'Save replacement key', replacementId);
+  await storage.getByRole('link', { name: 'Replace R2 key' }).waitFor();
+  assert.deepEqual(setup.store.maker(owner).r2, active);
+  assert.deepEqual(setup.store.uploadCredentials(owner, active), { ...previous, accessKeyId: replacementId });
+  report.keyReplacement = { keptBucket: true, rejectedKeyPreservedAccess: true, savedKeyPair: true, separateBucketChoice: true };
+}
+
 async function registerFilm(page, shouldRecover, origin, owner) {
   await openWorkspace(page, 'Dashboard');
   await page.getByRole('link', { name: 'Add a film' }).click();
@@ -365,10 +392,13 @@ async function registerFilm(page, shouldRecover, origin, owner) {
   assert.equal(await section.locator('[name="objectKey"]').count(), 0);
   await section.locator('[name="rightsAccepted"]').check();
   await section.getByRole('button', { name: 'Confirm rights and continue' }).click();
-  async function setObjectKey(key) {
-    const object = section.getByLabel('Object key');
+  async function chooseBucketVideo(key) {
+    const object = section.getByLabel('Video in your bucket');
     if (!await object.isVisible()) await section.getByText('Use an existing file', { exact: true }).click();
-    await object.fill(key);
+    if (key === savedKey && !await object.locator('option').evaluateAll((options, key) => options.some(o => o.value === key), key)) {
+      await section.getByRole('button', {name:'Load more files'}).click();
+    }
+    await object.selectOption(key);
   }
   await section.getByLabel('Film title').fill('Projection test <first cut>');
   if (shouldRecover) {
@@ -378,13 +408,26 @@ async function registerFilm(page, shouldRecover, origin, owner) {
     await openWorkspace(page, 'Dashboard');
     await page.getByRole('link', { name: 'Continue film draft' }).click();
     assert.equal(await section.getByLabel('Film title').inputValue(), 'Projection test <first cut>');
-    await setObjectKey('Incorrect/Short film.mp4');
+    await chooseBucketVideo('Incorrect/Short film.mp4');
     await section.getByRole('button', { name: 'Check film and create preview' }).click();
     await page.getByRole('alert').waitFor();
     assert.equal(await section.getByLabel('Film title').inputValue(), 'Projection test <first cut>');
-    assert.equal(await section.getByLabel('Object key').inputValue(), 'Incorrect/Short film.mp4');
+    assert.equal(await section.getByLabel('Video in your bucket').inputValue(), 'Incorrect/Short film.mp4');
   }
-  await setObjectKey(savedKey);
+  await chooseBucketVideo(savedKey);
+  if (shouldRecover) {
+    const picker = section.getByLabel('Video in your bucket');
+    assert.equal(await picker.locator('option[value="art/poster.jpg"]').count(),0);
+    await section.getByLabel('Show all files').check();
+    await chooseBucketVideo('art/poster.jpg');
+    await section.getByRole('button', {name:'Preview selected video'}).click();
+    await section.locator('[data-file-status]').filter({hasText:'This preview could not be prepared'}).waitFor();
+    await chooseBucketVideo(extensionlessKey);
+    await section.getByRole('button', {name:'Preview selected video'}).click();
+    await section.locator('[data-file-preview]').waitFor({ state:'visible' });
+    await page.waitForFunction(() => document.querySelector('[data-file-preview]')?.readyState >= 2);
+    assert.ok(await section.locator('[data-file-preview]').evaluate(video => video.duration > 0 && video.duration <= 3.1));
+  }
   await section.getByRole('button', { name: 'Check film and create preview' }).click();
   const preview = page.getByRole('link', { name: 'Watch private preview' });
   await preview.waitFor();
@@ -440,6 +483,128 @@ async function checkFilmUpload(page, movies) {
   report.filmUpload = { parts: 2, bytes: object.data.length, privatePreviewSeconds: 10, thumbnailIsolated: true };
 }
 
+async function checkProgramEditor(page) {
+  await page.getByRole('button', { name:'Create program' }).click();
+  const form = page.locator('.program-editor');
+  await form.getByLabel('Program title').fill('Two projections');
+  await page.setViewportSize({width:320,height:780});
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'program editor fits a narrow phone');
+  await page.setViewportSize({width:1024,height:840});
+  const first = 'Projection test <first cut>', second = 'Uploaded second screening';
+  await form.getByRole('checkbox', {name:first,exact:true}).check();
+  await form.getByRole('checkbox', {name:second,exact:true}).check();
+  await form.getByRole('button', {name:'Move ' + second + ' up'}).click();
+  assert.equal(await form.locator('.program-library li').first().locator('label span').innerText(), second);
+  await form.getByLabel('Rental price (USD)').fill('4');
+  await form.getByLabel('Download purchase').fill('');
+  await form.getByLabel('Free preview (seconds)').fill('4');
+  await form.getByRole('button', {name:'Add a new opening video'}).click();
+  await page.getByRole('heading', {name:'Add opening video'}).waitFor();
+  await page.locator('[name=rightsAccepted]').check();
+  await page.getByRole('button', {name:'Confirm rights and continue'}).click();
+  await page.getByRole('link', {name:'Back to program'}).click();
+  await form.getByRole('button', {name:'Add a new opening video'}).click();
+  await page.getByLabel('Video title').fill('Meet the director');
+  await page.getByLabel('Video file').setInputFiles({name:'opening.mp4',mimeType:'video/mp4',buffer:await readFile(fixture)});
+  await page.getByRole('button', {name:'Add video to program'}).click();
+  await form.waitFor();
+  assert.equal(await form.locator('select[name=opening] option:checked').textContent(), 'Meet the director');
+  assert.deepEqual(await form.locator('[data-slot]').evaluateAll(slots => slots.map(slot => slot.dataset.slot)), ['opening','films','closing']);
+  const intro = await form.locator('select[name=opening]').inputValue();
+  assert.equal(await form.locator('.program-library li:visible').filter({hasText:'Meet the director'}).count(), 0);
+  // Reassign an extra. It should appear in exactly one slot and never as a selectable main film.
+  await form.getByLabel('Opening video', {exact:true}).selectOption('');
+  assert.equal(await form.locator('.program-choices').getByText('Meet the director').count(),0);
+  await form.getByLabel('Closing video', {exact:true}).selectOption(intro);
+  assert.equal(await form.locator('select[name=closing] option:checked').textContent(), 'Meet the director');
+  assert.equal(await form.locator('.program-library li:visible').filter({hasText:'Meet the director'}).count(), 0);
+  await form.getByLabel('Closing video', {exact:true}).selectOption('');
+  await form.getByLabel('Opening video', {exact:true}).selectOption(intro);
+  await form.getByLabel('Preview video').selectOption({label:'Meet the director'});
+  await form.getByLabel('Opening title in this program').fill('Before the screening');
+  const img = await sharp({create:{width:320,height:180,channels:3,background:'#898989'}}).jpeg().toBuffer();
+  await page.getByLabel('Thumbnail image').setInputFiles({name:'program.jpg',mimeType:'image/jpeg',buffer:img});
+  await page.locator('.thumbnail-editor canvas').waitFor();
+  await page.getByRole('button',{name:'Save thumbnail'}).click();
+  await page.getByText('Thumbnail saved.',{exact:true}).waitFor();
+  await form.getByRole('button', {name:'Save and preview'}).click();
+  await page.waitForFunction(() => document.querySelector('video')?.duration === 4);
+  const entry = page.locator('.private-lineup li').first();
+  assert.equal(await entry.locator('h3').innerText(), 'Before the screening');
+  assert.match(await entry.locator('.program-runtime').innerText(), /^Opening · /);
+  assert.equal(await page.locator('.private-lineup details').count(),0);
+  await page.getByRole('link',{name:'Back to program'}).click();
+  await form.getByLabel('I own these videos', {exact:false}).check();
+  await form.getByRole('button',{name:'Publish program',exact:true}).click();
+  const card = page.locator('#programs details.dashboard-film').first();
+  await card.getByRole('heading',{name:'Embed this program'}).waitFor();
+  for (const header of [page.locator('#films .dashboard-film > summary').first(), card.locator(':scope > summary')]) {
+    await header.hover();
+    const corners = await header.evaluate(el => {
+      const style = getComputedStyle(el), parent = getComputedStyle(el.parentElement);
+      return { top:parseFloat(style.borderTopLeftRadius), bottom:parseFloat(style.borderBottomLeftRadius),
+        inside:parseFloat(parent.borderTopLeftRadius) - parseFloat(parent.borderLeftWidth), open:el.parentElement.open };
+    });
+    assert.ok(corners.inside > 0);
+    assert.equal(corners.top,corners.inside);
+    assert.equal(corners.bottom,corners.open ? 0 : corners.inside);
+  }
+  const preview = card.locator('.film-sharing iframe');
+  assert.match(await preview.getAttribute('src'),/show=synopsis%2Ccredits%2Cmessage/);
+  const embedUrl = await preview.getAttribute('src');
+  const publishedBuy = async () => {
+    const response = await page.request.get(embedUrl);
+    assert.equal(response.status(),200);
+    return /data-buy="([^"]*)"/.exec(await response.text())[1];
+  };
+  const pricing = card.getByRole('complementary',{name:'Unpublished pricing'});
+  assert.equal(await publishedBuy(),'');
+  await card.getByRole('link',{name:'Edit program'}).click();
+  await form.getByLabel('Download purchase').fill('10');
+  await form.getByRole('button',{name:'Save draft',exact:true}).click();
+  await page.getByRole('link',{name:'Back to Dashboard'}).click();
+  await pricing.waitFor();
+  assert.equal(await pricing.locator('p').first().innerText(),'Published Rent $4.00 for 48 hours');
+  assert.match(await pricing.locator('p').nth(1).innerText(),/Buy for \$10\.00 with ZIP download/);
+  assert.equal(await publishedBuy(),'','a draft cannot start a public purchase');
+  await pricing.getByRole('link',{name:'Preview saved draft'}).click();
+  await page.getByText(/Buy for \$10\.00 with ZIP download/).waitFor();
+  await page.getByRole('link',{name:'Back to program'}).click();
+  await form.getByRole('button',{name:'Publish changes'}).click();
+  await card.getByRole('heading',{name:'Published embed preview'}).waitFor();
+  assert.equal(await publishedBuy(),'1000','an existing embed gets the published download price');
+  assert.equal(await pricing.count(),0,'no pending prices after publication');
+  for (const input of await card.getByRole('checkbox').all()) await input.uncheck();
+  assert.match(await card.getByLabel('Embed code').inputValue(),/show=none/);
+  for (const width of [320, 1024]) {
+    await page.setViewportSize({width,height:840});
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  }
+  assert.equal(await page.locator('#films .film-title').allTextContents().then(names => names.includes('Meet the director')), false);
+  await page.getByRole('button',{name:'Add a film',exact:true}).waitFor();
+  await card.getByRole('link',{name:'Edit program'}).click();
+  assert.equal(await form.getByLabel('Opening title in this program').inputValue(), 'Before the screening');
+  await form.getByRole('button',{name:'Replace opening video'}).click();
+  await page.locator('[name=rightsAccepted]').check();
+  await page.getByRole('button',{name:'Confirm rights and continue'}).click();
+  await page.getByLabel('Video title').fill('Replacement introduction');
+  await page.getByLabel('Video file').setInputFiles({name:'replacement.mp4',mimeType:'video/mp4',buffer:await readFile(fixture)});
+  await page.getByRole('button',{name:'Add video to program'}).click();
+  await form.waitFor();
+  assert.equal(await form.getByLabel('Preview video').locator('option:checked').textContent(), 'Replacement introduction');
+  assert.equal(await form.getByLabel('Opening video',{exact:true}).locator('option').filter({hasText:'Meet the director'}).count(),0);
+  await form.getByRole('button',{name:'Remove opening'}).click();
+  await page.getByText('Video removed from the draft. The original stays in your bucket.',{exact:true}).waitFor();
+  assert.equal(await form.getByLabel('Opening video',{exact:true}).inputValue(),'');
+  assert.equal(await form.getByLabel('Preview video').inputValue(),'');
+  assert.equal(await form.getByLabel('Opening video',{exact:true}).locator('option').filter({hasText:'Replacement introduction'}).count(),0);
+  await page.getByRole('link',{name:'Back to Dashboard'}).click();
+  await card.locator(':scope > summary').filter({hasText:'Published'}).waitFor();
+  await card.getByRole('button',{name:'Unpublish program'}).click();
+  await card.getByText(/Draft · 2 films/).waitFor();
+  report.programEditor = { orderedFilms:2, privateOpeningUpload:true, renameReplaceRemove:true, roundedHover:true, privatePreviewSeconds:4, programArtwork:true, publishedAndWithdrawn:true };
+}
+
 async function checkLegacyBucketUpgrade(page, owner) {
   // Before uploads, a saved bucket configuration had no upload flag.
   setup.store.saveBucket(owner, { accountId, bucket, jurisdiction: 'default',
@@ -475,7 +640,15 @@ try {
   const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' };
   const artwork = thumbnailBucket();
   const movies = filmUploadBucket();
-  setup = await createSetup({ thumbnailFetch: artwork.fetcher, uploadFetch: movies.fetcher,
+  setup = await createSetup({ thumbnailFetch: artwork.fetcher, uploadFetch: async request => {
+    const params = new URL(request.url).searchParams;
+    if (params.get('list-type') !== '2') return movies.fetcher(request);
+    const hasMore = !params.has('continuation-token');
+    const files = hasMore ? ['Incorrect/Short film.mp4', 'art/poster.jpg', extensionlessKey] : [savedKey];
+    return new Response('<ListBucketResult><IsTruncated>' + hasMore + '</IsTruncated>' +
+      files.map(key => '<Contents><Key>' + encodeURIComponent(key) + '</Key><Size>100000</Size></Contents>').join('') +
+      (hasMore ? '<NextContinuationToken>next-page</NextContinuationToken>' : '') + '</ListBucketResult>');
+  },
     directory: path.join(temporary, 'state'), stripe, env,
     async resolveBucket({ bucketUrl: location, privateConfirmed, tokenValue, accessKeyId, secretAccessKey, uploadConsent, storageAccess }) {
       assert.equal(location, bucketUrl);
@@ -493,11 +666,11 @@ try {
     async checkBucket(settings) {
       assert.equal(settings.bucket, bucket);
       assert.equal(settings.accountId, accountId);
-      if (settings.accessKeyId !== access || settings.secretAccessKey !== secret) throw Error('Test credential rejected');
+      if (![access, replacementId].includes(settings.accessKeyId) || settings.secretAccessKey !== secret) throw Error('Test credential rejected');
     },
     sourceFor(settings) {
       if (movies.objects.has(settings.objectKey)) return createR2Source(settings, movies.fetcher);
-      if (settings.objectKey !== savedKey) throw Error('Unknown test object');
+      if (![savedKey, extensionlessKey].includes(settings.objectKey)) throw Error('Unknown test object');
       return createFileSource(fixture);
     }
   });
@@ -564,20 +737,24 @@ try {
         await page.screenshot({ path: path.join(evidence, first ? 'setup-mobile.png' : 'setup-desktop.png'), fullPage: true });
       }
       if (first) {
-        await openSection(page, 'payments');
-        assert.ok(await page.getByText('2.9% + 30¢', { exact: false }).isVisible());
-        await openSection(page, 'storage');
-        assert.ok(await page.getByText('10 GB of storage free', { exact: false }).isVisible());
+        for (const topic of ['payments', 'storage']) {
+          await openSection(page, topic);
+          await page.locator('#' + topic + ' a[href="/faq#' + topic + '"]').click();
+          assert.equal(new URL(page.url()).hash, '#' + topic);
+          assert.ok(await page.locator('section:target h2').isVisible());
+          await page.goBack();
+        }
         await page.goto(origin + '/setup#payments');
         await page.locator('#payments[role=tabpanel]').waitFor();
         assert.equal(new URL(page.url()).pathname, '/setup/settings');
         assert.deepEqual(await page.locator('.workspace-nav .tab-bar a').allTextContents(), ['Dashboard', 'Settings']);
-        report.pricing = { publicFaq: true, settings: true, oldSetupLink: true };
+        report.pricing = { publicFaq: true, settingsDeepLinks: true, oldSetupLink: true };
       }
       if (storage === 'existing') await connectBucket(page, mode === 'reuse' ? 'selected keys' : 'manual', mode === 'existing');
       const previewWithoutPayments = mode === 'new' && storage === 'existing';
       if (!previewWithoutPayments) await finishStripe(page, mode, first);
       if (storage === 'new') await connectBucket(page, 'token', first);
+      if (first) await replaceBucketKey(page, owner);
       const privatePath = await registerFilm(page, first, origin, owner);
       if (previewWithoutPayments) {
         await openSection(page, 'payments');
@@ -707,6 +884,7 @@ try {
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         report.filmmakerDashboard = 'create film, private preview, publish, copy independent embed selections, update saved details, change prices, unpublish';
         await checkFilmUpload(page, movies);
+        await checkProgramEditor(page);
       }
       if (mode === 'reuse') await checkLegacyBucketUpgrade(page, owner);
       report.scenarios.push({ stripe: mode, cloudflare: storage, savedPreviewSeconds: 10, resumed: true, previewWithoutPayments });
@@ -714,9 +892,9 @@ try {
   }
   assert.deepEqual(starts, ['new', 'resume', 'existing', 'new', 'new', 'existing', 'reuse']);
   assert.equal(outboundRequests, 0);
-  assert.equal(guidedTokenAttempts, 4, 'Two guided connections, one legacy upgrade, one unsuccessful attempt');
-  assert.equal(guidedKeyAttempts, 1);
-  assert.equal(artwork.probes.size, 6, 'Every accepted setup or upgrade credential passed a write-and-delete check');
+  assert.equal(guidedTokenAttempts, 5, 'Two guided connections, one legacy upgrade, two unsuccessful attempts');
+  assert.equal(guidedKeyAttempts, 2);
+  assert.equal(artwork.probes.size, 7, 'Every accepted setup or upgrade credential passed a write-and-delete check');
   for (const key of artwork.probes) assert.ok(!artwork.objects.has(key));
   report.cloudflareSetup = { guidedTokenConnections: 2, selectedBucketWithKeyPair: 1, manualConnections: 2, handledWrongTokenAndKey: true };
   report.passed = true;

@@ -2,6 +2,12 @@
 
 An open-source film player for filmmakers who keep their originals in their own storage. Each test filmmaker connects a private Cloudflare R2 object, chooses the preview length and sets prices for a timed rental, a one-time purchase, or both. Viewers pay and watch in the filmmaker’s embed. A purchase also includes the original file. The setup and viewer services bind to loopback and can sit behind HTTPS. Stream reads the original from the filmmaker’s bucket and creates each playable segment on demand.
 
+## Film programs
+
+In **Dashboard → Create program**, choose at least two films, arrange their screening order, and optionally add an opening, closing video, and cover image. Choose one preview excerpt and set a rental price, purchase price, or both. The dashboard shows a private preview and a single embed code.
+
+Viewers pay once in the embed. **Previous title** and **Next title** move through the lineup. Captions follow the viewer’s language when a matching track is available. A purchased program includes a ZIP of the original files in order, plus individual downloads. Later lineup and price changes apply to new orders. Existing viewers keep their purchased edition while its source files remain available.
+
 ## Guided filmmaker setup
 
 Start Stream with `npm start` and give each pilot filmmaker their own sign-in link. In a second terminal, run:
@@ -14,11 +20,11 @@ The filmmaker opens the link and selects **Open settings**. It expires after 30 
 
 1. **Connect Cloudflare R2.** Choose or create a dedicated private bucket in Cloudflare, then paste its dashboard URL into Storage settings. Create an **Object Read & Write** token limited to that bucket. Enter the token value or its access key pair and confirm the scope and encrypted storage. Stream checks the connection by writing and removing a small test object. Filmmakers with an existing read-only connection can enable uploads once in Storage settings. [Cloudflare R2 permissions and credentials](https://developers.cloudflare.com/r2/api/tokens/)
 2. **Get paid with Stripe.** To create a connected account, select your business country in Stream, then continue to Stripe for identity and payout details. You can sign in to Stripe to reuse eligible business details. If Dust Wave offers **Connect my Stripe account**, select an eligible existing Standard business directly on Stripe. Return to Stream to see what is ready or needs attention. Both payment and payout capabilities must be active. You can upload and privately preview a film while Stripe reviews your information. Publish and start selling once Stripe is ready.
-3. **Add a film.** Choose **Dashboard → Add a film** and confirm you own the distribution rights. Choose an MP4, MOV or MKV up to 10 GB (10,000,000,000 bytes) from your device, or enter the object key of an existing file. Set a title, prices and preview length, then choose **Check film and create preview**. Stream sends new uploads to a unique key in your bucket in 8 MiB parts, validates the original and saves the film privately. Open **Watch private preview** on its film card.
+3. **Add a film.** Choose **Dashboard → Add a film** and confirm you own the distribution rights. Choose an MP4, MOV or MKV up to 10 GB (10,000,000,000 bytes) from your device, or open **Use an existing file** to choose a video from your bucket. Choose **Show all files** for an original with an unusual name or no extension. You can preview the selection before saving. Set a title, prices and preview length, then choose **Check film and create preview**. Stream sends new uploads to a unique key in your bucket in 8 MiB parts, validates the original and saves the film privately. Open **Watch private preview** on its film card.
 
 A filmmaker can set the rental and purchase prices for a film in setup. Leaving a price blank removes that offer from new checkouts. Existing saved films start with their previous $0.99 rental. New films stay private to their filmmaker during setup. The existing public demo players and sandbox purchase rehearsal are described below.
 
-**Settings** opens on Storage and lists fees in both Storage and Payments. The header links to the public **FAQ** at `/faq`, which includes rates and worked examples.
+**Settings** opens on Storage. Choose **Replace R2 key** to update access to the selected bucket, or **Use a different bucket** for future uploads. Storage and Payments link to their sections in the public FAQ at `/faq#storage` and `/faq#payments`, with setup guidance, fees and worked examples.
 
 Use the **🌓** appearance selector in the filmmaker header to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, setup and the dashboard.
 
@@ -59,7 +65,7 @@ Stream uses the U.S. platform’s self-serve Connect countries for filmmaker pay
 
 To start Stripe setup over, open **Settings → Payments**. Select **Reset Stripe connection**, review the named seller and mode, and confirm. New sales on published films resume when a connected account is ready. Unfinished checkouts on the old account are closed. Settled orders keep their original seller, payment history and viewer access. Reset changes Stream’s active connection. The filmmaker can manage provider authorizations separately in Stripe.
 
-The setup cards come from Admin Shell **0.19.0** in the pinned Dust Wave Platform submodule. Stream owns the filmmaker sessions, rights records, provider calls and media checks. To run the form rehearsal, install Chromium with `npx playwright install chromium` and run `npm run check:setup`. This browser rehearsal uses simulated provider responses, real forms and the private preview renderer. The sandbox sale commands below contact Stripe and create test payments. [Cloudflare R2 credentials](https://developers.cloudflare.com/r2/api/tokens/) · [Cloudflare uploads](https://developers.cloudflare.com/r2/objects/upload-objects/)
+The setup cards come from Admin Shell **0.20.0** in the pinned Dust Wave Platform submodule. Stream owns the filmmaker sessions, rights records, provider calls and media checks. To run the form rehearsal, install Chromium with `npx playwright install chromium` and run `npm run check:setup`. This browser rehearsal uses simulated provider responses, real forms and the private preview renderer. The sandbox sale commands below contact Stripe and create test payments. [Cloudflare R2 credentials](https://developers.cloudflare.com/r2/api/tokens/) · [Cloudflare uploads](https://developers.cloudflare.com/r2/objects/upload-objects/)
 
 ## Public viewer checkout in a Stripe sandbox
 

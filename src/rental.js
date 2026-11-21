@@ -123,9 +123,11 @@ export function createRentalAuthority(secret, { now = Date.now } = {}) {
       return { orderId: access.orderId, expiresAt: access.expiresAt };
     },
 
-    async keyForGrant(grant, film) {
+    async keyForGrant(grant, film, memberId) {
       await verifyGrant(grant, film);
-      const material = await hmacSha256('hls-aes128-v1:' + grant, signingKey);
+      // Each title restarts the HLS sequence, so give it a separate AES key.
+      const context = memberId ? 'stream-program-title:' + memberId + ':' : 'hls-aes128-v1:';
+      const material = await hmacSha256(context + grant, signingKey);
       return Buffer.from(material, 'base64url').subarray(0, 16);
     }
   };

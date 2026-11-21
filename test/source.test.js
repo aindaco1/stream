@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createR2Source, BLOCK_SIZE } from '../src/source.js';
+import { createR2Source, BLOCK_SIZE, PrivateOriginalUnavailable } from '../src/source.js';
 
 const config = {
   accountId: 'a'.repeat(32), bucket: 'synthetic-test', objectKey: 'synthetic/clock 1.mp4',
@@ -44,7 +44,8 @@ test('R2 rejects an unavailable revision, unexpected ranges and incomplete reads
     [206, { 'content-range': 'bytes 1-3/15' }, '123'], [206, {}, '1'], [206, {}, '1234']
   ]) {
     const source = createR2Source(config, async () => new Response(data, { status, headers: { ...headers, ...overrides } }));
-    await assert.rejects(source.read(head, 2, 5));
+    const confirmed = status === 412 || overrides.etag === '"changed"';
+    await assert.rejects(source.read(head, 2, 5), error => (error instanceof PrivateOriginalUnavailable) === confirmed);
   }
   const source = createR2Source(config, () => assert.fail('Invalid ranges must be rejected locally.'));
   await assert.rejects(source.read({ ...head, size: BLOCK_SIZE * 2 }, 0, BLOCK_SIZE + 1));

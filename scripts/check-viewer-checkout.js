@@ -10,9 +10,11 @@ import { pictureSubtitles } from '../test/fixtures/picture-subtitles.js';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import sharp from 'sharp';
 import { openFilm } from '../src/media.js';
 import { createRentalAuthority, rentalScope } from '../src/rental.js';
 import { makeServer } from '../src/server.js';
+import { checkProgramLayout, checkProgramPlayer, programFixture } from './program-player-rehearsal.js';
 import { createFileSource } from '../src/source.js';
 
 const clock = fileURLToPath(new URL('../.local/clock.mp4', import.meta.url));
@@ -33,9 +35,15 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const expectedHash = hash(await readFile(path));
 const offers = new Map(['first', 'second', 'legacy'].map(id => [id, { id, title: 'Test film ' + id, scope: 'test/' + id,
   prices: { rent: 99, buy: 299 }, revision: film.revision, authority: createRentalAuthority(randomBytes(32)) }]));
+const program = await programFixture({ clock, directory, text, picture, path, duration:film.duration });
+offers.set(program.offer.id, program.offer);
+const poster = await sharp({create:{width:160,height:90,channels:3,background:'#777'}}).jpeg().toBuffer();
 const catalog = {
-  get: id => offers.get(id), verify: id => offers.get(id), list: () => [...offers.values()],
-  open: () => openFilm(source),
+  poster: () => poster,
+  get: (id, options) => id === program.offer.id && program.withdrawn && !options?.entitled ? undefined : offers.get(id),
+  verify: id => offers.get(id), list: () => [...offers.values()],
+  open: (id, options) => id === program.offer.id ? program.open(options?.memberId) : openFilm(source),
+  programFile: (_id, _revision, memberId) => program.file(memberId),
   async download(id) { return { title: offers.get(id).title, size: fileHead.size, extension: 'mkv', contentType: 'video/x-matroska', stream: (start, end, signal) => createReadStream(path, { start, end: end - 1, signal }) }; }
 };
 const orders = new Map();
@@ -85,7 +93,15 @@ const checkout = {
     const order = orders.get(token);
     if (!order || order.offer !== offer) return { status: 'pending' };
     if (order.submissions && order.status === 'pending') order.pendingChecks++;
-    return { status: order.status, kind: order.kind, receipt: order.receipt };
+    const details = order.offer.type === 'program' ? {program: {title:offer.title, revision:offer.revision, lineup:offer.lineup}, memberId:order.memberId, position:order.position} : {};
+    return { status: order.status, kind: order.kind, receipt: order.receipt, ...details };
+  },
+  position({ offer, token, memberId, seconds }) {
+    const order = orders.get(token);
+    if (order?.offer !== offer || order.status !== 'paid') return false;
+    order.memberId = memberId;
+    order.position = seconds;
+    return true;
   },
   accessAllowed({ offer, orderId, kind }) {
     const order = sessions.get(orderId);
@@ -129,8 +145,10 @@ player.on('request', (req, res) => {
 await new Promise(resolve => player.listen(0, '127.0.0.1', resolve));
 const app = 'http://127.0.0.1:' + player.address().port;
 const publisher = createServer((req, res) => {
-  const frames = [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660]]
-    .map(([id, width, height]) => `<iframe allow="autoplay; payment; picture-in-picture ${id === 'legacy' ? "'none'" : '*'}" width="${width}" height="${height}" src="${app}/embed/${id}"></iframe>`);
+  const embed = program.offer.id + '?show=synopsis';
+  const dimensions = req.url === '/program-layout' ? [[embed, 320, 640], [embed, 900, 640]] :
+    [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660], [embed, 480, 640]];
+  const frames = dimensions.map(([id, width, height]) => `<iframe allow="autoplay; payment; picture-in-picture ${id === 'legacy' ? "'none'" : '*'}" width="${width}" height="${height}" src="${app}/embed/${id}"></iframe>`);
   res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Publisher</title>' +
     '<style>body{margin:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px}iframe{border:0}</style>' + frames.join('\n'));
 });
@@ -297,12 +315,19 @@ async function install(context) {
   });
 }
 
-async function preview(frame, captions = false) {
+async function preview(frame, captions = false, native = false) {
   await frame.waitForFunction(() => document.querySelector('#download')?.target.startsWith('stream-file-'));
   assert.equal(await frame.locator('#purchase').isHidden(), true);
   await frame.locator('video').evaluate(video => { video.muted = true; });
-  await frame.getByRole('button', { name: 'Play 10-second preview' }).click();
-  await frame.locator('video').scrollIntoViewIfNeeded();
+  const video = frame.locator('video');
+  if (native) {
+    assert.ok(await video.evaluate(v => v.controls && v.preload === 'none' && v.src.endsWith('/preview.mp4')));
+    // Space invokes the browser's native Play action regardless of the platform's media-bar layout.
+    await video.press('Space');
+  } else {
+    await frame.getByRole('button', { name: 'Play 10-second preview' }).click();
+  }
+  await video.scrollIntoViewIfNeeded();
   try {
     await frame.waitForFunction(() => document.querySelector('video').currentTime > .1, null, { polling: 100, timeout: 12000 });
   } catch (cause) {
@@ -718,6 +743,9 @@ try {
   const nm = await context.newPage();
   await nm.setViewportSize({ width:320, height:240 });
   await nm.goto(app + '/embed/second');
+  await nm.locator('#rent').waitFor();
+  assert.ok(await nm.locator('#start-video').isHidden() && await nm.locator('#play').isHidden());
+  assert.ok(await nm.locator('video').evaluate(v => !v.controls && !v.hasAttribute('src')));
   await nm.locator('#rent').click();
   await nm.locator('#view-in-nm').click();
   await nm.locator('#viewing-street').fill('1 Civic Plaza NW');
@@ -750,11 +778,25 @@ try {
   await nm.getByRole('heading', { name:'Billing address' }).waitFor();
   await nm.close();
 
+  checkout.manualNmEnabled = false;
+  // Fixed publisher slots exercise both layouts without moving a live payment iframe under the pointer.
+  const layouts = await context.newPage();
+  await layouts.goto(host + '/program-layout');
+  const layoutFrames = await Promise.all((await layouts.locator('iframe').elementHandles()).map(element => element.contentFrame()));
+  assert.equal(layoutFrames.length, 2);
+  await checkProgramLayout(layoutFrames);
+  await layouts.close();
+  const programPage = await context.newPage();
+  await programPage.goto(host);
+  const programFrame = programPage.frame({url:url=>url.pathname === '/embed/' + program.offer.id});
+  const adjacent = programPage.frames().filter(frame => frame.url() === app + '/embed/first')[1];
+  await checkProgramPlayer({ frame:programFrame, neighbor:adjacent, app, fixture:program, preview, complete, context, requests });
+  await programPage.close();
   for (const [token, order] of orders) {
     assert.ok(!requests.some(({ url, referrer }) => [url, referrer].some(address =>
       address.includes(token) || (order.receipt && address.includes(order.receipt)))), 'A private credential appeared in a URL or referrer');
   }
-  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: location-based tax, inclusive and zero tips, visible Pay, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, download and recovery.');
+  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: location-based tax, inclusive and zero tips, visible Pay, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, program order, previous/next, caption carryover, ZIP, download and recovery.');
 } finally {
   await browser.close();
   await Promise.all([player, publisher].map(server => new Promise(resolve => server.close(resolve))));

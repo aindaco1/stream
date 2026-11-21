@@ -153,3 +153,44 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.equal((await ada.post('info', { ...info, message: '' })).status, 303);
   assert.doesNotMatch(await player('message'), /class="film-info"/);
 });
+
+test('program editor protects private drafts, enforces ownership and rejects stale saves', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'stream-program-editor-'));
+  const setup = await createSetup({ directory, env:{}, stripe:{configured:false} });
+  const app = await makeServer(null,{setup});
+  await new Promise(resolve => app.listen(0,'127.0.0.1',resolve));
+  t.after(async () => { await new Promise(resolve => app.close(resolve)); setup.close(); await rm(directory,{recursive:true,force:true}); });
+  const origin = 'http://127.0.0.1:' + app.address().port;
+  function actor(owner) {
+    const token = setup.store.signIn(setup.store.invite(owner));
+    const cookie = 'stream_setup=' + token;
+    const csrf = setup.store.session(token).csrf;
+    return {
+      get: path => fetch(origin + path,{headers:{Cookie:cookie},redirect:'manual'}),
+      post: (path, fields={}, requestOrigin=origin) => fetch(origin+path,{method:'POST',headers:{Origin:requestOrigin,Cookie:cookie},
+        body:new URLSearchParams({csrf,...fields}),redirect:'manual'})
+    };
+  }
+  const maker = actor('Programs owner'), other = actor('Another owner');
+  const created = await maker.post('/setup/program/create');
+  assert.equal(created.status,303);
+  const path = created.headers.get('Location');
+  const id = path.split('/').pop();
+  assert.match(path,/^\/setup\/program\/p-/);
+  assert.equal((await fetch(origin+path)).status,401);
+  for (const privatePath of [path, '/setup/preview/'+id, '/setup/thumbnail/'+id+'/settings']) {
+    assert.equal((await other.get(privatePath)).status,404);
+  }
+  const fields = {title:'Screening A',version:'1',action:'save',rentPrice:'4',buyPrice:'',previewSeconds:'0',rentalHours:'24'};
+  assert.equal((await maker.post(path,fields,'https://publisher.example')).status,403);
+  assert.equal((await maker.post(path,{...fields,csrf:'stale'})).status,403);
+  assert.equal((await other.post(path,fields)).status,404);
+  assert.equal((await maker.post(path,fields)).status,303);
+  assert.equal((await maker.post(path,{...fields,title:'Old edit'})).status,409);
+  assert.equal((await maker.post(path,{...fields,version:'2',opening:'f-'+randomUUID()})).status,422);
+  const saved = setup.store.program('Programs owner',id);
+  assert.equal(saved.title,'Screening A');
+  assert.equal(saved.published,false);
+  assert.equal((await maker.get('/setup/preview/'+id)).status,422);
+  assert.equal((await maker.get('/embed/'+id)).status,404);
+});

@@ -8,7 +8,7 @@ export function thumbnailBucket() {
   async function fetcher(request) {
     const url = new URL(request.url), [, bucket, ...parts] = url.pathname.split('/');
     const key = parts.join('/');
-    assert.match(key, /^stream-thumbnails\/f-[a-f\d-]{36}\.jpg$/);
+    assert.match(key, /^stream-thumbnails\/[fp]-[a-f\d-]{36}\.jpg$/);
     const write = ['PUT', 'DELETE'].includes(request.method);
     if (write || request.headers.has('x-amz-security-token')) {
       const token = Buffer.from(request.headers.get('x-amz-security-token'), 'base64').toString();

@@ -1,33 +1,35 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { renderFilmmakerFaq, renderSetupCosts } from '../src/filmmaker-help.js';
-import { renderStripeCountryForm } from '../src/setup-view.js';
+import { renderFilmmakerFaq } from '../src/filmmaker-help.js';
+import { renderSettingsPage, renderStripeCountryForm } from '../src/setup-view.js';
 import { payoutCountryOptions } from '../src/payout-countries.js';
 
-test('Payments and FAQ match the country selector and explain filmmaker ownership and sandbox proceeds', () => {
-  const form = renderStripeCountryForm('csrf','new');
+test('FAQ matches the actual filmmaker country selector and explains the sandbox', () => {
+  const form = renderStripeCountryForm('csrf', 'new');
   const selection = [...form.matchAll(/<option value="([A-Z]{2})"/g)].map(match => match[1]).sort();
   assert.equal(selection.join(' '), 'AT BE BG CA CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IT LI LT LU LV MT NL NO PL PT RO SE SI SK US');
-  for (const page of [renderSetupCosts('stripe'), renderFilmmakerFaq()]) {
-    for (const {label} of payoutCountryOptions) assert.ok(page.includes(label), label);
-    for (const text of ['You keep your film rights', 'your sales', 'weekly bank deposits', 'U.S. dollars', 'currency conversion', 'test cards']) assert.ok(page.includes(text),text);
-  }
+  const faq = renderFilmmakerFaq();
+  for (const { label } of payoutCountryOptions) assert.ok(faq.includes(label), label);
+  for (const text of ['You keep your film rights', 'weekly bank deposits', 'U.S. dollars', 'currency conversion', 'test cards']) assert.ok(faq.includes(text), text);
 });
 
-test('provider settings and public FAQ disclose the same provider rates and link to official terms', () => {
-  const stripe = renderSetupCosts('stripe'), r2 = renderSetupCosts('r2');
-  for (const view of [stripe,renderFilmmakerFaq()]) {
-    for (const text of ['U.S.', 'domestic card','2.9% + 30¢','0.5% of the full checkout total','custom pricing',
-      'You cover the share for the film', 'Dust Wave covers the share for the tip', 'once the actual fees are confirmed', 'https://stripe.com/us/pricing']) assert.ok(view.includes(text),text);
+test('settings link into a single public FAQ for provider setup, rates and payout details', () => {
+  const faq = renderFilmmakerFaq(), settings = renderSettingsPage({ csrf: 'test' });
+  for (const topic of ['storage', 'payments']) {
+    assert.ok(settings.includes(`href="/faq#${topic}"`));
+    assert.ok(faq.includes(`<section id="${topic}">`));
   }
-  for (const view of [r2,renderFilmmakerFaq()]) {
-    for (const text of ['10 GB of storage free','$0.015 per GB-month','bandwidth charge',
-      'https://developers.cloudflare.com/r2/pricing/']) assert.ok(view.includes(text),text);
+  for (const [, anchor] of faq.matchAll(/href="#([^"]+)"/g)) {
+    assert.equal(faq.split(`id="${anchor}"`).length, 2, anchor);
   }
-  const faq = renderFilmmakerFaq();
-  for (const text of ['1 million Class A', '10 million Class B', '$4.50', '$0.36']) assert.ok(faq.includes(text), text);
-  assert.throws(()=>renderSetupCosts('unknown'),TypeError);
-  assert.throws(()=>renderSetupCosts('toString'),TypeError);
+  for (const text of ['2.9% + 30¢', '0.5% per transaction', '10 GB-month', '$0.015 per GB-month', '1 million Class A',
+    '10 million Class B', '$4.50', '$0.36', 'weekly bank deposits', 'Cross-border fees']) {
+    assert.ok(faq.includes(text), text);
+    assert.ok(!settings.includes(text), text);
+  }
+  assert.doesNotMatch(settings, /About Stripe setup|provider-costs/);
+  for (const text of ['Object Read &amp; Write', 'Replace R2 key', 'New sales pause', 'Publish changes', 'Infrequent Access',
+    'https://stripe.com/tax/pricing', 'https://developers.cloudflare.com/r2/pricing/']) assert.ok(faq.includes(text), text);
 });
 
 test('the public FAQ explains costs, the pilot and how to sell films', () => {
@@ -46,11 +48,11 @@ test('the FAQ explains marketplace tax and separates sandbox testing from live o
   assert.match(faq, /film tax is added to your price/);
   assert.match(faq, /tax on an optional tip is included in the tip amount/);
   assert.match(faq, /99¢ rental with a 10¢ tip came to \$1\.17/);
-  assert.match(faq, /Stripe asks the viewer to confirm or correct it/);
+  assert.match(faq, /uses Stripe Tax with a viewing address/);
   assert.match(faq, /the viewer’s billing address/);
   assert.match(faq, /finish verification/);
   assert.match(faq, /picture-in-picture button on the video/);
   assert.match(faq, /test charge can show zero tax/);
-  assert.match(faq, /registering and filing wherever it handles marketplace tax/);
+  assert.match(faq, /marketplace registrations, filing and remittance/);
   assert.match(faq, /https:\/\/docs\.stripe\.com\/tax\/testing/);
 });

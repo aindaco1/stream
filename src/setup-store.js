@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { programStore, isProgramId } from './program-store.js';
 import { analyticsReports } from './analytics.js';
 import { bucketReader } from './r2-write.js';
 import { DatabaseSync } from 'node:sqlite';
@@ -118,6 +119,7 @@ export function openSetupStore(directory) {
     const columns = new Set(sql('PRAGMA table_xinfo(viewer_test_orders)').all().map(row => row.name));
     if (!columns.has('verifiedAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN verifiedAt INTEGER');
     if (!columns.has('position')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('positionMember')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN positionMember TEXT');
     if (!columns.has('kind')) db.exec("ALTER TABLE viewer_test_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'rent'");
     if (!columns.has('amount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN amount INTEGER NOT NULL DEFAULT 99');
     if (!columns.has('tipPercent')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN tipPercent INTEGER NOT NULL DEFAULT 0');
@@ -172,6 +174,7 @@ export function openSetupStore(directory) {
     return { ...JSON.parse(row.config), ...JSON.parse(clear.toString('utf8')) };
   }
   const store = {
+    ...programStore(db, transaction, (owner,id) => store.film(owner,id)),
     ...recoveryStore(db, key),
     ...analyticsReports(db),
     invite(owner, audience = 'filmmaker') {
@@ -302,9 +305,11 @@ export function openSetupStore(directory) {
         if (!['none', 'marketplace-v1'].includes(taxPolicy)) throw new Error('Unsupported order tax policy.');
         const maker = store.maker(owner);
         const seller = maker && stripeSetupStateForMode(maker.stripe, 'test');
-        const film = store.film(owner, id);
+        const program = isProgramId(id) && store.program(owner,id);
+        const film = program ? program.published && program.revision === revision && store.programVersion(id,revision) : store.film(owner,id);
+        const currentRevision = program ? program.revision : film?.revision;
         const tipAmount = tipFor(amount,tipPercent);
-        if (tipAmount === null || store.filmPublication(id)?.published === 0 || !store.ownsTestAccount(owner, account) || seller?.accountId !== account || film?.revision !== revision ||
+        if (tipAmount === null || store.filmPublication(id)?.published === 0 || !store.ownsTestAccount(owner, account) || seller?.accountId !== account || !film || currentRevision !== revision ||
             filmPrices(film.prices)?.[kind] !== amount ||
             (kind === 'rent' && (rentalHours(film.rentalHours) !== hours || !Number.isInteger(hours)))) {
           const error = new Error('The film offer changed.');
@@ -513,9 +518,14 @@ export function openSetupStore(directory) {
     },
     saveDraft(owner, draft) { sql('UPDATE makers SET draft=? WHERE id=?').run(JSON.stringify(draft), owner); },
     nextDraft(owner) { store.saveDraft(owner, newDraft()); },
-    saveFilm(owner, bucket, film) {
+    saveFilm(owner, bucket, film, programId) {
       transaction(() => {
         sql('INSERT INTO films VALUES(?,?,?,?)').run(film.id, owner, connectionId(owner, bucket), JSON.stringify(film));
+        if (programId) {
+          const assigned = sql('INSERT INTO program_videos(filmId,programId) SELECT ?,id FROM programs WHERE id=? AND owner=?')
+            .run(film.id, programId, owner);
+          if (!assigned.changes) throw new Error('Program unavailable.');
+        }
         store.clearUpload(owner, film.id);
       });
     },
@@ -533,16 +543,17 @@ export function openSetupStore(directory) {
     },
     beginThumbnailEdit(owner, id) {
       const lock = randomUUID(), now = Date.now();
-      const acquired = sql(`INSERT INTO thumbnail_edits SELECT id,?,? FROM films WHERE owner=? AND id=?
+      const table = isProgramId(id) ? 'programs' : 'films';
+      const acquired = sql(`INSERT INTO thumbnail_edits SELECT id,?,? FROM ${table} WHERE owner=? AND id=?
         ON CONFLICT(filmId) DO UPDATE SET lock=excluded.lock, expires=excluded.expires WHERE expires < ?`)
         .run(lock, now + 120000, owner, id, now).changes;
       return acquired ? lock : null;
     },
     markThumbnailPending(owner, id) {
-      sql("UPDATE films SET metadata=json_set(metadata,'$.thumbnail','pending') WHERE owner=? AND id=?").run(owner, id);
+      sql(`UPDATE ${isProgramId(id) ? 'programs' : 'films'} SET metadata=json_set(metadata,'$.thumbnail','pending') WHERE owner=? AND id=?`).run(owner, id);
     },
     reconcileThumbnail(owner, id, version) {
-      sql(`UPDATE films SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?
+      sql(`UPDATE ${isProgramId(id) ? 'programs' : 'films'} SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?
         AND json_extract(metadata,'$.thumbnail')='pending'
         AND NOT EXISTS (SELECT 1 FROM thumbnail_edits WHERE filmId=? AND expires>=?)`)
         .run(version, owner, id, id, Date.now());
@@ -550,7 +561,7 @@ export function openSetupStore(directory) {
     finishThumbnailEdit(owner, id, lock, version) {
       transaction(() => {
         if (sql('DELETE FROM thumbnail_edits WHERE filmId=? AND lock=?').run(id, lock).changes && version !== undefined) {
-          sql("UPDATE films SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?").run(version, owner, id);
+          sql(`UPDATE ${isProgramId(id) ? 'programs' : 'films'} SET metadata=json_set(metadata,'$.thumbnail',?) WHERE owner=? AND id=?`).run(version, owner, id);
         }
       });
     },
@@ -561,6 +572,7 @@ export function openSetupStore(directory) {
           .run(published ? 1 : 0, id, owner).changes === 1;
         if (changed && !published) {
           sql("UPDATE viewer_test_orders SET withdrawalState='requested' WHERE owner=? AND filmId=? AND status='pending' AND withdrawalState IS NULL").run(owner,id);
+          store.withdrawProgramsContaining(owner,id);
         }
         return changed;
       });
@@ -587,14 +599,27 @@ export function openSetupStore(directory) {
         return true;
       });
     },
+    programs(owner) {
+      const editions = sql(`SELECT p.id, v.metadata->>'$.prices' AS prices, v.metadata->>'$.rentalHours' AS rentalHours
+        FROM programs p JOIN program_versions v ON v.programId=p.id AND v.revision=p.revision
+        WHERE p.owner=? AND p.published=1`).all(owner);
+      const offers = new Map(editions.map(({id,prices,rentalHours}) => [id, {prices:JSON.parse(prices), rentalHours}]));
+      return store.programStats(owner).map(({id,stats}) => ({ ...store.program(owner,id), publishedOffer:offers.get(id), stats }));
+    },
+    bucketFilmTitles(owner, config, keys) {
+      const rows = sql(`SELECT json_extract(metadata,'$.objectKey') AS key, json_extract(metadata,'$.title') AS title
+        FROM films WHERE owner=? AND bucket_id=? AND json_extract(metadata,'$.objectKey') IN (SELECT value FROM json_each(?))
+        ORDER BY rowid`).all(owner, connectionId(owner, config), JSON.stringify(keys));
+      return new Map(rows.map(row => [row.key, row.title]));
+    },
     films(owner) {
-      const rows = sql("SELECT id,json_extract(metadata,'$.title') AS title,json_extract(metadata,'$.prices') AS prices,json_extract(metadata,'$.rentalHours') AS hours,json_extract(metadata,'$.previewSeconds') AS seconds FROM films WHERE owner=? ORDER BY rowid DESC").all(owner);
+      const rows = sql("SELECT id,json_extract(metadata,'$.title') AS title,json_extract(metadata,'$.prices') AS prices,json_extract(metadata,'$.rentalHours') AS hours,json_extract(metadata,'$.previewSeconds') AS seconds FROM films WHERE owner=? AND id NOT IN (SELECT filmId FROM program_videos) ORDER BY rowid DESC").all(owner);
       return rows.map(({ id, title, prices, hours, seconds }) => ({ id, title, prices: prices === null ? undefined : JSON.parse(prices),
         rentalHours: hours ?? undefined, previewSeconds: seconds ?? undefined }));
     },
     film(owner, id) {
-      const row = sql('SELECT f.metadata, b.config FROM films f JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner WHERE f.id=? AND f.owner=?').get(id, owner);
-      return row && { ...JSON.parse(row.metadata), bucket: JSON.parse(row.config) };
+      const row = sql('SELECT f.metadata,b.config,v.programId,v.retired FROM films f JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner LEFT JOIN program_videos v ON v.filmId=f.id WHERE f.id=? AND f.owner=?').get(id, owner);
+      return row && { ...JSON.parse(row.metadata), ...(row.programId && {programId:row.programId, retired:Boolean(row.retired)}), bucket: JSON.parse(row.config) };
     },
     close() { if (db.isOpen) db.close(); }
   };

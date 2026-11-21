@@ -9,10 +9,14 @@ import { faqLink, siteFooter } from './site-frame.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
 import { escapeHtml, renderFilmInfo, selectedFields } from './film-embed.js';
+import { programPresentation, streamProgramArchive } from './program-delivery.js';
 import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
+  ['/film-embed.js', ['./film-embed.js', 'text/javascript']],
+  ['/program-lineup.css', ['../public/program-lineup.css', 'text/css']],
+  ['/program-player.js', ['../public/program-player.js', 'text/javascript']],
   ['/video-controls.js', ['../public/video-controls.js', 'text/javascript']],
   ['/select-focus.js', ['../public/select-focus.js', 'text/javascript']],
   ['/subtitles.js', ['../public/subtitles.js', 'text/javascript']],
@@ -80,17 +84,20 @@ async function body(req, limit) {
 function viewingOrder(text) {
   let request;
   try { request = JSON.parse(text); } catch { return null; }
-  const address = request?.viewingAddress;
-  if (!request || Object.keys(request).some(key => !['token','tipPercent','viewingAddress'].includes(key)) ||
+  if (!request || Object.keys(request).some(key => !['token','tipPercent','viewingAddress','programRevision'].includes(key)) ||
       typeof request.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(request.token) ||
-      !Number.isInteger(request.tipPercent) || request.tipPercent < 0 || request.tipPercent > 15 ||
-      address?.country !== 'US' || address.state !== 'NM' ||
-      Object.keys(address).some(key => !['country','state','city','line1','postalCode'].includes(key)) ||
-      typeof address.postalCode !== 'string' || !/^\d{5}(-\d{4})?$/.test(address.postalCode)) return null;
-  for (const [field, limit] of [['line1',200],['city',100]]) {
-    if (typeof address[field] !== 'string' || !address[field].trim() || address[field].length > limit || /\p{Cc}/u.test(address[field])) return null;
+      !Number.isInteger(request.tipPercent) || request.tipPercent < 0 || request.tipPercent > 15) return null;
+  const { programRevision, viewingAddress:address } = request;
+  if (programRevision !== undefined && (typeof programRevision !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(programRevision))) return null;
+  if (address !== undefined) {
+    if (address?.country !== 'US' || address.state !== 'NM' ||
+        Object.keys(address).some(key => !['country','state','city','line1','postalCode'].includes(key)) ||
+        typeof address.postalCode !== 'string' || !/^\d{5}(-\d{4})?$/.test(address.postalCode)) return null;
+    for (const [field, limit] of [['line1',200],['city',100]]) {
+      if (typeof address[field] !== 'string' || !address[field].trim() || address[field].length > limit || /\p{Cc}/u.test(address[field])) return null;
+    }
   }
-  return { token:request.token, tipPercent:request.tipPercent, viewingAddress:address };
+  return { token:request.token, tipPercent:request.tipPercent, viewingAddress:address, programRevision };
 }
 
 // Only published player pages load Stripe. Each filmmaker's payment UI mounts
@@ -131,9 +138,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
     connections.delete(entry.key);
     entry.ready.then(({ film }) => film.close(), () => {});
   }
-  function acquire(spec, entitled, held) {
+  function acquire(spec, entitled, held, memberId) {
     if (stopping) throw new Error('Film service is closing.');
-    const key = spec.id ? [spec.id, spec.revision, entitled].join(':') : spec.maker;
+    const key = spec.id ? [spec.id, spec.revision, entitled, memberId].join(':') : spec.maker;
     let entry = connections.get(key);
     if (!entry) {
       if (connections.size >= maxIndexes) {
@@ -143,7 +150,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       }
       entry = { key, users: 0 };
       entry.ready = Promise.resolve().then(async () => spec.id ?
-        { film: await catalog.open(spec.id, { entitled }), authority: spec.authority } : openMaker(spec.maker)
+        { film: await catalog.open(spec.id, { entitled, ...(spec.type === 'program' && {revision: spec.revision, memberId}) }), authority: spec.authority } : openMaker(spec.maker)
       ).catch(error => {
         if (connections.get(key) === entry) connections.delete(key);
         throw error;
@@ -161,12 +168,12 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
   }
   const [template, payPage, returnPage, screening] = await Promise.all(
     ['player', 'checkout', 'return', 'screening'].map(name => readFile(new URL('../public/' + name + '.html', import.meta.url), 'utf8')));
-  const lookup = (id, entitled = false) => catalog?.get(id, { entitled }) || (openMaker && filmSpec(id));
+  const lookup = (id, entitled = false, revision) => catalog?.get(id, { entitled, ...(revision && {revision}) }) || (openMaker && filmSpec(id));
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, { type, data: await readFile(new URL(file, import.meta.url)) }])));
   const server = createServer(async (req, res) => {
     const held = new Set();
-    const connection = (spec, entitled = false) => acquire(spec, entitled, held);
+    const connection = (spec, entitled = false, memberId) => acquire(spec, entitled, held, memberId);
     const send = (status, type, data, extra) => reply(req, res, status, type, data, extra);
     const fail = status => send(status, 'text/plain', { 400: 'Invalid request.', 403: 'Film access unavailable.',
       404: 'Unavailable.', 405: 'Method unavailable.', 409: 'Offer unavailable.', 410: 'Order expired.',
@@ -229,10 +236,14 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (!offer) return fail(404);
         return send(200, 'text/html; charset=utf-8', payPage.replaceAll('{{title}}', () => escapeHtml(offer.title)), checkoutHeaders);
       }
-      const poster = /^\/film\/(f-[a-f0-9-]{36})\/thumbnail\.jpg$/.exec(path);
+      const poster = /^\/film\/([fp]-[a-f0-9-]{36})(?:\/v\/([\w-]{43})\/title\/(f-[a-f0-9-]{36}))?\/thumbnail\.jpg$/.exec(path);
       if (poster && catalog) {
         if (!read) return fail(405);
-        const bytes = await catalog.poster(poster[1]);
+        if (poster[3]) {
+          const current = lookup(poster[1]);
+          if (current?.type !== 'program' || current.revision !== poster[2] || !current.lineup.some(item => item.id === poster[3])) return fail(404);
+        }
+        const bytes = await catalog.poster(poster[1], {revision:poster[2], memberId:poster[3]});
         return bytes ? send(200, 'image/jpeg', bytes) : fail(404);
       }
       const embed = /^\/embed\/([a-z0-9-]+)$/.exec(path);
@@ -242,8 +253,12 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const spec = published || lookup(id, true);
         if (!spec) return fail(404);
         const payable = Boolean(checkout && spec.id);
-        const fields = selectedFields(new URL(req.url, origin).searchParams.get('show') || '');
+        const show = new URL(req.url, origin).searchParams.get('show');
+        const fields = selectedFields(show || '');
         const text = { title: escapeHtml(published?.title || 'Private screening'), poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '', filmInfo: renderFilmInfo(published?.info, fields) };
+        text.programStyles = spec.type === 'program' ? '<link rel="stylesheet" href="/program-lineup.css">' : '';
+        text.program = spec.type === 'program' ? escapeHtml(JSON.stringify(published ?
+          programPresentation(published, show === null ? undefined : fields) : {title:'Private screening',lineup:[]})) : '';
         const html = template.replaceAll('{{checkout}}', String(payable))
           .replaceAll('{{manualNm}}', String(payable && checkout.manualNmEnabled === true))
           .replaceAll('{{preview}}', String(published ? spec.previewSeconds ?? 10 : 0))
@@ -252,15 +267,26 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           .replaceAll('{{rent}}', String(published?.prices?.rent ?? ''))
           .replaceAll('{{rentalHours}}', String(published?.rentalHours ?? 48))
           .replaceAll('{{buy}}', String(published?.prices?.buy ?? ''))
-          .replace(/\{\{(title|filmInfo|poster)\}\}/g, (_, key) => text[key]);
+          .replace(/\{\{(title|filmInfo|poster|program|programStyles)\}\}/g, (_, key) => text[key]);
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
-      const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|abandon|order|session|download|restore|redeem|position|view|preview\.mp4|(?:preview|play)\/subtitles(?:\/([a-zA-Z0-9_-]{1,64})\.vtt)?|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(path);
+      const versioned = /^\/film\/(p-[a-f0-9-]{36})\/v\/([\w-]{43})(?:\/title\/(f-[a-f0-9-]{36}))?\/(.+)$/.exec(path);
+      const mediaPath = versioned ? '/film/' + versioned[1] + '/' + versioned[4] : path;
+      const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|abandon|order|session|download|restore|redeem|position|view|preview\.mp4|(?:preview|play)\/subtitles(?:\/([a-zA-Z0-9_-]{1,64})\.vtt)?|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(mediaPath);
       if (!route) return fail(404);
       const [, id, action, trackId, asset] = route;
       const entitled = ['abandon', 'order', 'session', 'download', 'restore', 'redeem', 'position', 'view'].includes(action) || action.startsWith('play/');
-      const spec = lookup(id, entitled);
+      const revision = versioned?.[2], memberId = versioned?.[3];
+      const spec = lookup(id, entitled, revision);
       if (!spec) return fail(404);
+      if (spec.type === 'program') {
+        const memberAction = action.startsWith('play/') || action === 'position';
+        if ((revision && revision !== spec.revision) ||
+            (memberAction && !memberId) ||
+            (memberId && (!spec.lineup.some(member => member.id === memberId) || !(memberAction || ['view','download'].includes(action)))) ||
+            (revision && !(memberAction || ['session','view','download'].includes(action))) ||
+            (!revision && ['session','download'].includes(action))) return fail(404);
+      } else if (versioned) return fail(404);
       const grant = /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(req.headers.authorization || '')?.[1];
       if (action.startsWith('play/') && !grant) return fail(403);
       if (['restore', 'redeem', 'position', 'view'].includes(action)) {
@@ -281,9 +307,10 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (extra.length) return fail(400);
         if (action === 'position') {
           if (!/^[\w-]{43}$/.test(first) || !/^\d{1,5}$/.test(second) || Number(second) > 14400) return fail(400);
-          if (!await checkout.position({ offer: spec, token: first, seconds: Number(second) })) return fail(403);
+          if (!await checkout.position({ offer: spec, token: first, seconds: Number(second), memberId })) return fail(403);
         } else {
           if (!['preview','paid'].includes(first) || !/^[a-f0-9-]{36}$/.test(second)) return fail(400);
+          if (spec.type === 'program' && (first === 'paid') !== Boolean(memberId)) return fail(403);
           if (first === 'preview') {
             const published = lookup(id);
             if (!published || (published.previewSeconds ?? 10) <= 0) return fail(403);
@@ -294,7 +321,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
               if (!await checkout.accessAllowed({ offer: spec, kind: verified.access || 'rent', orderId: verified.orderId, rentalExpiresAt: verified.rentalExpiresAt })) return fail(403);
             } catch { return fail(403); }
           }
-          catalog.recordView?.(id, first, second);
+          catalog.recordView?.(id, first, second, {revision:spec.revision, memberId:memberId || spec.previewId});
         }
         return send(200, 'application/json', '{}');
       }
@@ -313,8 +340,22 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         try { purchase = await spec.authority.verifyDownloadGrant(downloadGrant, scope); }
         catch { return fail(403); }
         if (!await checkout.verifyPurchase({ offer: spec, orderId: purchase.orderId })) return fail(403);
-        const file = await catalog.download(id, downloadGrant);
         const authorized = () => checkout.accessAllowed({offer:spec,orderId:purchase.orderId,kind:'buy'});
+        if (!authorized()) return fail(403);
+        if (spec.type === 'program' && !memberId) {
+          const files = [];
+          for (const member of spec.lineup) files.push(await catalog.programFile(id, revision, member.id));
+          if (!authorized()) return fail(403);
+          res.writeHead(200, { ...headers, 'Content-Type':'application/zip', 'Content-Disposition':attachmentName(spec.title,'zip') });
+          if (req.method === 'HEAD') return res.end();
+          const controller = new AbortController();
+          const cancel = () => controller.abort();
+          res.once('close',cancel);
+          try { await pipeline(streamProgramArchive(files,controller.signal,authorized),res,{signal:controller.signal}); }
+          finally { res.off('close',cancel); }
+          return;
+        }
+        const file = memberId ? await catalog.programFile(id, revision, memberId) : await catalog.download(id, downloadGrant);
         if (!authorized()) return fail(403);
         const range = req.headers.range && rangeFor(req.headers.range, file.size);
         if (req.headers.range && !range) return send(416, 'text/plain', '', { 'Content-Range': 'bytes */' + file.size });
@@ -344,19 +385,32 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (req.headers.origin !== origin) return fail(403);
         const opening = action === 'buy' || action === 'checkout';
         const type = req.headers['content-type'];
-        const withAddress = opening && type === 'application/json';
-        if (type !== 'text/plain' && !withAddress) return fail(403);
-        const token = (await body(req, withAddress ? 2048 : action === 'session' ? 4096 : 64)).toString('utf8');
+        const jsonOrder = opening && type === 'application/json';
+        if (type !== 'text/plain' && !jsonOrder) return fail(403);
+        const token = (await body(req, jsonOrder ? 2048 : action === 'session' ? 4096 : 64)).toString('utf8');
         if (action !== 'session') {
           let input;
-          if (withAddress) input = viewingOrder(token);
+          if (jsonOrder) input = viewingOrder(token);
           else {
             const match = /^([A-Za-z0-9_-]{43})(?: (0|[1-9]|1[0-5]))?$/.exec(token);
             if (match && (opening || match[2] === undefined)) input = { token:match[1], tipPercent:Number(match[2] || 0) };
           }
           if (!input) return fail(400);
-          const result = opening ? await checkout.start({ ...input, offer: await catalog.verify(id), kind: action === 'buy' ? 'buy' : 'rent', origin }) :
-            await checkout[action === 'abandon' ? 'abandon' : 'status']({ offer: spec, token });
+          let result;
+          if (opening) {
+            const changed = () => send(409, 'application/json', JSON.stringify({code:'program_revision_changed'}), checkoutHeaders);
+            if (spec.type === 'program' && input.programRevision !== spec.revision) return changed();
+            const offer = await catalog.verify(id);
+            if (offer.type === 'program' && offer.revision !== input.programRevision) return changed();
+            try {
+              result = await checkout.start({...input, offer, kind:action === 'buy' ? 'buy' : 'rent', origin});
+            } catch (err) {
+              if (offer.type === 'program' && err.code === 'viewer_offer_changed') return changed();
+              throw err;
+            }
+          } else {
+            result = await checkout[action === 'abandon' ? 'abandon' : 'status']({offer:spec, token, resolveEdition:rev => lookup(id,true,rev)});
+          }
           return send(200, 'application/json', JSON.stringify(result), checkoutHeaders);
         }
         // Published orders have a saved revision, so invalid receipts never open R2.
@@ -404,13 +458,13 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       try {
         if (spec.id || asset === 'index.m3u8' || !asset) access = await authority.verifyGrant(grant, scope);
         if (!authorized()) return fail(403);
-        if (asset && asset !== 'index.m3u8') key = await authority.keyForGrant(grant, scope);
+        if (asset && asset !== 'index.m3u8') key = await authority.keyForGrant(grant, scope, memberId);
       } catch { return fail(403); }
       if (asset === 'key') return send(200, 'application/octet-stream', key);
-      const film = runtime.film || (await connection(spec, true)).film;
+      const film = runtime.film || (await connection(spec, true, memberId)).film;
       if (!authorized()) return fail(403);
       if (!asset) return await sendSubtitles(film, {}, () => {
-        const live = lookup(id, true);
+        const live = lookup(id, true, revision);
         return authorized() && access.expiresAt > Date.now() / 1000 && live?.scope === spec.scope && live.revision === spec.revision;
       });
       if (!hasRendition(film)) return fail(404);
