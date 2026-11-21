@@ -43,7 +43,7 @@ const stripe = {
     assert.ok(['new', 'existing', 'reuse', 'resume'].includes(intent));
     if (['new', 'reuse'].includes(intent) && !ctx.state.accountId) {
       if (!country) return { countryRequired: true };
-      assert.equal(country, 'US');
+      assert.equal(country, intent === 'new' ? 'CA' : 'FR');
     }
     starts.push(intent);
     ctx.state.accountId ||= 'acct_qa' + intent + ctx.creatorId.replace(/[^a-z0-9]/gi, '');
@@ -198,7 +198,7 @@ async function finishStripe(page, mode, shouldResume) {
   if (mode !== 'existing') {
     const choice = page.getByLabel('Business country or region');
     assert.equal(await choice.inputValue(), '');
-    await choice.selectOption('US');
+    await choice.selectOption(mode === 'new' ? 'CA' : 'FR');
     await page.getByRole('button', { name: 'Continue to Stripe' }).click();
   }
   await providerReturn.click();
@@ -423,6 +423,7 @@ async function checkFilmUpload(page, movies) {
   const editor = card.locator('.thumbnail-editor');
   const otherCard = page.locator('.dashboard-film').filter({ hasText: 'Projection test <first cut>' });
   const other = otherCard.locator('.thumbnail-editor');
+  await editor.waitFor();
   assert.equal(await page.locator('.thumbnail-editor').count(), 2);
   const image = await sharp({ create: { width: 320, height: 180, channels: 3, background: '#896c50' } }).png().toBuffer();
   await editor.getByLabel('Thumbnail image').setInputFiles({ name: 'second.png', mimeType: 'image/png', buffer: image });
@@ -692,10 +693,14 @@ try {
         }
         await page.getByLabel('Free preview (seconds)').fill('0');
         await page.getByLabel('Rental duration (hours)').fill('12');
-        await page.getByRole('button', { name: 'Save settings' }).click();
-        assert.equal(new URL(page.url()).hash, '#' + privatePath.split('/').pop());
+        const savedDashboard = origin + '/setup/dashboard#' + privatePath.split('/').pop();
+        await Promise.all([
+          page.waitForURL(savedDashboard, { waitUntil: 'load' }),
+          page.getByRole('button', { name: 'Save settings' }).click()
+        ]);
         await page.reload();
-        await page.getByRole('form', { name: 'Edit prices and playback for Projection test <first cut>' }).waitFor();
+        assert.equal(await editor.getByLabel('Free preview (seconds)').inputValue(), '0');
+        assert.equal(await editor.getByLabel('Rental duration (hours)').inputValue(), '12');
         await page.getByRole('button', { name: 'Unpublish film' }).click();
         await page.getByRole('button', { name: 'Publish film' }).waitFor();
         assert.equal(await page.getByLabel('Embed code').count(), 0);

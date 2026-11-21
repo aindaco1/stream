@@ -1,6 +1,6 @@
 import { sumFilmStats } from './analytics.js';
 import { filmPrices, previewSeconds, rentalHours, usdInput } from './prices.js';
-import { stripeBusinessCountries } from './setup-stripe.js';
+import { payoutCountryOptions } from './payout-countries.js';
 import { faqLink, siteFooter } from './site-frame.js';
 import { firstSale, renderSetupCosts } from './filmmaker-help.js';
 import { thumbnailEditor } from './thumbnail-view.js';
@@ -11,10 +11,7 @@ import { embedLayout, escapeHtml, iframeCode, infoFields, selectedFields } from 
 const hidden = (name, value) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`;
 
 export function renderStripeCountryForm(csrf, mode) {
-  const names = new Intl.DisplayNames(['en'], { type: 'region' });
-  const countries = stripeBusinessCountries.map(code => ({ code, label: names.of(code) }));
-  countries.sort((a, b) => a.label.localeCompare(b.label, 'en'));
-  const options = countries.map(({ code, label }) => `<option value="${code}">${escapeHtml(label)}</option>`).join('');
+  const options = payoutCountryOptions.map(({ code, label }) => `<option value="${code}">${escapeHtml(label)}</option>`).join('');
   return `<p>Choose the country where your business is registered. If you operate as an individual, choose the country where you do business. Stripe uses it to determine your verification and payment requirements.</p>
     <form method="post" action="/setup/stripe/start" class="provider-form">
       ${hidden('csrf', csrf)}${hidden('mode', mode)}
@@ -34,7 +31,7 @@ function stripeCard(stripe, csrf) {
     pending: 'Under review',
     unavailable: 'Needs a status check',
     action_required: 'More information needed',
-    restricted: 'Restricted by Stripe'
+    restricted: 'Payments unavailable'
   };
   let description = 'Use a new Stripe account or sign in to one you already have.';
   if (!stripe.configured) description = 'Dust Wave is still setting up Stripe for this workspace.';
@@ -48,7 +45,7 @@ function stripeCard(stripe, csrf) {
     status: stripe.configured ? (statuses[stripe.status] || 'Not connected') : 'Payments setup unavailable',
     // The shared renderer uses this flag to hide onboarding controls. Status
     // text and payment authorization retain their independent provider values.
-    description: ready ? description : firstSale + ' ' + description, csrfToken: csrf, ready: ready || stripe.status === 'pending', existingOAuth: stripe.existingAvailable === true,
+    description: ready ? description : firstSale + ' ' + description, csrfToken: csrf, ready: ready || stripe.status === 'pending' || stripe.unsupportedCountry, existingOAuth: stripe.existingAvailable === true,
     resume: stripe.hasAccount === true || stripe.creating === true,
     action: stripe.configured ? '/setup/stripe/start' : undefined,
     checkAction: stripe.configured && stripe.hasAccount ? '/setup/stripe/check' : undefined,

@@ -81,7 +81,7 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
       }}}});
     }
     const seller = url.pathname.startsWith('/v1/accounts/') && url.pathname.split('/').at(-1);
-    if (behavior.sellers.has(seller)) return Response.json({ id: seller, object: 'account', type: 'standard',
+    if (behavior.sellers.has(seller)) return Response.json({ id: seller, object: 'account', type: 'standard', country: behavior.sellerCountry ?? 'US',
       charges_enabled: behavior.available, payouts_enabled: behavior.available });
     if (marketplace) assert.equal(recipient,null);
     else assert.ok(behavior.sellers.has(recipient));
@@ -1065,6 +1065,7 @@ function completeTaxedPurchase(c) {
 
 test('one marketplace charge binds exclusive film tax, inclusive tip tax and net filmmaker transfer across a lost response', async t => {
   const c = await context(t, {marketplace:true});
+  c.behavior.sellerCountry = 'CA';
   const opened = await c.checkout.start({offer:c.offer,token:c.token,origin,kind:'buy',tipPercent:10});
   assert.equal(opened.account,null);
   assert.equal(opened.amount,549);
@@ -1107,6 +1108,15 @@ test('a merchant-only filmmaker cannot sell a marketplace rental before transfer
   c.behavior.transferCapability=false;
   await assert.rejects(c.start(),{statusCode:503});
   assert.equal(c.sessions.size,0);
+});
+
+test('new marketplace checkouts recheck the filmmaker country even when the stored connection is ready',async t => {
+  const c = await context(t,{marketplace:true});
+  c.behavior.sellerCountry = 'MX';
+  await assert.rejects(c.start(),{statusCode:503});
+  assert.equal(c.sessions.size,0);
+  c.behavior.sellerCountry = 'FR';
+  assert.ok((await c.start()).orderId);
 });
 
 test('a manual order keeps its district across retries and verifies the actual line rates before granting access', async t => {
