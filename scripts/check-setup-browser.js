@@ -34,6 +34,7 @@ const readToken = 'syntheticbucketreadtoken'.repeat(2);
 let browser, server, viewer, setup;
 let publishedEmbeds = '';
 const trace = [];
+const emails = [];
 const starts = [];
 const callbacks = new Map();
 let providerCalls = 0;
@@ -71,6 +72,41 @@ const stripe = {
     return { status: ctx.state.status };
   }
 };
+
+async function checkSignup(page, origin) {
+  const email = 'new-filmmaker@example.test';
+  const openEmail = async button => {
+    const message = emails.at(-1);
+    assert.deepEqual(message.to, [email]);
+    await page.goto(message.text.match(/http:\S+/)[0]);
+    await page.getByRole('button', {name:button, exact:true}).click();
+    await page.getByRole('heading', {name:'Settings', exact:true}).waitFor();
+    await page.getByText('Signed in as ' + email).waitFor();
+  };
+  await page.goto(origin);
+  await page.getByRole('heading', {name:'Create your filmmaker workspace'}).waitFor();
+  const agree = page.getByRole('checkbox', {name:'I agree to the filmmaker agreement.'});
+  assert.equal(await agree.isChecked(), false);
+  await page.getByLabel('Email address').fill(email);
+  const opened = page.waitForEvent('popup');
+  await page.getByRole('link', {name:'filmmaker agreement',exact:true}).click();
+  const agreement = await opened;
+  await agreement.getByRole('heading', {name:'Your film stays yours'}).waitFor();
+  await agreement.close();
+  assert.equal(await page.getByLabel('Email address').inputValue(),email);
+  await agree.check();
+  await page.getByRole('button',{name:'Email me a sign-up link'}).click();
+  await page.getByRole('status').filter({hasText:/Check your inbox/}).waitFor();
+  await openEmail('Agree and create workspace');
+  await page.getByRole('button',{name:'Sign out',exact:true}).click();
+  await page.goto(origin);
+  await page.getByRole('link',{name:'Sign in',exact:true}).click();
+  await page.getByLabel('Email address').fill(email);
+  await page.getByRole('button',{name:'Email me a sign-in link'}).click();
+  await page.getByRole('status').filter({hasText:/sign-in link will arrive/}).waitFor();
+  await openEmail('Open workspace');
+  await page.getByRole('button',{name:'Sign out',exact:true}).click();
+}
 
 async function checkAppearance(page, origin) {
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -759,7 +795,8 @@ try {
   if (evidence) await mkdir(evidence, { recursive: true, mode: 0o700 });
   const generated = spawnSync(process.execPath, ['scripts/fixture.js', fixture], { stdio: 'pipe' });
   assert.equal(generated.status, 0, 'Generate the synthetic clip using FFmpeg');
-  const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture' };
+  const env = { STRIPE_CONNECT_SECRET_KEY: 'sk_test_localfixture', RESEND_API_KEY: 'fixture',
+    STREAM_RECOVERY_FROM: 'workspace@example.test', STREAM_TURNSTILE_SITE_KEY: 'fixture', STREAM_TURNSTILE_SECRET_KEY: 'fixture' };
   const artwork = thumbnailBucket();
   const movies = filmUploadBucket();
   setup = await createSetup({ thumbnailFetch: artwork.fetcher, uploadFetch: async request => {
@@ -772,6 +809,8 @@ try {
       (hasMore ? '<NextContinuationToken>next-page</NextContinuationToken>' : '') + '</ListBucketResult>');
   },
     directory: path.join(temporary, 'state'), stripe, env,
+    verifyChallenge: async (_req, _env, token, {action}) => token === 'fixture-' + action ? {ok:true} : {ok:false,status:400},
+    mailFetch: async (_url, req) => { emails.push(JSON.parse(req.body)); return new Response('{}'); },
     async resolveBucket({ bucketUrl: location, privateConfirmed, tokenValue, accessKeyId, secretAccessKey, uploadConsent, storageAccess }) {
       assert.equal(location, bucketUrl);
       assert.equal(privateConfirmed, 'yes');
@@ -824,6 +863,11 @@ try {
     try {
       await context.route('**/*', route => {
         const url = new URL(route.request().url());
+        if (url.href === 'https://challenges.cloudflare.com/turnstile/v0/api.js') {
+          return route.fulfill({contentType:'text/javascript', body:`{ const widget = document.querySelector('.cf-turnstile');
+            const field = document.createElement('input'); field.type='hidden'; field.name='cf-turnstile-response';
+            field.value='fixture-' + widget.dataset.action; widget.append(field); }`});
+        }
         if (url.origin === origin || url.origin === env.STREAM_VIEWER_ORIGIN) return route.continue();
         return route.abort();
       });
@@ -838,11 +882,12 @@ try {
       page.on('console', event => { if (event.type() === 'error' && event.text().includes('Content Security Policy')) trace.push({ problem: 'Page reported a Content Security Policy error' }); });
       page.setDefaultTimeout(8000);
       if (first) {
+        await checkSignup(page, origin);
         await checkAppearance(page, origin);
         await page.goto(origin + '/setup/sign-in');
         await page.locator('header').getByRole('link', { name: 'FAQ', exact: true }).click();
         await page.getByRole('heading', { name: 'What does it cost?' }).waitFor();
-        await page.locator('#embed + #payouts').getByRole('heading', {name:'Who owns my film and how do I get paid?'}).waitFor();
+        await page.locator('#countries + #embed + #payouts:has(+ #costs)').getByRole('heading', {name:'Who owns my film and how do I get paid?'}).waitFor();
         assert.ok(await page.locator('header').getByRole('link', {name:'Sign in', exact:true}).isVisible());
         assert.equal(await page.getByRole('combobox', {name:'Appearance'}).inputValue(), 'dark');
         assert.ok(await page.evaluate(() => Math.abs(document.querySelector('.faq-intro').offsetWidth - document.querySelector('main').clientWidth) <= 1));

@@ -1,22 +1,14 @@
+import { agreementPath } from './filmmaker-agreement.js';
 import { payoutCountryOptions } from './payout-countries.js';
 
 export function renderFilmmakerFaq() {
   const countries = payoutCountryOptions.map(country => country.label).join(', ');
   return `<h1>FAQ</h1>
     <p class="faq-intro">Put your film wherever your audience finds you on the open web. You keep your rights, choose the price and decide where it plays. Viewers can preview, pay and watch without leaving the page.</p>
-    <section id="embed"><h2>How do I put a film on my site?</h2>
-      <ol><li>In <strong>Dashboard → Films</strong>, open your film, choose the rental or download price and publish it. For a double feature or a shorts lineup, open it under <strong>Programs</strong>.</li>
-        <li>Find <strong>Embed code</strong>. Choose a poster style and the details to show. For a director credit above the title, fill in <strong>A film by</strong> under Film details. Under <strong>Credits</strong>, add names in billing order. Each entry can have any role you choose. The poster fits the credits across its width. A program can also have a <strong>Curated by</strong> credit. Each copy of the embed code can have its own style and details. Check the live preview, then select <strong>Copy embed code</strong>.</li>
-        <li>In your website editor, add a <strong>Custom HTML</strong>, <strong>Embed</strong> or <strong>Code</strong> block where the player should go. Paste the whole snippet into that block and publish your page.</li>
-        <li>Open the published page as a visitor. Play the preview and check the offers on your phone. If you see the code as text, switch the block to HTML. Your site must allow embedded players (iframes).</li></ol>
-      <p>You can send the same code to a festival, a cinema or a publication for their own site. Your film stays in your storage account. Each player handles its own checkout, even when several filmmakers share a page.</p>
-    </section>
-    <section id="payouts"><h2>Who owns my film and how do I get paid?</h2>
-      <p>You keep your film rights and set the price. Confirm that you own the film or have permission to distribute it. Stream charges no royalty. Your film proceeds go to your connected Stripe balance after fees. An optional tip goes to Stream in the same payment.</p>
-      <p>Film prices and Dashboard totals are in U.S. dollars. A transfer to your Stripe balance and a deposit to your bank are separate steps. In live mode, eligible accounts can choose weekly bank deposits in their Stripe Dashboard. Cross-border fees depend on the destination, and currency conversion can cost extra. <a href="https://docs.stripe.com/payouts">Bank payout schedules</a> · <a href="https://stripe.com/connect/pricing#payouts">Stripe payout pricing</a></p>
-    </section>
     <section id="getting-started"><h2>How do I get started?</h2>
-      <p>The pilot is invite-only. Open the workspace address from your invitation and choose <strong>Sign in</strong>. Enter your invited email address and open the single-use link from Stream. Connect your storage in Settings, then add a film in the Dashboard. You can upload it and watch a private preview before connecting Stripe. The pilot uses test cards. Your Cloudflare account uses real storage.</p>
+      <p>On the Stream home page, choose <strong>Sign up</strong>, enter your email, read and accept the <a href="${agreementPath}">filmmaker agreement</a>, and complete the security check. Open the email from Stream and choose <strong>Agree and create workspace</strong>. The pilot is open to new filmmakers. Your business country determines whether you can connect Stripe for payments.</p>
+      <p>Already have a workspace? Choose <strong>Sign in</strong> on the same page and use the email linked to your account. Sign-up and sign-in links work once and expire after 15 minutes. If yours expires, request a new one.</p>
+      <p>Connect your storage in Settings, then add a film in the Dashboard. You can upload it and watch a private preview before connecting Stripe. The pilot uses test cards. Your Cloudflare account uses real storage.</p>
     </section>
     <section id="storage"><h2>How do I connect my storage?</h2>
       <p>Open <strong>Settings → Storage</strong>. Sign in to Cloudflare or create an account and activate R2. Choose a private bucket for your films, or create one using Standard storage. In its settings, keep the public development URL disabled and custom domains disconnected. Copy the bucket’s dashboard address into Stream. <a href="#storage-pricing">What will storage cost?</a></p>
@@ -31,6 +23,17 @@ export function renderFilmmakerFaq() {
     <section id="countries"><h2>Which countries can filmmakers join from?</h2>
       <p>Choose the country where you do business. Stripe uses it to verify your identity and bank details. <a href="https://docs.stripe.com/connect/connect-cross-border-payouts">Stripe’s supported regions</a></p>
       <details><summary>Countries available in the Stream pilot</summary><p>${countries}.</p></details>
+    </section>
+    <section id="embed"><h2>How do I put a film on my site?</h2>
+      <ol><li>In <strong>Dashboard → Films</strong>, open your film, choose the rental or download price and publish it. For a double feature or a shorts lineup, open it under <strong>Programs</strong>.</li>
+        <li>Find <strong>Embed code</strong>. Choose a poster style and the details to show. For a director credit above the title, fill in <strong>A film by</strong> under Film details. Under <strong>Credits</strong>, add names in billing order. Each entry can have any role you choose. The poster fits the credits across its width. A program can also have a <strong>Curated by</strong> credit. Each copy of the embed code can have its own style and details. Check the live preview, then select <strong>Copy embed code</strong>.</li>
+        <li>In your website editor, add a <strong>Custom HTML</strong>, <strong>Embed</strong> or <strong>Code</strong> block where the player should go. Paste the whole snippet into that block and publish your page.</li>
+        <li>Open the published page as a visitor. Play the preview and check the offers on your phone. If you see the code as text, switch the block to HTML. Your site must allow embedded players (iframes).</li></ol>
+      <p>You can send the same code to a festival, a cinema or a publication for their own site. Your film stays in your storage account. Each player handles its own checkout, even when several filmmakers share a page.</p>
+    </section>
+    <section id="payouts"><h2>Who owns my film and how do I get paid?</h2>
+      <p>You keep your film rights and set the price. Confirm that you own the film or have permission to distribute it. Stream charges no royalty. Your film proceeds go to your connected Stripe balance after fees. An optional tip goes to Stream in the same payment.</p>
+      <p>Film prices and Dashboard totals are in U.S. dollars. A transfer to your Stripe balance and a deposit to your bank are separate steps. In live mode, eligible accounts can choose weekly bank deposits in their Stripe Dashboard. Cross-border fees depend on the destination, and currency conversion can cost extra. <a href="https://docs.stripe.com/payouts">Bank payout schedules</a> · <a href="https://stripe.com/connect/pricing#payouts">Stripe payout pricing</a></p>
     </section>
     <section id="costs"><h2>What does it cost?</h2>
       <p>Stream is free. The optional tip starts at 10% of the film price. Viewers can change it or choose 0% to skip it.</p>

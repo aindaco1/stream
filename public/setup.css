@@ -315,4 +315,6 @@ button.info-button:is(:hover, [aria-expanded=true]) { background: var(--subtle);
 .sign-in-panel { display: grid; gap: 1rem; max-width: 35rem; }
 .sign-in-panel [hidden] { display: none; }
 .cf-turnstile { min-width: 0; }
+.filmmaker-agreement { display: grid; gap: 1.5rem; max-width: 70ch; }
+.filmmaker-agreement :is(header, section) { display: grid; gap: .375rem; }
 .filmmaker-help > .faq-intro { max-width: none; }

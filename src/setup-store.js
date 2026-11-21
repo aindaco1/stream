@@ -6,6 +6,7 @@ import { analyticsReports } from './analytics.js';
 import { bucketReader } from './r2-write.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mailbox } from './stream-email.js';
+import { agreementVersion } from './filmmaker-agreement.js';
 import { recoveryStore } from './viewer-recovery.js';
 import { StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
 import { filmPrices, rentalHours } from './prices.js';
@@ -62,6 +63,12 @@ export function openSetupStore(directory) {
     CREATE TABLE IF NOT EXISTS invitations (digest TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS login_addresses (owner TEXT NOT NULL, audience TEXT NOT NULL, email TEXT NOT NULL,
       lastSent INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(owner,audience), UNIQUE(email,audience));
+    CREATE TABLE IF NOT EXISTS signup_links (
+      digest TEXT PRIMARY KEY, email TEXT NOT NULL, version TEXT NOT NULL, requestedAt INTEGER NOT NULL, expires INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS signup_links_email ON signup_links(email,requestedAt);
+    CREATE TABLE IF NOT EXISTS filmmaker_agreements (
+      owner TEXT NOT NULL, version TEXT NOT NULL, email TEXT NOT NULL, requestedAt INTEGER NOT NULL, confirmedAt INTEGER NOT NULL,
+      PRIMARY KEY(owner,version));
     CREATE TABLE IF NOT EXISTS sessions (digest TEXT PRIMARY KEY, owner TEXT NOT NULL, csrf TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS storage_drafts (owner TEXT PRIMARY KEY, config TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS claims (mode TEXT NOT NULL, account TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(mode, account));
@@ -195,6 +202,13 @@ export function openSetupStore(directory) {
     if (audience === 'admin') sql('INSERT OR IGNORE INTO platform_admins(id) VALUES(?)').run(owner);
     else sql('INSERT OR IGNORE INTO makers(id,draft) VALUES(?,?)').run(owner, JSON.stringify(newDraft()));
   }
+  function openSession(owner, audience, now) {
+    const session = token();
+    sql('DELETE FROM sessions WHERE expires<=?').run(now);
+    sql('INSERT INTO sessions(digest,owner,csrf,expires,audience) VALUES(?,?,?,?,?)')
+      .run(hash(session), owner, token(), now + (audience === 'admin' ? 12 * 3600_000 : 14 * 86400_000), audience);
+    return session;
+  }
   const store = {
     ...programStore(db, transaction, (owner,id) => store.film(owner,id)),
     ...recoveryStore(db, key),
@@ -236,19 +250,54 @@ export function openSetupStore(directory) {
         return { email, code };
       });
     },
+    requestSignup(address, version) {
+      const email = mailbox(address)?.toLowerCase();
+      if (!email || version !== agreementVersion) return;
+      if (sql("SELECT 1 FROM login_addresses WHERE email=? AND audience='filmmaker'").get(email)) {
+        return store.requestLogin(email, 'filmmaker');
+      }
+      return transaction(() => {
+        const now = Date.now();
+        sql('DELETE FROM signup_links WHERE expires<=?').run(now);
+        if (sql('SELECT 1 FROM signup_links WHERE email=? AND requestedAt>?').get(email, now-60_000) ||
+            sql('SELECT count(*) AS n FROM signup_links WHERE requestedAt>?').get(now-60_000).n >= 60) return;
+        const code = token();
+        sql('INSERT INTO signup_links(digest,email,version,requestedAt,expires) VALUES(?,?,?,?,?)')
+          .run(hash(code), email, version, now, now+15*60_000);
+        return { email, code, signup: true };
+      });
+    },
+    confirmSignup(code, version) {
+      if (!/^[\w-]{43}$/.test(code) || version !== agreementVersion) return;
+      return transaction(() => {
+        const now = Date.now();
+        const link = sql('SELECT email,requestedAt FROM signup_links WHERE digest=? AND version=? AND expires>?').get(hash(code), version, now);
+        if (!link) return;
+        const { email, requestedAt } = link;
+        sql('DELETE FROM signup_links WHERE email=?').run(email);
+        let owner = sql("SELECT owner FROM login_addresses WHERE email=? AND audience='filmmaker'").get(email)?.owner;
+        if (!owner) {
+          owner = 'Filmmaker-' + randomUUID();
+          ensureAccount(owner, 'filmmaker');
+          sql("INSERT INTO login_addresses(owner,audience,email) VALUES(?,'filmmaker',?)").run(owner, email);
+        }
+        sql('INSERT OR IGNORE INTO filmmaker_agreements(owner,version,email,requestedAt,confirmedAt) VALUES(?,?,?,?,?)')
+          .run(owner, version, email, requestedAt, now);
+        return openSession(owner, 'filmmaker', now);
+      });
+    },
     signIn(code, audience = 'filmmaker') {
       if (!/^[\w-]{43}$/.test(code)) return;
       return transaction(() => {
         const row = sql('DELETE FROM invitations WHERE digest=? AND expires>? AND audience=? RETURNING owner').get(hash(code), Date.now(), audience);
         if (!row) return;
-        const session = token();
-        sql('INSERT INTO sessions(digest,owner,csrf,expires,audience) VALUES(?,?,?,?,?)')
-          .run(hash(session), row.owner, token(), Date.now() + (audience === 'admin' ? 12 * 3600_000 : 14 * 86400_000), audience);
-        return session;
+        return openSession(row.owner, audience, Date.now());
       });
     },
     session(value, audience = 'filmmaker') {
-      return value && sql(`SELECT owner, csrf FROM sessions WHERE digest=? AND expires>? AND audience=?
+      return value && sql(`SELECT owner, csrf,
+        (SELECT email FROM login_addresses l WHERE l.owner=sessions.owner AND l.audience=sessions.audience) AS email
+        FROM sessions WHERE digest=? AND expires>? AND audience=?
         AND (audience='filmmaker' OR EXISTS(SELECT 1 FROM platform_admins a WHERE a.id=sessions.owner))`).get(hash(value), Date.now(), audience);
     },
     signOut(value) { sql('DELETE FROM sessions WHERE digest=?').run(hash(value)); },

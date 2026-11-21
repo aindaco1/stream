@@ -10,14 +10,14 @@ Viewers pay once in the embed. **Previous title** and **Next title** move throug
 
 ## Guided filmmaker setup
 
-Start the workspace with `npm start`. The pilot is invite-only. The operator links an address to a new or existing account by its exact workspace name. Use the same name when enabling email sign-in for an existing filmmaker.
+Start the workspace with `npm start` and open `/`. Filmmakers can sign up with an email address and the [pilot filmmaker agreement](src/filmmaker-agreement.js). They confirm their email and acceptance before Stream creates a workspace. The stored receipt records the agreement edition, email and confirmation time. Returning filmmakers choose **Sign in** on the same page. Both forms use Turnstile. Email links work once for 15 minutes. A filmmaker session lasts 14 days.
+
+For an existing named workspace without an email, the operator can attach an address using its exact name. Super admins must be enrolled by the operator and sign in at `/setup/admin/sign-in` for a separate 12-hour session.
 
 ```sh
-npm run invite -- "Filmmaker name" --email filmmaker@example.org
+npm run invite -- "Existing filmmaker name" --email filmmaker@example.org
 npm run invite -- --super-admin "Operator name" --email operator@example.org
 ```
-
-The filmmaker opens `/setup/sign-in`, enters the enrolled email and completes the Cloudflare Turnstile check. The email link works once for 15 minutes. Selecting **Open workspace** starts a 14-day filmmaker session. Super admins use `/setup/admin/sign-in` and a separate 12-hour session. To issue a one-time invitation directly, omit `--email` and share the resulting 30-minute link privately.
 
 Configure a Managed Turnstile widget for the workspace hostname. Set `STREAM_TURNSTILE_SITE_KEY` and `STREAM_TURNSTILE_SECRET_KEY` on the workspace service, along with `RESEND_API_KEY` and the verified `STREAM_RECOVERY_FROM` sender. The server checks each email request with Cloudflare before issuing a link. Set `STREAM_PUBLIC_ORIGIN` to the workspace’s HTTPS origin for links that open from other devices. On a separate viewer service, set `STREAM_WORKSPACE_ORIGIN` to that workspace so FAQ and sign-in use the same session and appearance preference. Loopback links open on the Mac running the pilot. [Cloudflare server-side validation](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)
 

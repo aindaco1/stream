@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { streamSender, sendStreamEmail, mailbox } from './stream-email.js';
+import { agreementPath, agreementVersion, renderFilmmakerAgreement } from './filmmaker-agreement.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -35,20 +36,32 @@ class SetupError extends Error {
   constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; }
 }
 
-function signInPage(message, admin, siteKey, error = false) {
-  const title = admin ? 'Super admin sign-in' : 'Filmmaker sign-in';
-  const path = admin ? '/setup/admin/sign-in' : '/setup/sign-in';
+function accessPage({ admin, signup, siteKey, message, error }) {
+  const title = signup ? 'Create your filmmaker workspace' : admin ? 'Super admin sign-in' : 'Filmmaker sign-in';
+  const path = signup ? '/setup/sign-up' : admin ? '/setup/admin/sign-in' : '/setup/sign-in';
   const feedback = message ? `<p class="feedback${error ? ' error' : ''}" role="${error ? 'alert' : 'status'}">${escapeHtml(message)}</p>` : '';
+  const agreement = `<a href="${agreementPath}" target="_blank" rel="noopener">filmmaker agreement</a>`;
+  const navigation = admin ? '' : `<nav class="tab-bar subtabs" aria-label="Filmmaker account">
+    <a href="/" ${signup ? 'aria-current="page"' : ''}>Sign up</a>
+    <a href="/setup/sign-in" ${signup ? '' : 'aria-current="page"'}>Sign in</a></nav>`;
+  const action = signup ? 'stream_signup' : admin ? 'stream_admin' : 'stream_filmmaker';
   return workspacePage(title, null, `<section class="sign-in-panel"><h1>${title}</h1>${feedback}
-    <div data-request-link>${siteKey ? `<form method="post" action="${path}/request">
-      <p>Enter the email address linked to your ${admin ? 'admin account' : 'filmmaker account'}. We’ll email you a link that works once and expires in 15 minutes.</p>
-      <label>Email address<input type="email" name="email" autocomplete="email" inputmode="email" required maxlength="254"></label>
-      <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}" data-action="stream_${admin ? 'admin' : 'filmmaker'}" data-size="compact"></div>
-      <button type="submit">Email me a sign-in link</button></form>` : '<p>Email sign-in is currently unavailable. You can still open a private invitation.</p>'}</div>
+    <div class="field-stack" data-request-link>${navigation}
+      ${signup ? '<p>Bring your film to your own site. Join the free pilot to try rentals and downloads with test payments.</p>' : ''}
+      ${siteKey ? `<form method="post" action="${path}/request">
+        <label>Email address<input type="email" name="email" autocomplete="email" inputmode="email" required maxlength="254"></label>
+        ${signup ? `<label><input type="checkbox" name="agreement" value="${agreementVersion}" required><span>I agree to the ${agreement}.</span></label>` : ''}
+        <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}" data-action="${action}" data-size="compact"></div>
+        <button type="submit">${signup ? 'Email me a sign-up link' : 'Email me a sign-in link'}</button>
+        <p class="hint">Your email link works once and expires in 15 minutes.</p></form>` :
+        '<p>Email access is temporarily unavailable. Please try again later.</p>'}
+    </div>
     <form method="post" action="${path}" data-exchange hidden><input type="hidden" name="code">
-      <p>Your private link is ready. Continue to open your ${admin ? 'platform analytics' : 'filmmaker workspace'}.</p>
-      <button type="submit">${admin ? 'Open platform analytics' : 'Open workspace'}</button></form>
-    <a href="${admin ? '/setup/sign-in' : '/setup/admin/sign-in'}">${admin ? 'Filmmaker sign-in' : 'Super admin sign-in'}</a></section>`,
+      ${signup ? `<input type="hidden" name="agreement" value="${agreementVersion}">
+        <p>Confirm your email and accept the ${agreement} to open your workspace.</p>` :
+        `<p>Your private link is ready. Continue to open your ${admin ? 'platform analytics' : 'filmmaker workspace'}.</p>`}
+      <button type="submit">${signup ? 'Agree and create workspace' : admin ? 'Open platform analytics' : 'Open workspace'}</button></form>
+    ${signup ? '' : `<a href="${admin ? '/setup/sign-in' : '/setup/admin/sign-in'}">${admin ? 'Filmmaker sign-in' : 'Super admin sign-in'}</a>`}</section>`,
     { admin, signIn: true, turnstile: Boolean(siteKey) });
 }
 
@@ -177,7 +190,7 @@ export async function createSetup({
       const { r2, stripe: savedStripe } = store.maker(session.owner);
       const state = stripeSetupStateForMode(savedStripe, mode);
       return html(status, renderSettingsPage({
-        filmmaker: { name: session.owner }, csrf: session.csrf,
+        filmmaker: { name: session.email || session.owner }, csrf: session.csrf,
         initialSection: path.startsWith('/setup/stripe/') ? 'payments' : path.startsWith('/setup/r2') ? 'storage' : undefined,
         stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
           canReset: Boolean(state.accountId || state.flow || state.createRequest),
@@ -193,40 +206,44 @@ export async function createSetup({
     if (get && path === '/setup/dark.css') return send(200, 'text/css', darkStyle, commonHeaders);
     if (get && scripts.has(path)) return send(200, 'text/javascript', scripts.get(path), commonHeaders);
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
-    if (get && path === '/setup/home') return redirect(session ? '/setup/dashboard' : '/setup/faq');
     if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(), { faq: true, admin }));
-    const signIn = (status, message = '', error = false) => html(status, signInPage(message, admin, siteKey, error), siteKey ? {
+    if (get && path === agreementPath) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(), { reference: true }));
+    const signup = ['/setup/home', '/setup/sign-up', '/setup/sign-up/request'].includes(path);
+    const showAccess = (status, message = '', error = false) => html(status, accessPage({ message, admin, signup, siteKey, error }), siteKey ? {
       'Content-Security-Policy': csp.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com") +
         "; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com"
     } : {});
-    if (path === basePath + '/sign-in/request') {
-      if (method !== 'POST') return reject(405, 'Use the sign-in form.');
-      if (!siteKey) return signIn(503, 'Email sign-in is temporarily unavailable.', true);
+    if (get && path === '/setup/home') return session ? redirect('/setup/dashboard') : showAccess(200);
+    if (path === basePath + '/sign-in/request' || path === '/setup/sign-up/request') {
+      if (method !== 'POST') return reject(405, 'Use the email form.');
+      if (!siteKey) return showAccess(503, 'Email access is temporarily unavailable.', true);
       let form;
-      try { form = await readForm(req); } catch { return signIn(400, 'Use the sign-in form.', true); }
-      if (!mailbox(form.email)) return signIn(400, 'Enter a valid email address.', true);
+      try { form = await readForm(req); } catch { return showAccess(400, 'Use the email form.', true); }
+      if (!mailbox(form.email)) return showAccess(400, 'Enter a valid email address.', true);
+      if (signup && form.agreement !== agreementVersion) return showAccess(400, 'Read and agree to the filmmaker agreement to sign up.', true);
       const challenge = await verifyChallenge(new Request(origin), env, form['cf-turnstile-response'],
-        { secretEnvNames: ['STREAM_TURNSTILE_SECRET_KEY'], action: 'stream_' + audience });
-      if (!challenge.ok) return signIn(challenge.status, 'The security check could not be verified. Please try again.', true);
-      const delivery = store.requestLogin(form.email, audience);
+        { secretEnvNames: ['STREAM_TURNSTILE_SECRET_KEY'], action: signup ? 'stream_signup' : 'stream_' + audience });
+      if (!challenge.ok) return showAccess(challenge.status, 'The security check could not be verified. Please try again.', true);
+      const delivery = signup ? store.requestSignup(form.email, form.agreement) : store.requestLogin(form.email, audience);
       if (delivery) {
         const home = env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + req.socket.localPort;
-        const link = home + basePath + '/sign-in#magic-link=' + delivery.code;
-        const payload = { from, to: [delivery.email], subject: admin ? 'Sign in to Stream administration' : 'Sign in to Stream',
-          text: 'Open this private link within 15 minutes to sign in to Stream.\n\n' + link + '\n\nIf you didn’t request this link, you can ignore this email.' };
+        const link = home + (delivery.signup ? '/setup/sign-up' : basePath + '/sign-in') + '#magic-link=' + delivery.code;
+        const payload = { from, to: [delivery.email], subject: delivery.signup ? 'Confirm your email for Stream' : admin ? 'Sign in to Stream administration' : 'Sign in to Stream',
+          text: (delivery.signup ? 'To create your filmmaker workspace, open this link and confirm the filmmaker agreement within 15 minutes.' :
+            'Open this private link within 15 minutes to sign in to Stream.') + '\n\n' + link + '\n\nIf you didn’t request this link, you can ignore this email.' };
         void sendStreamEmail({ key: env.RESEND_API_KEY, payload, fetchImpl: mailFetch,
           idempotencyKey: 'stream-login-' + createHash('sha256').update(delivery.code).digest('hex') })
           .then(response => { if (!response.ok) throw new Error(); }).catch(() => console.error('Stream sign-in email delivery failed.'));
       }
-      return signIn(200, 'If this email is linked to an account, a sign-in link will arrive shortly. Check your spam folder, too.');
+      return showAccess(200, signup ? 'Check your inbox for a private link to your workspace. If it hasn’t arrived in a few minutes, check your spam folder or try again.' : 'If this email is linked to an account, a sign-in link will arrive shortly. Check your spam folder, too.');
     }
-    if (path === basePath + '/sign-in') {
-      if (get) return signIn(200);
-      if (method !== 'POST') return reject(405, 'Use the sign-in form.');
+    if (path === basePath + '/sign-in' || path === '/setup/sign-up') {
+      if (get) return showAccess(200);
+      if (method !== 'POST') return reject(405, 'Use the email form.');
       try {
-        const { code } = await readForm(req);
-        const id = store.signIn(code || '', audience);
-        if (!id) return signIn(401, 'This link has expired or was used. Request a fresh sign-in link.', true);
+        const { code, agreement } = await readForm(req);
+        const id = signup ? store.confirmSignup(code || '', agreement) : store.signIn(code || '', audience);
+        if (!id) return showAccess(401, 'This link is no longer valid. Request a fresh email link.', true);
         return redirect(admin ? basePath : '/setup/settings', { 'Set-Cookie': cookie(id, admin ? 12 * 3600 : 14 * 86400) });
       } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
     }
@@ -252,8 +269,9 @@ export async function createSetup({
     }
     const preview = previewPattern.exec(path);
     if (!session) {
-      if (get && (path === '/setup' || path === '/setup/dashboard' || path === '/setup/settings' || path === '/setup/dashboard/new')) return redirect('/setup/sign-in');
-      if (get && callbackPattern.test(path)) return signIn(401, 'Your Stream session has ended. Sign in again and continue from the Stripe card.', true);
+      if (get && path === '/setup') return redirect('/setup/home');
+      if (get && (path === '/setup/dashboard' || path === '/setup/settings' || path === '/setup/dashboard/new')) return redirect('/setup/sign-in');
+      if (get && callbackPattern.test(path)) return showAccess(401, 'Your Stream session has ended. Sign in again and continue from the Stripe card.', true);
       return reject(401, 'Sign in to your filmmaker workspace.');
     }
     if (get && path === '/setup') return redirect('/setup/settings');
@@ -281,7 +299,7 @@ export async function createSetup({
       const port = localPreviewPort(env);
       const previewOrigin = port && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin) ? 'http://127.0.0.1:' + port : viewer;
       const {draft} = store.maker(owner);
-      return html(status, renderDashboard({ csrf: session.csrf, owner, error, draft, completedDraft: Boolean(store.film(owner, draft.id)),
+      return html(status, renderDashboard({ csrf: session.csrf, owner: session.email || owner, error, draft, completedDraft: Boolean(store.film(owner, draft.id)),
         origin: viewer, previewOrigin, selectionFilm, infoSaved: searchParams.get('saved') === 'details',
         selection: searchParams.getAll('include').join(','), poster: searchParams.get('poster'),
         programs: store.programs(owner),

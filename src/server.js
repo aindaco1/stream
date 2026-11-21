@@ -8,6 +8,7 @@ import { createRentalAuthority } from './rental.js';
 import { airplayLeases, captionCues, captionMaster, captionSegment, screenerReference } from './airplay.js';
 import { openFilm } from './media.js';
 import { faqLink, siteFooter } from './site-frame.js';
+import { agreementPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
 import { escapeHtml, filmByline, posterStyles, renderFilmInfo, selectedFields } from './film-embed.js';
@@ -215,12 +216,15 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       if (setup && read && (path === '/' || path === '/faq')) {
         return send(303, 'text/plain', '', { Location: path === '/' ? '/setup/home' : '/setup/faq' });
       }
-      if (path === '/faq') {
+      const hasWorkspace = workspaceOrigin && workspaceOrigin !== origin && (!publicOrigin || workspaceOrigin.startsWith('https://'));
+      if (!setup && read && path === '/' && hasWorkspace) return send(303, 'text/plain', '', { Location: workspaceOrigin + '/' });
+      if (path === '/faq' || path === agreementPath) {
         if (!read) return fail(405);
-        if (workspaceOrigin && (!publicOrigin || workspaceOrigin.startsWith('https://'))) {
-          return send(303, 'text/plain', '', { Location: new URL('/faq', workspaceOrigin).href });
+        if (hasWorkspace) {
+          return send(303, 'text/plain', '', { Location: new URL(path, workspaceOrigin).href });
         }
-        return send(200, 'text/html; charset=utf-8', workspacePage('FAQ', null, renderFilmmakerFaq(), { faq: true, signInHref: '#getting-started' }),
+        return send(200, 'text/html; charset=utf-8', workspacePage(path === '/faq' ? 'FAQ' : 'Filmmaker agreement', null,
+          path === '/faq' ? renderFilmmakerFaq() : renderFilmmakerAgreement(), { faq: path === '/faq', signInHref: '/faq#getting-started' }),
           { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
       if (read && staticFiles.has(path)) {
@@ -590,5 +594,5 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     return { film: await openFilm(sourceFromEnv(env, maker)), authority };
   }, { setup: await createSetup(), publicOrigin: process.env.STREAM_PUBLIC_ORIGIN });
   server.listen(Number(process.env.PORT || 8787), '127.0.0.1', () =>
-    console.log('Setup: ' + (process.env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + server.address().port) + '/setup'));
+    console.log('Stream home: ' + (process.env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + server.address().port) + '/'));
 }

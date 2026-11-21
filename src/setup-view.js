@@ -159,7 +159,7 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
       ])}`);
 }
 
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, signIn = false, signInHref = '/setup/sign-in', turnstile = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, signInHref = '/setup/sign-in', turnstile = false } = {}) {
   const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -186,7 +186,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
         <button class="sign-out" type="submit">Sign out</button></form>` : signIn ? '' : `<a href="${escapeHtml(signInHref)}">Sign in</a>`}</div>
       ${csrf && !admin ? `<nav class="workspace-nav" aria-label="Workspace navigation"><div class="tab-bar">
         <a href="/setup/dashboard"${dashboard && !faq ? current : ''}>Dashboard</a>
-        <a href="/setup/settings"${dashboard || faq ? '' : current}>Settings</a>
+        <a href="/setup/settings"${dashboard || faq || reference ? '' : current}>Settings</a>
       </div></nav>` : ''}</header>
     <main class="setup-shell${faq ? ' filmmaker-help' : ''}" id="main" tabindex="-1">${content}</main>
     ${siteFooter(admin ? '/setup/admin' : '/')}</body></html>`;
