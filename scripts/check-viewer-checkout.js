@@ -801,22 +801,25 @@ try {
   assert.equal(layoutFrames.length, 2);
   await checkProgramLayout(layoutFrames);
   await layouts.close();
-  // Exercise Safari's separate control row in CI as well as on macOS with SafariDriver.
-  const docked = await context.newPage();
-  await docked.addInitScript(() => { HTMLVideoElement.prototype.webkitShowPlaybackTargetPicker = () => {}; });
-  await docked.goto(app + '/embed/first');
-  await docked.locator('video').evaluate(video => { video.muted = true; });
-  await docked.locator('#play').click();
-  const cc = docked.getByRole('combobox', { name:'Subtitles' });
+  // The native WebKit toolbar keeps its PiP button and reserves space for volume.
+  const safari = await context.newPage();
+  await safari.addInitScript(() => { HTMLVideoElement.prototype.webkitShowPlaybackTargetPicker = () => {}; });
+  await safari.goto(app + '/embed/first');
+  await safari.locator('video').evaluate(video => { video.muted = true; });
+  await safari.locator('#play').click();
+  const cc = safari.getByRole('combobox', { name:'Subtitles' });
   await cc.waitFor();
-  await docked.locator('video').evaluate(video => video.pause());
+  await safari.locator('video').evaluate(video => video.pause());
   for (const [width, height] of [[320, 200], [750, 600]]) {
-    await docked.setViewportSize({ width, height });
-    const video = await docked.locator('video').boundingBox();
+    await safari.setViewportSize({ width, height });
+    const video = await safari.locator('video').boundingBox();
     const captions = await cc.boundingBox();
-    assert.ok(video.height > 0 && captions.y >= video.y + video.height - .5 && captions.height >= 44);
+    assert.ok(await safari.locator('#picture-in-picture').isHidden());
+    assert.ok(captions.x >= video.x && captions.y >= video.y && captions.height >= 44);
+    assert.ok(captions.x + captions.width <= video.x + video.width - 55);
+    assert.ok(captions.y + captions.height <= video.y + video.height);
   }
-  await docked.close();
+  await safari.close();
   const programPage = await context.newPage();
   await programPage.goto(host);
   const programFrame = programPage.frame({url:url=>url.pathname === '/embed/' + program.offer.id});

@@ -26,7 +26,7 @@ async function workspace(t) {
   const owner = 'First maker',
     account = 'acct_first';
   const originals = new Map();
-  function film(owner, title, programId) {
+  function film(owner, title, programId, duration = 45) {
     const id = 'f-' + randomUUID(),
       objectKey = id + '.mov',
       bytes = Buffer.from('original ' + id);
@@ -39,7 +39,7 @@ async function workspace(t) {
       title,
       objectKey,
       revision: revisionFor(head),
-      duration: 45,
+      duration,
       extension: 'mov',
       rights
     }, programId);
@@ -403,4 +403,19 @@ test('legacy program uploads are classified once without reclassifying a standal
     assert.ok(reopened.dashboardFilms(owner).some(f=>f.id===later));
     assert.ok(!reopened.programLibrary(owner,id).some(f=>f.id===opening));
   } finally { reopened.close(); }
+});
+
+test('a program caps its preview against its selected title, including an opening video', async t => {
+  const {owner,id,film,save,catalog,first,second,enablePayments} = await workspace(t);
+  const short = film(owner, 'Opening', id, 8.7), feature = film(owner, 'Feature', undefined, 201);
+  const members = [{filmId:short,role:'opening'}, ...[feature,first,second].map(filmId => ({filmId,role:'film'}))];
+  assert.throws(() => save({members, previewFilmId:short, previewSeconds:8}), /7 seconds/);
+  save({members, previewFilmId:short, previewSeconds:7});
+  assert.equal(catalog.programPreview(owner,id).previewSeconds, 7);
+  assert.throws(() => save({members, previewFilmId:null, previewSeconds:181}), /preview length/);
+  save({members, previewFilmId:null, previewSeconds:180});
+  enablePayments();
+  await catalog.publish(owner,id);
+  assert.equal(catalog.get(id).previewId, feature);
+  assert.equal((await (await catalog.open(id)).preview()).seconds, 180);
 });

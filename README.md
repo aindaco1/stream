@@ -30,7 +30,7 @@ Use the **🌓** appearance selector in the filmmaker header to follow your syst
 
 ### Filmmaker dashboard
 
-Open **Dashboard**. **Overview** shows totals, followed by **Films**. On a phone, choose Dashboard from the **Filmmaker workspace** menu. Open a film by its title, set rental and purchase prices, choose 1–720 rental hours and a preview of 0–30 whole seconds, then publish and copy the embed code. A zero-second preview shows the offers immediately. The preview must end before the film does. The filmmaker can change future offers without altering the price or expiry of an existing order.
+Open **Dashboard**. **Overview** shows totals, followed by **Films**. On a phone, choose Dashboard from the **Filmmaker workspace** menu. Open a film by its title, set rental and purchase prices, choose 1–720 rental hours and a preview of 0–180 whole seconds, then publish and copy the embed code. A zero-second preview shows the offers immediately. Leave at least one full second at the end of the selected video. The filmmaker can change future offers without altering the price or expiry of an existing order.
 
 Save an optional synopsis, credits and a filmmaker message under **Film details**. For a published film, select which fields to include under **Embed this film**. The live preview and copyable code show the same player with the same selected fields. Saved edits appear when existing embeds load again. Embeds with no fields selected show the player alone.
 
@@ -171,7 +171,7 @@ Start an individual film rental and choose **AirPlay** in Safari or **Play on TV
 
 A filmmaker can turn on **Rental screener watermark** in a film’s or program’s Prices and playback settings. Rental frames carry an anonymous order reference for four seconds each minute, alternating upper corners. This opt-in uses the on-demand H.264/AAC renderer. Free previews, purchased playback and downloads keep their usual picture. Published program editions retain their watermark setting.
 
-Viewers can use the CC control on the video to choose a subtitle track or turn subtitles off. Compatible browsers also show a picture-in-picture control during playback. Text tracks are delivered as WebVTT. Selecting a picture track renders its images onto that playback rendition. Preview video and captions end at the filmmaker’s cutoff. Stream reads the private original through conditional byte ranges and keeps temporary playback data on the host. The host reserves two concurrent jobs for inspection and playback rendering, and one for scanning a full subtitle track. The first selection of a language in a large file may need a scan of the original. Later requests can reuse its in-memory result. Short previews use their own read and time limits.
+Viewers can use the CC control on the video to choose a subtitle track or turn subtitles off. Compatible browsers also show a picture-in-picture control during playback. Text tracks are delivered as WebVTT. Selecting a picture track renders its images onto that playback rendition. Preview video and captions end at the filmmaker’s cutoff. Stream reads the private original through conditional byte ranges and keeps temporary playback data on the host. The host reserves two concurrent jobs for inspection and playback rendering, and one for longer previews or a full subtitle scan. The first selection of a language in a large file may need a scan of the original. Later requests can reuse its in-memory result. Short previews use their own read and time limits.
 
 ## Reuse the feature-length film
 

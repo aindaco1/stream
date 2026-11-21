@@ -40,7 +40,7 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
       status: 'ready', chargesEnabled: true, payoutsEnabled: true } } });
     store.saveBucket(name, { ...bucket, accessKeyId: 'test', secretAccessKey: 'local-test' });
     const id = 'f-' + randomUUID();
-    store.saveFilm(name, bucket, { id, title, objectKey: 'private.mp4', revision: revisionFor(head), duration: 12,
+    store.saveFilm(name, bucket, { id, title, objectKey: 'private.mp4', revision: revisionFor(head), duration: 12.6,
       rights: { acceptedAt: new Date().toISOString(), version: 'v1', statement: 'Confirmed' } });
     const cookie = 'stream_setup=' + token;
     return { id, account, cookie, csrf: session.csrf, get: () => fetch(origin + '/setup/dashboard', { headers: { Cookie: cookie } }).then(r => r.text()),
@@ -80,6 +80,7 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.equal(invalidPreview.status, 422);
   assert.ok((await invalidPreview.text()).includes('id="' + ada.id + '" open>'), 'Show the film whose settings need correction');
   assert.equal((await ada.post('settings', { ...settings, rentalHours: '721' })).status, 422);
+  assert.equal((await ada.post('settings', { ...settings, previewSeconds:'11' })).status, 303);
   assert.equal((await ada.post('settings', settings)).status, 303);
   assert.equal((await ada.post('publication', { visibility: 'public' })).status, 303);
   const spec = catalog.get(ada.id);
@@ -94,6 +95,11 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.equal((await ada.post('settings', { ...settings, screenerWatermark: 'off' })).status, 303);
   assert.equal(catalog.get(ada.id).screenerWatermark, false);
   assert.equal(spec.previewSeconds, 5);
+  // A previously valid 12-second offer on a 12.6-second film remains sellable.
+  store.setFilmSettings(spec.owner, ada.id, {prices:spec.prices, rentalHours:24, previewSeconds:12});
+  assert.equal(catalog.get(ada.id).previewSeconds, 11);
+  assert.match(await ada.get(), /name="previewSeconds" min="0" max="11" step="1" required value="11"/);
+  assert.equal((await ada.post('settings', settings)).status, 303);
   assert.equal(spec.rentalHours, 24);
   page = await ada.get();
   assert.ok(page.includes(env.STREAM_VIEWER_ORIGIN + '/embed/' + ada.id));

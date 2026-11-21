@@ -10,8 +10,6 @@ if (form) {
   const { opening, closing, previewFilmId, rightsAccepted } = form.elements;
   const runtime = form.querySelector('[data-runtime]');
   const previewSeconds = form.elements.previewSeconds;
-  let editedPreview = false;
-  previewSeconds.addEventListener('input', () => { editedPreview = true; });
   function refresh() {
     const lineup = chosen();
     const selected = new Set(lineup.map(row => row.dataset.id));
@@ -43,9 +41,10 @@ if (form) {
     }
     if (previewFilmId.selectedOptions[0]?.disabled) previewFilmId.value = '';
     const source = previewFilmId.value ? previewFilmId.selectedOptions[0] : lineup[0];
-    const max = source ? Math.min(30, Math.max(0, Math.ceil(Number(source.dataset.duration)) - 1)) : 30;
+    const max = Number((source ?? previewFilmId.options[0]).dataset.previewMax);
+    form.querySelector('.price-fields [data-preview-max]').textContent = String(max);
     previewSeconds.max = String(max);
-    if (!editedPreview && Number(previewSeconds.value) > max) previewSeconds.value = String(max);
+    if (Number(previewSeconds.value) > max) previewSeconds.value = String(max);
     const seconds = Math.round([...lineup, opening.selectedOptions[0], closing.selectedOptions[0]]
       .reduce((sum, item) => sum + Number(item?.dataset.duration || 0), 0));
     runtime.textContent = lineup.length + (lineup.length === 1 ? ' film' : ' films') + ' · ' +

@@ -27,12 +27,9 @@ video { display: block; background: #080808; width: 100%; aspect-ratio: 16 / 9; 
   position: absolute; inset: .4rem .4rem auto auto; display: flex; gap: .125rem;
   transition: opacity .15s ease-out;
 }
-.video-stage.docked-tools { display: grid; grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); }
-.docked-tools > video, .docked-tools > #start-video { grid-area: 1 / 1 / 2 / 2; }
-.docked-tools > .video-tools {
-  position: static; grid-area: 2 / 1; justify-content: flex-end; flex-wrap: wrap;
-  padding-inline: .4rem; background: #111;
-}
+.safari-controls .video-tools { inset: 6px 200px auto auto; }
+.safari-controls.compact-volume .video-tools { inset-inline-end: 60px; }
+.safari-controls.wrapped-tools .video-tools { inset: 55px auto auto 6px; }
 .video-stage.tools-idle .video-tools:not(:has(:is(:focus-visible:not([data-pointer-focus]), select:open))) { opacity: 0; pointer-events: none; }
 .video-tool {
   position: relative; display: grid; place-items: center; width: 44px; height: 44px;

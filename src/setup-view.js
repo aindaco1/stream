@@ -1,6 +1,6 @@
 import { bucketSelection, hasVideoExtension } from './bucket-videos.js';
 import { sumFilmStats } from './analytics.js';
-import { previewSeconds } from './prices.js';
+import { savedPreviewSeconds } from './prices.js';
 import { formatDuration, hidden, priceFields, programOfferSummary } from './offer-fields.js';
 import { payoutCountryOptions } from './payout-countries.js';
 import { faqLink, siteFooter } from './site-frame.js';
@@ -289,7 +289,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
   const cards = films.map(film => {
     const path = '/embed/' + encodeURIComponent(film.id);
     const fields = selectionFilm === film.id ? selection : '';
-    const preview = previewSeconds(film.previewSeconds) ? `<a class="primary-link secondary" href="/setup/preview/${escapeHtml(film.id)}">Watch private preview</a>` : '';
+    const preview = savedPreviewSeconds(film.previewSeconds, film.duration) ? `<a class="primary-link secondary" href="/setup/preview/${escapeHtml(film.id)}">Watch private preview</a>` : '';
     const terms = film.published ? 'Unpublishing closes the preview and new sales. Existing viewers retain paid access.' :
       'Publishing makes this film available to viewers and allows other sites to embed it.';
     return `<details class="dashboard-film" name="films" id="${escapeHtml(film.id)}"${selectionFilm === film.id ? ' open' : ''}>

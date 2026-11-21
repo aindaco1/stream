@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { savedPreviewSeconds } from './prices.js';
 import { savedFilmScope } from './rental.js';
 import { PrivateOriginalUnavailable } from './source.js';
 import { validRights } from './program-store.js';
@@ -43,8 +44,8 @@ export function programCatalog({
     const firstFilm = lineup.find(m => m.role === 'film');
     const previewId = p.previewFilmId || firstFilm.id;
     const preview = lineup.find(m => m.id === previewId);
-    if (!preview || p.previewSeconds >= preview.duration)
-      throw invalid('Choose a preview shorter than its selected video.');
+    const seconds = preview && savedPreviewSeconds(p.previewSeconds, preview.duration);
+    if (seconds == null) throw invalid('Choose a valid preview video and length.');
     return {
       owner,
       id,
@@ -55,7 +56,7 @@ export function programCatalog({
         rentalHours: p.rentalHours,
         ...(p.screenerWatermark === true && {screenerWatermark:true}),
         previewId,
-        previewSeconds: p.previewSeconds,
+        previewSeconds: seconds,
         duration: lineup.reduce((sum, m) => sum + m.duration, 0),
         lineup
       }
@@ -78,7 +79,10 @@ export function programCatalog({
     if ((!available || !account) && !historical) return;
     const snapshot = store.programVersion(id, revision);
     if (!snapshot) return;
-    return { id, owner, p, account: entitled ? null : account, revision, snapshot };
+    const source = snapshot.lineup.find(member => member.id === snapshot.previewId);
+    const seconds = source && savedPreviewSeconds(snapshot.previewSeconds, source.duration);
+    if (seconds == null) return;
+    return { id, owner, p, account: entitled ? null : account, revision, snapshot: { ...snapshot, previewSeconds: seconds } };
   }
   function project(edition) {
     const { id, owner, revision, account, snapshot } = edition;

@@ -4,7 +4,7 @@ import { openFilm, revisionFor } from './media.js';
 import { createThumbnails } from './thumbnails.js';
 import { savedFilmScope } from './rental.js';
 import { BLOCK_SIZE, createR2Source, PrivateOriginalUnavailable, videoContentType } from './source.js';
-import { filmPrices, previewSeconds, rentalHours } from './prices.js';
+import { filmPrices, savedPreviewSeconds, rentalHours } from './prices.js';
 import { stripeSetupStateForMode } from './setup-stripe.js';
 
 const filmId = /^f-[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -65,7 +65,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     if (film?.id !== id || film.programId || !film.bucket || !film.objectKey || !/^[A-Za-z0-9_-]{43}$/.test(film.revision) ||
         typeof film.title !== 'string' || !film.title.trim() || film.title.length > 160 || !validRights(film.rights)) return;
     const prices = filmPrices(film.prices);
-    const seconds = previewSeconds(film.previewSeconds), hours = rentalHours(film.rentalHours);
+    const seconds = savedPreviewSeconds(film.previewSeconds, film.duration), hours = rentalHours(film.rentalHours);
     if (!prices || seconds === null || hours === null || !(film.duration > seconds)) return;
     const account = seller(owner);
     if (!account && !(entitled && store.priorOrderOwner(id) === owner)) return;

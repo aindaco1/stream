@@ -61,7 +61,7 @@ export function renderFilmmakerFaq() {
     </section>
     <section><h2>What’s the difference between renting and buying?</h2>
       <p>A rental lets someone watch for the time you choose, from one hour to 30 days. Their time starts when they pay. Buying lets them watch and download the original file. You can offer either option or both. Sales are final.</p>
-      <p>You can give people up to 30 seconds to watch for free. The default is 10 seconds. Choose zero to show the offers immediately.</p>
+      <p>You can offer up to 180 seconds (3 minutes) for free. Leave at least one full second of the film after the preview. For a program, use the length of the video you chose for the preview. The usual default is 10 seconds. Choose zero to show the offers immediately.</p>
     </section>
     <section><h2>How do I put a film on my site?</h2>
       <p>Open your published film in the Dashboard. Choose the details you want alongside the player and check the live preview. You can include a synopsis, credits or a personal message. Copy the embed code and paste it into your site. Each film has its own checkout, even when several share a page.</p>

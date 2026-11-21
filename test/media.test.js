@@ -126,7 +126,7 @@ test('overlapping requests for different preview lengths each enforce their own 
     const ends = packets(path).map(p => Number(p.pts_time) + Number(p.duration_time));
     assert.ok(Math.abs(Math.max(...ends) - intervals[index]) < .001);
   }
-  for (const invalid of [0, -1, 31, Infinity]) await assert.rejects(film.preview(invalid));
+  for (const invalid of [0, -1, 181, Infinity]) await assert.rejects(film.preview(invalid));
 });
 
 test('separate renders of a rate-limited transcoded preview serve identical bytes for video range requests', async t => {
@@ -140,4 +140,28 @@ test('separate renders of a rate-limited transcoded preview serve identical byte
   const [a,b] = await Promise.all([first.preview(6), second.preview(6)]);
   assert.equal(createHash('sha256').update(a).digest('hex'), createHash('sha256').update(b).digest('hex'));
   assert.ok((await first.preview(6)) === a, 'Range requests share the ready preview while the source is current.');
+});
+
+test('180-second previews preserve the cutoff for video, audio and timed text', async () => {
+  const file = join(directory, 'long.mkv'), text = join(directory, 'long.srt');
+  await writeFile(text, '1\n00:02:59,000 --> 00:03:01,000\nVisible at cutoff\n\n2\n00:03:01,000 --> 00:03:02,000\nPaid only\n');
+  execFileSync('ffmpeg', ['-v', 'error', '-stream_loop', '1', '-i', original, '-i', text,
+    '-map', '0:v', '-map', '0:a', '-map', '1:s', '-c', 'copy', '-t', '183', file]);
+  const long = await openFilm(createFileSource(file), {previewSeconds:180});
+  try {
+    const path = join(directory, 'three-minutes.mp4');
+    const bytes = await long.preview();
+    await writeFile(path, bytes);
+    const info = JSON.parse(execFileSync('ffprobe', ['-v','error','-show_entries','stream=codec_name,duration','-of','json',path]));
+    assert.equal(info.streams.length, 2);
+    for (const stream of info.streams) {
+      assert.ok(Number(stream.duration) > 179.95 && Number(stream.duration) <= 180, JSON.stringify(stream));
+    }
+    const sub = long.subtitleTracks[0].id;
+    const captions = await long.subtitles(sub, {end:180});
+    assert.match(captions, /00:03:00\.000\nVisible at cutoff/);
+    assert.doesNotMatch(captions, /Paid only/);
+    await assert.rejects(long.preview(181));
+    await assert.rejects(long.subtitles(sub, {end:181}));
+  } finally { long.close(); }
 });

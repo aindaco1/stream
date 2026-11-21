@@ -97,7 +97,15 @@ export async function transcode(source, head, media, start, end, preview, pictur
     '-c:v', 'libx264', '-threads', preview ? '1' : '2', '-preset', 'veryfast', '-profile:v', 'baseline', '-bf', '0', '-g', '48', '-crf', '22',
     '-maxrate', '2500k', '-bufsize', '2500k', ...(preview ? ['-movflags', '+empty_moov+frag_keyframe+default_base_moof+negative_cts_offsets', '-f', 'mp4'] :
       ['-muxdelay', '0', '-muxpreload', '0', '-f', 'mpegts']), 'pipe:1'];
-  return mediaProcess(source, head, media.format, { before, after: args, stdin: pictureData, maxOutput: 16 * MiB, maxRead: 512 * MiB });
+  // 2.5 Mbps video plus stereo audio and MP4 overhead, still bounded at three minutes.
+  const maxOutput = preview ? Math.max(16 * MiB, Math.ceil(length * 352_000) + MiB) : 16 * MiB;
+  return mediaProcess(source, head, media.format, { before, after: args, stdin: pictureData, maxOutput,
+    maxRead: preview ? previewReadBudget(length) : 512 * MiB, timeout: preview ? Math.max(90000, length * 2000) : 90000 });
+}
+
+function previewReadBudget(seconds, minimum = 512 * MiB) {
+  // Allow the same source bitrate throughout the longer interval.
+  return Math.max(minimum, Math.ceil(seconds * 8 * MiB));
 }
 
 export async function picturePackets(source, head, media, track, end) {
@@ -105,7 +113,7 @@ export async function picturePackets(source, head, media, track, end) {
     before: end ? ['-t', String(end)] : [],
     after: ['-map', '0:' + track.id.slice(1), '-c:s', 'copy', ...(end ? ['-t', String(end)] : []), '-map_metadata', '-1', '-map_chapters', '-1',
       '-avoid_negative_ts', 'disabled', '-f', 'matroska', 'pipe:1'],
-    maxOutput: end ? 8 * MiB : 64 * MiB, maxRead: end ? 256 * MiB : head.size + 64 * MiB, timeout: end ? 45000 : 900000
+    maxOutput: end ? 8 * MiB : 64 * MiB, maxRead: end ? previewReadBudget(end, 256 * MiB) : head.size + 64 * MiB, timeout: end ? 45000 : 900000
   });
   // FFmpeg writes a Matroska header even when no subtitle packet begins before this preview ends.
   // Inspect our own muxer's top-level elements and Segment children; skip opaque payloads.
@@ -167,7 +175,7 @@ export function safeVtt(raw, end) {
 export async function renderText(source, head, media, track, end, preview) {
   const raw = await mediaProcess(source, head, media.format, {
     before: [...(preview ? ['-t', String(end)] : [])], after: ['-map', '0:' + track.id.slice(1), '-c:s', 'webvtt', '-t', String(end), '-f', 'webvtt', 'pipe:1'],
-    maxOutput: 2 * MiB, maxRead: preview ? 256 * MiB : head.size + 64 * MiB, timeout: preview ? 45000 : 900000
+    maxOutput: 2 * MiB, maxRead: preview ? previewReadBudget(end, 256 * MiB) : head.size + 64 * MiB, timeout: preview ? 45000 : 900000
   });
   return safeVtt(raw.toString('utf8'), end);
 }

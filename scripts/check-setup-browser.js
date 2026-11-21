@@ -497,6 +497,9 @@ async function checkProgramEditor(page) {
   assert.equal(await page.locator('#films').getByRole('button', {name:'Create program'}).count(), 0);
   await page.locator('#programs button.primary').filter({hasText:'Create program'}).click();
   const form = page.locator('.program-editor');
+  const previewLength = form.getByLabel('Free preview (seconds)');
+  assert.equal(await previewLength.getAttribute('max'), '180');
+  await previewLength.fill('180');
   await form.getByLabel('Program title').fill('Two projections');
   await page.setViewportSize({width:320,height:780});
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'program editor fits a narrow phone');
@@ -505,7 +508,12 @@ async function checkProgramEditor(page) {
   await form.getByRole('checkbox', {name:first,exact:true}).check();
   await form.getByRole('checkbox', {name:second,exact:true}).check();
   await form.getByRole('button', {name:'Move ' + second + ' up'}).click();
-  assert.equal(await form.locator('.program-library li').first().locator('label span').innerText(), second);
+  const source = form.locator('[data-slot=films] li').first();
+  assert.equal(await source.locator('label span').innerText(), second);
+  const max = Math.min(180, Math.floor(Number(await source.getAttribute('data-duration'))) - 1);
+  assert.equal(await previewLength.getAttribute('max'), String(max));
+  assert.equal(await form.locator('.price-fields [data-preview-max]').textContent(), String(max));
+  assert.ok(Number(await previewLength.inputValue()) <= max);
   await form.getByLabel('Rental price (USD)').fill('4');
   await form.getByLabel('Download purchase').fill('');
   await form.getByLabel('Free preview (seconds)').fill('4');
