@@ -38,7 +38,9 @@ const offers = new Map(['first', 'second', 'legacy'].map(id => [id, { id, title:
 const program = await programFixture({ clock, directory, text, picture, path, duration:film.duration });
 offers.set(program.offer.id, program.offer);
 const poster = await sharp({create:{width:160,height:90,channels:3,background:'#777'}}).jpeg().toBuffer();
+const views = [];
 const catalog = {
+  recordView(id, kind, eventId, {memberId, seconds}) { views.push({id, kind, eventId, memberId, seconds}); },
   poster: () => poster,
   get: (id, options) => id === program.offer.id && program.withdrawn && !options?.entitled ? undefined : offers.get(id),
   verify: id => offers.get(id), list: () => [...offers.values()],
@@ -642,6 +644,14 @@ try {
   await complete(renter, 'rent', { retry: true, sizes: [[320, 200], [375, 211], [390, 300], [900, 660], [390, 300]], beforeEntry(order) { assert.equal(order.amount, 149); } });
   await renter.locator('video').evaluate(video => { video.currentTime = 120; });
   await renter.waitForFunction(() => document.querySelector('video').currentTime > 120.25, null, { polling: 100 });
+  await renter.waitForFunction(() => document.querySelector('video').currentTime > 121.5);
+  await renter.locator('video').evaluate(video => video.pause());
+  await waitFor(() => views.some(v => v.id === 'first' && v.kind === 'paid' && v.seconds >= 1), 'Real rental playback reports time on pause');
+  const paidView = views.filter(v => v.id === 'first' && v.kind === 'paid');
+  assert.equal(new Set(paidView.map(v => v.eventId)).size, 1);
+  assert.ok(paidView.every(v => v.seconds < 120), 'Seeking past two minutes adds no watch time');
+  assert.ok(views.filter(v => v.kind === 'preview').every(v => v.seconds === undefined));
+  await renter.locator('video').evaluate(video => video.play());
   const subtitleMenu = renter.getByRole('combobox', { name: 'Subtitles' });
   const tv = renter.locator('#airplay');
   await subtitleMenu.focus();
@@ -825,6 +835,10 @@ try {
   const programFrame = programPage.frame({url:url=>url.pathname === '/embed/' + program.offer.id});
   const adjacent = programPage.frames().filter(frame => frame.url() === app + '/embed/first')[1];
   await checkProgramPlayer({ frame:programFrame, neighbor:adjacent, app, fixture:program, preview, complete, context, requests });
+  const programViews = views.filter(v => v.id === program.offer.id && v.kind === 'paid');
+  assert.ok(programViews.some(v => v.seconds >= 1));
+  assert.equal(new Set(programViews.map(v => v.memberId)).size, program.offer.lineup.length);
+  assert.ok(programViews.every(v => v.memberId && Number.isInteger(v.seconds)));
   await programPage.close();
   for (const [token, order] of orders) {
     assert.ok(!requests.some(({ url, referrer }) => [url, referrer].some(address =>

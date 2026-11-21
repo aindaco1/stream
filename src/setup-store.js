@@ -78,6 +78,12 @@ export function openSetupStore(directory) {
       filmId TEXT NOT NULL, kind TEXT NOT NULL, digest TEXT NOT NULL, createdAt INTEGER NOT NULL,
       PRIMARY KEY(filmId,kind,digest)
     );
+    CREATE TABLE IF NOT EXISTS film_watch_progress (digest TEXT PRIMARY KEY, seconds INTEGER NOT NULL);
+    CREATE TRIGGER IF NOT EXISTS forget_watch_progress AFTER DELETE ON film_view_receipts
+      BEGIN DELETE FROM film_watch_progress WHERE digest=OLD.digest; END;
+    CREATE TABLE IF NOT EXISTS program_lineup_counts (
+      filmId TEXT PRIMARY KEY, previews INTEGER NOT NULL, plays INTEGER NOT NULL, timedPlays INTEGER NOT NULL, watchSeconds INTEGER NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS film_view_receipt_age ON film_view_receipts(createdAt);
     CREATE TABLE IF NOT EXISTS connected_test_orders (
       filmId TEXT PRIMARY KEY, owner TEXT NOT NULL, account TEXT NOT NULL, platform TEXT NOT NULL,
@@ -115,6 +121,11 @@ export function openSetupStore(directory) {
       if (!sql('PRAGMA table_info(' + table + ')').all().some(row => row.name === 'audience')) {
         db.exec("ALTER TABLE " + table + " ADD COLUMN audience TEXT NOT NULL DEFAULT 'filmmaker'");
       }
+    }
+    const counts = sql('PRAGMA table_info(film_counts)').all();
+    if (!counts.some(c => c.name === 'watchSeconds')) {
+      db.exec('ALTER TABLE film_counts ADD COLUMN watchSeconds INTEGER NOT NULL DEFAULT 0');
+      db.exec('ALTER TABLE film_counts ADD COLUMN timedPlays INTEGER NOT NULL DEFAULT 0');
     }
     const columns = new Set(sql('PRAGMA table_xinfo(viewer_test_orders)').all().map(row => row.name));
     if (!columns.has('verifiedAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN verifiedAt INTEGER');
@@ -584,19 +595,36 @@ export function openSetupStore(directory) {
       return sql(`SELECT owner FROM viewer_test_orders WHERE filmId=? AND sessionId IS NOT NULL
         UNION ALL SELECT owner FROM connected_test_orders WHERE filmId=? AND intentId IS NOT NULL LIMIT 1`).get(id, id)?.owner;
     },
-    recordView(owner, id, kind, eventId) {
+    recordView(owner, id, kind, eventId, seconds, programId) {
       if (!['preview', 'paid'].includes(kind) || typeof eventId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(eventId)) return false;
+      const timed = seconds !== undefined;
+      if (timed && (kind !== 'paid' || !Number.isSafeInteger(seconds) || seconds < 0 || seconds > 86400)) return false;
       const now = Date.now();
       return transaction(() => {
-        // Retain anonymous retry identifiers for a day; keep only counts thereafter.
+        if (!sql('SELECT 1 FROM films WHERE id=? AND owner=?').get(id, owner)) return false;
+        // Keep anonymous retry identifiers for a day, then only the totals.
         sql('DELETE FROM film_view_receipts WHERE rowid IN (SELECT rowid FROM film_view_receipts WHERE createdAt<? LIMIT 64)').run(now - 86400_000);
-        const digest = hash(JSON.stringify([id, kind, eventId]));
-        const added = sql('INSERT OR IGNORE INTO film_view_receipts SELECT id,?,?,? FROM films WHERE owner=? AND id=?')
-          .run(kind, digest, now, owner, id).changes;
-        if (!added) return false;
-        sql(`INSERT INTO film_counts(filmId,previews,plays) VALUES(?,?,?) ON CONFLICT(filmId)
-          DO UPDATE SET previews=previews+excluded.previews, plays=plays+excluded.plays`)
-          .run(id, kind === 'preview' ? 1 : 0, kind === 'paid' ? 1 : 0);
+        const digest = hash(JSON.stringify(programId ? [id, kind, eventId, programId] : [id, kind, eventId]));
+        const prior = sql(`SELECT r.createdAt,w.seconds FROM film_view_receipts r LEFT JOIN film_watch_progress w USING(digest)
+          WHERE r.filmId=? AND r.kind=? AND r.digest=?`).get(id, kind, digest);
+        // Allow one missed checkpoint when the start and progress arrive out of order.
+        const ageSeconds = Math.max(0, Math.ceil((now - (prior?.createdAt ?? now)) / 1000));
+        const watched = timed ? Math.min(seconds, ageSeconds + 30) : 0;
+        if (prior && (!timed || (prior.seconds !== null && prior.seconds >= watched))) return false;
+        if (!prior) sql('INSERT INTO film_view_receipts(filmId,kind,digest,createdAt) VALUES(?,?,?,?)').run(id, kind, digest, now);
+        if (timed) sql(`INSERT INTO film_watch_progress VALUES(?,?) ON CONFLICT(digest) DO UPDATE SET seconds=excluded.seconds`).run(digest, watched);
+        function increment(table, key) {
+          sql(`INSERT INTO ${table}(filmId,previews,plays,timedPlays,watchSeconds) VALUES(?,?,?,?,?)
+            ON CONFLICT(filmId) DO UPDATE SET previews=previews+excluded.previews, plays=plays+excluded.plays,
+            timedPlays=timedPlays+excluded.timedPlays, watchSeconds=watchSeconds+excluded.watchSeconds`)
+            .run(key, Number(!prior && kind === 'preview'), Number(!prior && kind === 'paid'),
+              Number(timed && prior?.seconds == null), watched - (prior?.seconds ?? 0));
+        }
+        increment('film_counts', id);
+        // Dedicated opening and closing clips already roll into their program.
+        if (programId && !sql('SELECT 1 FROM program_videos WHERE filmId=? AND programId=?').get(id, programId)) {
+          increment('program_lineup_counts', programId);
+        }
         return true;
       });
     },
@@ -605,7 +633,7 @@ export function openSetupStore(directory) {
         FROM programs p JOIN program_versions v ON v.programId=p.id AND v.revision=p.revision
         WHERE p.owner=? AND p.published=1`).all(owner);
       const offers = new Map(editions.map(({id,prices,rentalHours}) => [id, {prices:JSON.parse(prices), rentalHours}]));
-      return store.programStats(owner).map(({id,stats}) => ({ ...store.program(owner,id), publishedOffer:offers.get(id), stats }));
+      return store.programStats(owner).map(({id,stats,lineupViews}) => ({ ...store.program(owner,id), publishedOffer:offers.get(id), stats, lineupViews }));
     },
     bucketFilmTitles(owner, config, keys) {
       const rows = sql(`SELECT json_extract(metadata,'$.objectKey') AS key, json_extract(metadata,'$.title') AS title

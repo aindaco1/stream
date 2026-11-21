@@ -245,7 +245,7 @@ export function programCatalog({
         !v.snapshot.lineup.some(m => m.id === memberId)
       )
         return false;
-      return store.recordView(v.owner, memberId, kind, eventId);
+      return store.recordView(v.owner, memberId, kind, eventId, options.seconds, id);
     }
   };
 }

@@ -82,7 +82,12 @@ function helpButton(name, text, control) {
 }
 
 for (const metric of document.querySelectorAll('[data-field-help]')) {
-  metric.append(' ', helpButton(metric.textContent.trim(), metric.dataset.fieldHelp));
+  const label = metric.textContent.trim();
+  const lastSpace = label.lastIndexOf(' ') + 1;
+  const end = document.createElement('span');
+  end.className = 'metric-label-end';
+  end.append(label.slice(lastSpace), helpButton(label, metric.dataset.fieldHelp));
+  metric.replaceChildren(label.slice(0,lastSpace), end);
 }
 for (const control of document.querySelectorAll('main input:not([type=hidden]), main select, main textarea')) {
   const text = explanation(control);

@@ -143,7 +143,7 @@ export async function checkProgramPlayer({ frame, neighbor, app, fixture, previe
   await next.click();
   await displayed(first);
   await selection('s3');
-  await frame.waitForFunction(() => document.querySelector('video').currentTime > .2);
+  await frame.waitForFunction(() => document.querySelector('video').currentTime > 1.75);
   const expectedRoute = '/title/' + first.id + '/play/index.m3u8?subtitle=s3';
   assert.ok(requests.some(request => request.url.endsWith(expectedRoute)), 'English text switched to the matching English picture rendition.');
   // Finishing a title advances in the same video element without an extra charge.

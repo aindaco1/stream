@@ -14,8 +14,7 @@ export function thumbnailEditor(film, csrf) {
       data-version="${version}" data-csrf="${escapeHtml(csrf)}" data-url="${url}">
       <noscript>Enable JavaScript to preview and save a thumbnail.</noscript>
       <div class="thumbnail-tools">
-        <div class="thumbnail-upload"><label>Thumbnail image<input type="file" accept="image/jpeg,image/png,image/webp" aria-describedby="thumbnail-help-${id}"></label>
-          <p class="hint" id="thumbnail-help-${id}">JPEG, PNG or WebP, up to 8 MB. Recommended size is 1920 × 1080 pixels.</p></div>
+        <div class="thumbnail-upload"><label>Thumbnail image<input type="file" accept="image/jpeg,image/png,image/webp"></label></div>
         <button type="button" class="secondary" data-reframe${version ? '' : ' hidden'}>Adjust saved framing</button>
         <fieldset class="thumbnail-framing" hidden><legend>Framing</legend><div class="thumbnail-sliders">${controls}</div></fieldset>
         <div class="film-actions"><button type="submit" disabled>Save thumbnail</button>

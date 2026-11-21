@@ -197,6 +197,23 @@ test('only playback events count views, and disabled previews and rejected event
   assert.equal((await post('preview ' + randomUUID())).status, 403);
   assert.equal((await post('paid ' + randomUUID(), auth)).status, 200);
   assert.deepEqual(counts(), [1, 2]);
+  const timed = () => {
+    const { timedPlays, watchSeconds } = store.dashboardFilms(owner)[0].stats;
+    return [timedPlays, watchSeconds];
+  };
+  assert.deepEqual(timed(), [0, 0], 'older players report starts only');
+  for (const body of ['paid ' + event + ' -1', 'paid ' + event + ' 86401', 'preview ' + event + ' 2']) {
+    assert.equal((await post(body, auth)).status, 400);
+  }
+  // The last update can arrive before the start when a tab closes.
+  for (const duration of [10, 0, 4, 10, 14]) assert.equal((await post('paid ' + event + ' ' + duration, auth)).status, 200);
+  assert.deepEqual(counts(), [1, 2]);
+  assert.deepEqual(timed(), [1, 14]);
+  assert.equal((await post('paid ' + randomUUID() + ' 2', auth)).status, 200);
+  assert.deepEqual(timed(), [2, 16]);
+  allowed = false;
+  assert.equal((await post('paid ' + event + ' 15', auth)).status, 403);
+  assert.deepEqual(timed(), [2, 16]);
   assert.equal(reads, mediaReads);
 });
 

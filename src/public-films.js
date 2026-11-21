@@ -184,7 +184,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
       if (isProgramId(id)) return programs.recordView(id,kind,eventId,options);
       const entry = record(id, { entitled: kind === 'paid' });
       if (!entry || (kind === 'preview' && !entry.spec.previewSeconds)) return false;
-      return store.recordView(entry.spec.owner, id, kind, eventId);
+      return store.recordView(entry.spec.owner, id, kind, eventId, options?.seconds);
     },
     list() {
       const films = [];

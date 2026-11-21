@@ -15,6 +15,7 @@ import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
+  ['/watch-time.js', ['../public/watch-time.js', 'text/javascript']],
   ['/airplay.js', ['../public/airplay.js', 'text/javascript']],
   ['/film-embed.js', ['./film-embed.js', 'text/javascript']],
   ['/program-lineup.css', ['../public/program-lineup.css', 'text/css']],
@@ -310,13 +311,15 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           const token = recovery.redeem(spec, value);
           return token ? send(200, 'application/json', JSON.stringify({ token })) : fail(403);
         }
-        const [first, second, ...extra] = value.split(' ');
+        const [first, second, duration, ...extra] = value.split(' ');
         if (extra.length) return fail(400);
         if (action === 'position') {
+          if (duration !== undefined) return fail(400);
           if (!/^[\w-]{43}$/.test(first) || !/^\d{1,5}$/.test(second) || Number(second) > 14400) return fail(400);
           if (!await checkout.position({ offer: spec, token: first, seconds: Number(second), memberId })) return fail(403);
         } else {
           if (!['preview','paid'].includes(first) || !/^[a-f0-9-]{36}$/.test(second)) return fail(400);
+          if (duration !== undefined && (first !== 'paid' || !/^(0|[1-9]\d{0,4})$/.test(duration) || Number(duration) > 86400)) return fail(400);
           if (spec.type === 'program' && (first === 'paid') !== Boolean(memberId)) return fail(403);
           if (first === 'preview') {
             const published = lookup(id);
@@ -328,7 +331,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
               if (!await checkout.accessAllowed({ offer: spec, kind: verified.access || 'rent', orderId: verified.orderId, rentalExpiresAt: verified.rentalExpiresAt })) return fail(403);
             } catch { return fail(403); }
           }
-          catalog.recordView?.(id, first, second, {revision:spec.revision, memberId:memberId || spec.previewId});
+          catalog.recordView?.(id, first, second, {revision:spec.revision, memberId:memberId || spec.previewId, seconds:duration === undefined ? undefined : Number(duration)});
         }
         return send(200, 'application/json', '{}');
       }

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
+import { openSetupStore } from '../src/setup-store.js';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { revisionFor } from '../src/media.js';
@@ -124,9 +126,9 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
     if (paid) store.reconcileViewerPayment(store.viewerOrderById(order.orderId), { intentId: 'pi_' + randomUUID(), chargeId: 'ch_' + randomUUID(),
       paidAt: Math.floor(Date.now() / 1000), refundedAmount: refund, disputeStatus: null, revocationReason: null, stripeFeeCents: kind === 'buy' ? 60 : null });
   }
-  assert.deepEqual(store.dashboardFilms('Alice')[0].stats, { previews: 1, plays: 1, rentals: 1, purchases: 1, revenue: 600,
+  assert.deepEqual(store.dashboardFilms('Alice')[0].stats, { previews: 1, plays: 1, timedPlays: 0, watchSeconds: 0, rentals: 1, purchases: 1, revenue: 600,
     filmTaxFees: 0, tipTaxFees: 0, pendingTaxFees: 0, estimatedFees: 79, reportedFees: 60, netRevenue: 329, estimatedOrders: 1, platformTips: 40, taxCollected: 0, transfersToReview: 0 });
-  assert.deepEqual(store.dashboardFilms('Benny')[0].stats, { previews: 0, plays: 0, rentals: 0, purchases: 0, revenue: 0,
+  assert.deepEqual(store.dashboardFilms('Benny')[0].stats, { previews: 0, plays: 0, timedPlays: 0, watchSeconds: 0, rentals: 0, purchases: 0, revenue: 0,
     filmTaxFees: 0, tipTaxFees: 0, pendingTaxFees: 0, estimatedFees: 0, reportedFees: 0, netRevenue: 0, estimatedOrders: 0, platformTips: 0, taxCollected: 0, transfersToReview: 0 });
   const platform = store.platformReport(null);
   assert.equal(platform.total.films, 2);
@@ -140,6 +142,11 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.match(overview, /\$6\.00/);
   assert.match(overview, /data-field-help="[^"]*estimated for 1 payment\."[^>]*>Net Revenue</);
   assert.match(overview, /data-field-help="[^"]*reported \$0\.60 in processing fees on 1 payment\."[^>]*>Estimated card fees</);
+  assert.match(overview, />Avg\. watch time<\/dt><dd>—<\/dd>/);
+  assert.match(overview, />Sales<\/dt><dd>2<\/dd>/);
+  for (const seconds of [0, 10, 20]) catalog.recordView(ada.id, 'paid', randomUUID(), {seconds});
+  const timed = (await ada.get()).split('id="overview"')[1].split('</section>')[0];
+  assert.match(timed, />Avg\. watch time<\/dt><dd>10 sec<\/dd>/, 'legacy plays stay out of the average');
   assert.match(overview, /href="\/faq#dashboard-analytics"/);
   assert.equal((await ada.post('settings', { ...settings, previewSeconds: '0' })).status, 303);
   assert.equal(catalog.recordView(ada.id, 'preview', randomUUID()), false);
@@ -231,4 +238,46 @@ test('program editor protects private drafts, enforces ownership and rejects sta
   assert.equal(saved.published,false);
   assert.equal((await maker.get('/setup/preview/'+id)).status,422);
   assert.equal((await maker.get('/embed/'+id)).status,404);
+});
+
+
+test('existing view counts survive migration, retry cleanup and reopening the store', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'stream-watch-migration-'));
+  t.after(() => rm(directory, {recursive:true, force:true}));
+  const path = join(directory, 'setup.sqlite');
+  const id = 'f-' + randomUUID(), eventId = randomUUID();
+  const digest = createHash('sha256').update(JSON.stringify([id,'paid',eventId])).digest('hex');
+  const old = new DatabaseSync(path);
+  old.exec(`CREATE TABLE film_counts(filmId TEXT PRIMARY KEY, previews INTEGER NOT NULL, plays INTEGER NOT NULL);
+    CREATE TABLE film_view_receipts(filmId TEXT, kind TEXT, digest TEXT, createdAt INTEGER, PRIMARY KEY(filmId,kind,digest));`);
+  old.prepare('INSERT INTO film_counts VALUES(?,3,5)').run(id);
+  old.prepare("INSERT INTO film_view_receipts VALUES(?,'paid',?,?)").run(id, digest, Date.now());
+  old.close();
+  const store = openSetupStore(directory);
+  const bucket = {accountId:'a'.repeat(32), bucket:'test', jurisdiction:'default'};
+  try {
+    store.invite('Test');
+    store.saveBucket('Test', {...bucket, accessKeyId:'demo', secretAccessKey:'demo'});
+    store.saveFilm('Test', bucket, {id, title:'Existing film', objectKey:'clip.mp4'});
+    const counts = () => store.dashboardFilms('Test')[0].stats;
+    assert.deepEqual([counts().previews,counts().plays,counts().timedPlays,counts().watchSeconds],[3,5,0,0]);
+    assert.equal(store.recordView('Test',id,'paid',eventId),false);
+    assert.equal(store.recordView('Test',id,'paid',eventId,7),true);
+    assert.equal(store.recordView('Test',id,'paid',eventId,7),false);
+  } finally { store.close(); }
+  const oldWriter = new DatabaseSync(path);
+  // Older binaries use this exact INSERT shape during a rolling restart.
+  oldWriter.prepare("INSERT INTO film_view_receipts SELECT id,'preview','legacy-other',0 FROM films WHERE id=?").run(id);
+  oldWriter.prepare('UPDATE film_view_receipts SET createdAt=0 WHERE digest=?').run(digest);
+  oldWriter.close();
+  const restored = openSetupStore(directory);
+  try {
+    restored.recordView('Test', id, 'paid', randomUUID(), 3);
+    const {plays,timedPlays,watchSeconds} = restored.dashboardFilms('Test')[0].stats;
+    assert.deepEqual([plays,timedPlays,watchSeconds],[6,2,10]);
+  } finally { restored.close(); }
+  const check = new DatabaseSync(path, {readOnly:true});
+  try {
+    assert.equal(check.prepare('SELECT 1 FROM film_watch_progress WHERE digest=?').get(digest),undefined);
+  } finally { check.close(); }
 });

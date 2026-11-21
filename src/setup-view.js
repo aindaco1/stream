@@ -190,21 +190,31 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     ${siteFooter(admin ? '/setup/admin' : '/setup/dashboard')}</body></html>`;
 }
 
-const salesLabels = {
-  rentals: 'Rentals', purchases: 'Purchases',
-  revenue: 'Revenue', netRevenue: 'Net Revenue', estimatedFees: 'Estimated card fees', filmTaxFees: 'Film share of Stripe Tax fees', taxCollected: 'Tax charged'
+const primaryLabels = { plays: 'Paid plays', averageWatch: 'Avg. watch time', sales: 'Sales', netRevenue: 'Net Revenue' };
+const detailLabels = {
+  previews: 'Preview starts', rentals: 'Rentals', purchases: 'Purchases', revenue: 'Revenue',
+  estimatedFees: 'Estimated card fees', filmTaxFees: 'Film share of Stripe Tax fees', taxCollected: 'Tax charged'
 };
-const statsLabels = { previews: 'Preview starts', plays: 'Paid plays', ...salesLabels };
-const platformLabels = { ...statsLabels, platformTips: 'Platform tips after tax and fees', tipTaxFees: 'Tip share of Stripe Tax fees', transfersToReview: 'Transfers to review' };
+const platformDetails = { ...detailLabels, platformTips: 'Platform tips after tax and fees', tipTaxFees: 'Tip share of Stripe Tax fees', transfersToReview: 'Transfers to review' };
+const platformLabels = {...primaryLabels, ...platformDetails};
 const moneyFields = new Set(['revenue', 'netRevenue', 'estimatedFees', 'filmTaxFees', 'tipTaxFees', 'platformTips', 'taxCollected']);
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
-const displayStat = (stats, key) => moneyFields.has(key) ? usd.format(stats[key] / 100) : String(stats[key]);
-function statsList(stats, labels = statsLabels) {
+function displayStat(stats, key) {
+  if (key === 'sales') return String(stats.rentals + stats.purchases);
+  if (key === 'averageWatch') {
+    if (!stats.timedPlays) return '—';
+    return formatDuration(Math.round(stats.watchSeconds / stats.timedPlays)) || '0 sec';
+  }
+  return moneyFields.has(key) ? usd.format(stats[key] / 100) : String(stats[key]);
+}
+function statsList(stats, details = detailLabels) {
   const reported = stats.rentals + stats.purchases - stats.estimatedOrders;
   const payments = n => n + (n === 1 ? ' payment' : ' payments');
   const explanations = {
     previews: 'How many times a free preview started. Someone can watch more than once.',
     plays: 'How many times a rented or purchased video started playing. Watching another title in a program can count as another play.',
+    averageWatch: 'How long viewers watched, on average, each time they played a paid title. Pauses, buffering and skipped footage add no time. A dash means no plays have been timed yet.',
+    sales: 'Completed rentals and purchases combined. Buying or renting an entire program counts as one sale.',
     rentals: 'Completed rental payments. Renting a whole program counts once.',
     purchases: 'Completed purchases that include a download. Buying a whole program counts once.',
     revenue: 'The film and program prices viewers paid, before fees or refunds. Tips and sales tax are counted separately.',
@@ -219,9 +229,11 @@ function statsList(stats, labels = statsLabels) {
     tipTaxFees: 'The part of the confirmed Stripe Tax fee paid from Dust Wave’s tip.',
     transfersToReview: 'Payments with refunds or disputes that may need a transfer adjustment. Open Stripe to review them.'
   };
-  return '<dl class="film-stats">' + Object.entries(labels).map(([key, label]) =>
+  const list = labels => '<dl class="film-stats">' + Object.entries(labels).map(([key, label]) =>
     `<div><dt data-field-help="${escapeHtml(explanations[key])}">${label}</dt><dd>${displayStat(stats, key)}</dd></div>`
   ).join('') + '</dl>';
+  return `<div class="analytics-summary">${list(primaryLabels)}
+    <details class="analytics-breakdown"><summary>Viewing and sales breakdown</summary>${list(details)}</details></div>`;
 }
 
 const analyticsGuide = '<p class="hint"><a href="/faq#dashboard-analytics">How these numbers are calculated</a></p>';
@@ -235,10 +247,11 @@ export function renderPlatformDashboard(csrf, report) {
     return '/setup/admin' + (query.size ? '?' + escapeHtml(query.toString()) : '');
   };
   const platform = owner === null;
-  const headers = Object.values(platformLabels).map(label => `<th scope="col">${label}</th>`).join('');
+  const detailColumn = key => key in platformDetails ? ' class="detail-column"' : '';
+  const headers = Object.entries(platformLabels).map(([key, label]) => `<th scope="col"${detailColumn(key)}>${label}</th>`).join('');
   const tableRows = rows.map(row => {
     const name = platform ? `<a href="${url(row.name)}">${escapeHtml(row.name)}</a>` : escapeHtml(row.title);
-    const cells = Object.keys(platformLabels).map(key => `<td>${displayStat(row, key)}</td>`).join('');
+    const cells = Object.keys(platformLabels).map(key => `<td${detailColumn(key)}>${displayStat(row, key)}</td>`).join('');
     return `<tr><th scope="row">${name}</th>${platform ? `<td>${row.films}</td>` : ''}${cells}</tr>`;
   }).join('');
   const paging = pages > 1 ? `<nav class="film-actions" aria-label="Report pages">
@@ -248,10 +261,10 @@ export function renderPlatformDashboard(csrf, report) {
     <div class="workspace-intro">${platform ? '' : '<a href="/setup/admin">All filmmakers</a>'}
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
       <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films${total.programs ? ' · ' + total.programs + ' programs' : ''}</p></div>
-    <section class="film-card"><h2>Overview</h2>${statsList(total, platformLabels)}${analyticsGuide}
+    <section class="film-card"><h2>Overview</h2>${statsList(total, platformDetails)}${analyticsGuide}
       ${total.transfersToReview ? '<p class="hint">Review refunded or disputed marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
     <section class="film-list"><h2>${platform ? 'Filmmakers' : total.programs ? 'Films and programs' : 'Films'}</h2>
-      ${tableRows ? `<div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
+      ${tableRows ? `<label class="analytics-columns"><input type="checkbox"> Show detailed metrics</label><div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
         <th scope="col">${platform ? 'Filmmaker' : 'Film'}</th>${platform ? '<th scope="col">Films</th>' : ''}${headers}</tr></thead><tbody>${tableRows}</tbody></table></div>` : '<p>No results yet.</p>'}
       ${paging}</section>`, { admin: true });
 }
@@ -327,7 +340,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
       <div class="film-panel">${program.unavailableTitle ? `<p class="feedback error">Sales are paused because the original file for <strong>${escapeHtml(program.unavailableTitle)}</strong> changed or is missing. Restore the original in storage, or edit the lineup to replace or remove this title. Publish the program again to reopen sales.</p>` : ''}
       <div class="film-actions"><a class="primary-link" href="/setup/program/${id}">Edit program</a>
       ${count >= 2 ? `<a href="/setup/preview/${id}">Private program preview</a>` : ''}</div>
-      ${statsList(program.stats, salesLabels)}
+      ${statsList({...program.stats, ...program.lineupViews})}
       ${program.published ? embedBuilder(program, origin + path, previewOrigin + path, fields, true) +
         `<form method="post" action="/setup/program/${id}">${hidden('csrf', csrf)}${hidden('version', program.version)}
         <button class="secondary" name="action" value="unpublish">Unpublish program</button></form>` : ''}
@@ -343,8 +356,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
     <p class="account">Signed in as ${escapeHtml(owner)}</p></div>
     ${error ? `<div class="feedback error" role="alert">${escapeHtml(error)}</div>` : ''}
     <section class="film-card" id="overview"><h2>Overview</h2>${statsList(totals)}
-      ${analyticsGuide}
-      <a href="/setup/settings#payments">Payment settings</a></section>
+      <div class="analytics-links">${analyticsGuide}<a href="/setup/settings#payments">Payment settings</a></div></section>
     <section class="film-list" id="films"><header class="film-list-header"><h2>Films</h2><div class="film-actions">${add}</div></header>
       ${cards || '<p>You have no saved films yet.</p>'}</section>
     <section class="film-list" id="programs"><header class="film-list-header"><h2>Programs</h2><div class="film-actions">${continueVideo}${createProgram}</div></header>

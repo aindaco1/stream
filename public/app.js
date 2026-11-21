@@ -1,6 +1,7 @@
 import { attachSubtitles } from './subtitles.js';
 import { attachAirPlay, requestAirPlayLease } from './airplay.js';
 import { attachVideoControls } from './video-controls.js';
+import { trackWatchTime } from './watch-time.js';
 import { attachProgram } from './program-player.js';
 import './select-focus.js';
 
@@ -8,6 +9,7 @@ const video = document.querySelector('video');
 const play = document.querySelector('#play');
 const stagePlay = document.querySelector('#start-video');
 const status = document.querySelector('#status');
+const watchTime = trackWatchTime(video);
 const videoControls = attachVideoControls(video, status);
 const airPlay = attachAirPlay(video, status);
 const filmId = location.pathname.split('/')[2] || 'clock';
@@ -100,6 +102,7 @@ if (!receipt && document.body.dataset.checkout === 'true') {
 }
 
 function stopPlayback(keepNativeSource = false) {
+  watchTime.stop();
   playbackGeneration++;
   airPlay.setRentalActive(false);
   clearTimeout(renewal);
@@ -372,9 +375,10 @@ function bookmark(force = false) {
 
 video.addEventListener('timeupdate', () => bookmark());
 for (const event of ['pause','seeked','ended']) video.addEventListener(event, () => bookmark(true));
-document.addEventListener('visibilitychange', () => { if (document.hidden) bookmark(true); });
-window.addEventListener('pagehide', () => bookmark(true));
+document.addEventListener('visibilitychange', () => { if (document.hidden) { watchTime.flush(); bookmark(true); } });
+window.addEventListener('pagehide', () => { watchTime.flush(); bookmark(true); });
 document.addEventListener('stream-access-ended', () => {
+  watchTime.stop();
   receipt = undefined;
   paid = false;
   delete document.body.dataset.access;
@@ -393,10 +397,15 @@ video.addEventListener('playing', () => {
   video.classList.remove('preview-ended');
   if (counted || !viewId || document.body.dataset.checkout !== 'true') return;
   counted = true;
-  const headers = { 'Content-Type': 'text/plain' };
-  if (paid) headers.Authorization = 'Bearer ' + playGrant;
-  fetch(mediaPrefix() + '/view', { method: 'POST', headers, body: (paid ? 'paid ' : 'preview ') + viewId,
-    credentials: 'omit', referrerPolicy: 'no-referrer' }).catch(() => {});
+  const url = mediaPrefix() + '/view', id = viewId;
+  function report(seconds) {
+    const headers = { 'Content-Type': 'text/plain' };
+    if (seconds !== undefined) headers.Authorization = 'Bearer ' + playGrant;
+    fetch(url, {method:'POST', headers, body:seconds === undefined ? 'preview ' + id : 'paid ' + id + ' ' + seconds,
+      keepalive:true, credentials:'omit', referrerPolicy:'no-referrer'}).catch(() => {});
+  }
+  if (paid) watchTime.start(report);
+  else report();
 });
 video.addEventListener('ended', () => {
   if (paid) {

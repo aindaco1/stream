@@ -124,7 +124,17 @@ async function checkFieldHelp(section) {
 async function checkOverviewHelp(page) {
   const overview = page.locator('#overview');
   const buttons = overview.getByRole('button', {name:/^Help for /});
+  assert.equal(await buttons.count(), 4);
+  const breakdown = overview.locator('.analytics-breakdown');
+  await breakdown.locator('summary').click();
   assert.equal(await buttons.count(), await overview.locator('dt').count());
+  await breakdown.locator('summary').click();
+  const iconGap = await overview.locator('.metric-label-end').first().evaluate(end => {
+    const text = document.createRange();
+    text.selectNodeContents(end.firstChild);
+    return end.querySelector('svg').getBoundingClientRect().left - text.getBoundingClientRect().right;
+  });
+  assert.ok(iconGap >= 0 && iconGap <= 6, 'The info icon sits next to the final word');
   const button = overview.getByRole('button', {name:'Help for Net Revenue',exact:true});
   const tip = page.getByRole('tooltip');
   await button.hover();
@@ -136,7 +146,7 @@ async function checkOverviewHelp(page) {
   await tip.waitFor();
   await page.getByRole('heading', {name:'Overview',exact:true}).click();
   await tip.waitFor({state:'hidden'});
-  await button.focus();
+  await overview.getByRole('button', {name:'Help for Sales',exact:true}).focus();
   await page.keyboard.press('Tab');
   await tip.waitFor();
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-expanded')), 'true');
@@ -152,6 +162,7 @@ async function checkTouchHelp(page) {
     const phone = await context.newPage();
     await phone.goto(page.url());
     const overview = phone.locator('#overview');
+    await overview.locator('.analytics-breakdown summary').tap();
     const trigger = overview.getByRole('button', {name:'Help for Estimated card fees',exact:true});
     const tip = phone.getByRole('tooltip');
     await trigger.tap();
@@ -175,7 +186,10 @@ async function checkThumbnails(page, publicUrl, fixtureBucket) {
   await checkFieldHelp(form);
   const save = form.getByRole('button', { name: 'Save thumbnail' });
   assert.equal(await form.locator('input[type=password]').count(), 0);
-  assert.ok(await section.getByText(/1920 × 1080/).isVisible());
+  assert.equal(await section.getByText(/1920 × 1080/).count(), 0);
+  await form.getByRole('button', {name:'Help for Thumbnail image',exact:true}).click();
+  assert.match(await page.getByRole('tooltip').innerText(), /1920 × 1080.*8 MB/);
+  await page.keyboard.press('Escape');
   await form.getByLabel('Thumbnail image').setInputFiles({ name: 'large.jpg', mimeType: 'image/jpeg', buffer: Buffer.alloc(8 * 1024 ** 2 + 1) });
   await form.getByText('Choose a JPEG, PNG or WebP up to 8 MB.', { exact: true }).waitFor();
   assert.ok(await save.isDisabled());
@@ -201,6 +215,9 @@ async function checkThumbnails(page, publicUrl, fixtureBucket) {
   const mobilePreview = await form.locator('canvas').boundingBox();
   const mobileZoom = await form.getByLabel('Zoom').boundingBox();
   assert.ok(mobilePreview.y >= mobileFile.y + mobileFile.height && mobileZoom.y >= mobilePreview.y + mobilePreview.height);
+  const overflow = await page.evaluate(() => [...document.querySelectorAll('main *')].filter(e =>
+    e.getBoundingClientRect().right > innerWidth + 1).slice(0, 5).map(e => e.tagName + '.' + e.className));
+  assert.deepEqual(overflow, [], 'No dashboard controls extend beyond the mobile viewport');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   if (evidence) await section.screenshot({ path: path.join(evidence, 'thumbnail-editor-mobile.png') });
   await form.getByLabel('Zoom').fill('200');
@@ -978,6 +995,7 @@ try {
   report.cloudflareSetup = { guidedTokenConnections: 2, selectedBucketWithKeyPair: 1, manualConnections: 2, handledWrongTokenAndKey: true };
   report.passed = true;
 } catch (error) {
+  report.at = error.stack?.match(/check-setup-browser\.js:\d+:\d+/)?.[0];
   report.passed = false;
   report.lastNavigations = trace.slice(-5);
   report.error = String(error.message).replace(/https?:\/\/[^\s]+/g, '[URL]').replace(/[\w.-]{28,}/g, '[redacted]').slice(0, 400);

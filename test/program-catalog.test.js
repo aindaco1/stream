@@ -226,6 +226,22 @@ test('orders pin the lineup, terms, originals and member play counts across edit
   assert.equal(store.dashboardFilms(owner).find(f => f.id === second).stats.plays, 1);
   assert.equal(store.platformReport(null).total.plays, 1);
   assert.equal(store.programs(owner)[0].stats.plays, 0);
+  const eventId = randomUUID();
+  for (const seconds of [0, 10, 20]) {
+    assert.ok(catalog.recordView(id, 'paid', eventId, {revision:initial.revision, memberId:second, seconds}));
+  }
+  assert.ok(catalog.recordView(id, 'paid', randomUUID(), {revision:initial.revision, memberId:first, seconds:6}));
+  await catalog.publish(owner, second);
+  assert.ok(catalog.recordView(second, 'paid', randomUUID(), {seconds:4}));
+  const programViews = store.programs(owner)[0].lineupViews;
+  assert.deepEqual(programViews, {previews:0, plays:3, timedPlays:2, watchSeconds:26});
+  const film = store.dashboardFilms(owner).find(f => f.id === second);
+  assert.deepEqual([film.stats.timedPlays,film.stats.watchSeconds],[2,24]);
+  for (const report of [store.platformReport(null), store.platformReport(owner)]) {
+    assert.deepEqual([report.total.plays,report.total.timedPlays,report.total.watchSeconds],[4,3,30]);
+  }
+  const programRow = store.platformReport(owner).rows.find(row => row.id === id);
+  assert.equal(programRow.watchSeconds,26);
   store.setFilmPublication(owner, first, false);
   assert.equal(catalog.get(id), undefined);
   assert.equal(store.program(owner, id).published, false);
@@ -356,6 +372,7 @@ test('program uploads have one editor, keep their original edition, and count to
   const original = catalog.get(id);
   assert.equal(original.lineup[0].title,intro.title);
   assert.ok(catalog.recordView(id,'preview',randomUUID()));
+  assert.equal(store.programs(owner).find(p=>p.id===id).lineupViews.previews,1);
   const order = store.reserveViewerOrder({...original,tokenHash:'original-cut',kind:'buy',amount:800,
     platform:'acct_platform',origin:'http://localhost'});
   store.bindViewerSession(order.orderId,'cs_test_originalcut');
