@@ -470,7 +470,7 @@ async function checkProgramEditor(page) {
   await form.getByRole('button', {name:'Move ' + second + ' up'}).click();
   assert.equal(await form.locator('.program-library li').first().locator('label span').innerText(), second);
   await form.getByLabel('Rental price (USD)').fill('4');
-  await form.getByLabel('Download purchase').fill('8');
+  await form.getByLabel('Download purchase').fill('');
   await form.getByLabel('Free preview (seconds)').fill('4');
   await form.getByRole('button', {name:'Add a new opening video'}).click();
   await page.getByRole('heading', {name:'Add opening video'}).waitFor();
@@ -525,6 +525,29 @@ async function checkProgramEditor(page) {
   }
   const preview = card.locator('.film-sharing iframe');
   assert.match(await preview.getAttribute('src'),/show=synopsis%2Ccredits%2Cmessage/);
+  const embedUrl = await preview.getAttribute('src');
+  const publishedBuy = async () => {
+    const response = await page.request.get(embedUrl);
+    assert.equal(response.status(),200);
+    return /data-buy="([^"]*)"/.exec(await response.text())[1];
+  };
+  const pricing = card.getByRole('complementary',{name:'Unpublished pricing'});
+  assert.equal(await publishedBuy(),'');
+  await card.getByRole('link',{name:'Edit program'}).click();
+  await form.getByLabel('Download purchase').fill('10');
+  await form.getByRole('button',{name:'Save draft',exact:true}).click();
+  await page.getByRole('link',{name:'Back to Dashboard'}).click();
+  await pricing.waitFor();
+  assert.equal(await pricing.locator('p').first().innerText(),'Published Rent $4.00 for 48 hours');
+  assert.match(await pricing.locator('p').nth(1).innerText(),/Buy for \$10\.00 with ZIP download/);
+  assert.equal(await publishedBuy(),'','a draft cannot start a public purchase');
+  await pricing.getByRole('link',{name:'Preview saved draft'}).click();
+  await page.getByText(/Buy for \$10\.00 with ZIP download/).waitFor();
+  await page.getByRole('link',{name:'Back to program'}).click();
+  await form.getByRole('button',{name:'Publish changes'}).click();
+  await card.getByRole('heading',{name:'Published embed preview'}).waitFor();
+  assert.equal(await publishedBuy(),'1000','an existing embed gets the published download price');
+  assert.equal(await pricing.count(),0,'no pending prices after publication');
   for (const input of await card.getByRole('checkbox').all()) await input.uncheck();
   assert.match(await card.getByLabel('Embed code').inputValue(),/show=none/);
   for (const width of [320, 1024]) {

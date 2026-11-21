@@ -1,5 +1,5 @@
 import { escapeHtml as esc, infoFields, renderProgramEntry } from './film-embed.js';
-import { formatDuration, hidden, priceFields } from './offer-fields.js';
+import { formatDuration, hidden, priceFields, programOfferSummary } from './offer-fields.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 
 export const programRights = 'I own these videos or have permission to offer the entire lineup for the rental and purchase options I selected.';
@@ -51,7 +51,7 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
   const id = esc(program.id);
   return `<div class="workspace-intro"><a href="/setup/dashboard#${id}">Back to Dashboard</a>
     <h1>${esc(program.title || 'Create program')}</h1>
-    ${program.published ? '<p class="hint">Save a draft while the current program stays on sale. Choose Publish changes when the new lineup is ready for future viewers.</p>' : ''}</div>
+    ${program.published ? '<p class="hint">Save draft keeps your edits private. Choose Publish changes to update prices and playback in every embed.</p>' : ''}</div>
     ${error ? `<p class="feedback error" role="alert">${esc(error)}</p>` : notice ? `<p class="feedback" role="status">${esc(notice)}</p>` : ''}
     <form method="post" action="/setup/program/${id}" class="film-card program-editor">
       ${hidden('csrf', csrf)}${hidden('version', program.version)}
@@ -87,8 +87,6 @@ export function renderPrivateProgram(program, films, path) {
   const poster = posterId ? `/setup/thumbnail/${esc(posterId)}/poster.jpg` : '';
   const video = program.previewSeconds ? `<video controls playsinline preload="metadata"${poster ? ` poster="${poster}"` : ''} src="${esc(path)}/clip.mp4"></video>` :
     (poster ? `<img class="program-poster" src="${poster}" alt="Program thumbnail">` : '');
-  const offers = [['rent','Rent'],['buy','Buy']].filter(([key]) => Number.isInteger(program.prices[key])).map(([key, label]) =>
-    `${label} $${(program.prices[key] / 100).toFixed(2)}${key === 'rent' ? ` · ${program.rentalHours} hours` : ' · includes ZIP'}`);
   const items = program.members.map(item => {
     const film = byId.get(item.filmId);
     if (!film) return '';
@@ -96,7 +94,7 @@ export function renderPrivateProgram(program, films, path) {
     return `<li>${renderProgramEntry({...film, title:item.title || film.title, role:item.role}, infoFields, posterUrl)}</li>`;
   }).join('');
   return `<p class="account">Private program preview</p><div class="private-screening">
-    <div class="private-player">${video}<p>${esc(offers.join(' / '))}</p></div>
+    <div class="private-player">${video}<p>${esc(programOfferSummary(program))}</p></div>
     <section><h2>In this program</h2><ol class="program-list private-lineup" role="list">${items}</ol></section></div>
     <a href="/setup/program/${esc(program.id)}">Back to program</a>`;
 }

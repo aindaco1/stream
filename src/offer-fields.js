@@ -12,6 +12,13 @@ export function formatDuration(duration) {
     .filter(Boolean).join(' ');
 }
 
+export function programOfferSummary({ prices, rentalHours }) {
+  const offers = [];
+  if (prices.rent != null) offers.push(`Rent $${usdInput(prices.rent)} for ${rentalHours} ${rentalHours === 1 ? 'hour' : 'hours'}`);
+  if (prices.buy != null) offers.push(`Buy for $${usdInput(prices.buy)} with ZIP download`);
+  return offers.join(' · ') || 'No rental or download offered';
+}
+
 export function priceFields(film, program = false) {
   const prices = filmPrices(film.prices) ?? { rent: null, buy: null };
   const maxPreview = film.duration > 0 ? Math.min(30, Math.ceil(film.duration) - 1) : 30;

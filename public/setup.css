@@ -154,6 +154,9 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .copy-status:empty { position: absolute; }
 .film-list { display: grid; min-width: 0; gap: 1rem; }
 .embed-preview { display: grid; min-width: 0; container-type: inline-size; align-content: start; gap: .5rem; }
+.offer-difference { padding: .625rem .875rem; background: var(--subtle); border-radius: .35rem; }
+.offer-difference p { margin: 0; }
+.offer-difference p + p { margin-top: .25rem; }
 .preview-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .25rem .75rem; }
 .public-player { font-size: .875rem; }
 .film-list-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }

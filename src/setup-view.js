@@ -1,7 +1,7 @@
 import { bucketSelection, hasVideoExtension } from './bucket-videos.js';
 import { sumFilmStats } from './analytics.js';
 import { previewSeconds } from './prices.js';
-import { formatDuration, hidden, priceFields } from './offer-fields.js';
+import { formatDuration, hidden, priceFields, programOfferSummary } from './offer-fields.js';
 import { payoutCountryOptions } from './payout-countries.js';
 import { faqLink, siteFooter } from './site-frame.js';
 import { firstSale, renderSetupCosts } from './filmmaker-help.js';
@@ -257,6 +257,17 @@ function embedBuilder(film, url, previewUrl, selection, program = false) {
   const code = iframeCode(layout, film.title);
   const options = infoFields.map(field =>
     `<label><input type="checkbox" name="include" value="${field.name}"${fields.includes(field) ? ' checked' : ''}> ${field.label}</label>`).join('');
+  let pricingNote = '';
+  if (program && film.publishedOffer) {
+    const published = programOfferSummary(film.publishedOffer);
+    const draft = programOfferSummary(film);
+    if (published !== draft) {
+      pricingNote = `<aside class="offer-difference" aria-label="Unpublished pricing">
+        <p><strong>Published</strong> ${escapeHtml(published)}</p>
+        <p><strong>Saved draft</strong> ${escapeHtml(draft)}</p>
+        <p><a href="/setup/preview/${escapeHtml(film.id)}">Preview saved draft</a> · <a href="/setup/program/${escapeHtml(film.id)}">Review and publish</a></p></aside>`;
+    }
+  }
   return `<section class="film-sharing"${program ? ' data-program' : ''} id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}" data-preview="${escapeHtml(previewUrl)}" data-populated="${populated.join(',')}">
     <div class="embed-controls"><h4>Embed this ${program ? 'program' : 'film'}</h4>
       <form method="get" action="/setup/dashboard#embed-${escapeHtml(film.id)}">${hidden('film', film.id)}
@@ -266,8 +277,8 @@ function embedBuilder(film, url, previewUrl, selection, program = false) {
         <textarea id="code-${escapeHtml(film.id)}" class="embed-code" readonly spellcheck="false" rows="3">${escapeHtml(code)}</textarea></div>
       <div class="film-actions"><button class="secondary copy-embed" type="button">Copy embed code</button><span class="copy-status" role="status"></span></div>
     </div>
-    <div class="embed-preview"><div class="preview-heading"><h5>Live preview</h5><a class="public-player" href="${escapeHtml(layout.src)}">Open public player</a></div>
-      ${iframeCode(embedLayout(previewUrl, fields, populated, program), film.title, false)}</div>
+    <div class="embed-preview"><div class="preview-heading"><h5>${program ? 'Published embed preview' : 'Live preview'}</h5><a class="public-player" href="${escapeHtml(layout.src)}">Open public player</a></div>
+      ${pricingNote}${iframeCode(embedLayout(previewUrl, fields, populated, program), film.title, false)}</div>
     </section>`;
 }
 
