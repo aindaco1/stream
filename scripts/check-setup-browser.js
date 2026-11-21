@@ -819,7 +819,7 @@ try {
         await page.goto(origin + '/setup/sign-in');
         await page.locator('header').getByRole('link', { name: 'FAQ', exact: true }).click();
         await page.getByRole('heading', { name: 'What does it cost?' }).waitFor();
-        assert.equal(await page.getByRole('heading', {level:2}).first().textContent(), 'How do I put a film on my site?');
+        await page.locator('#embed + #payouts').getByRole('heading', {name:'Who owns my film and how do I get paid?'}).waitFor();
         assert.ok(await page.locator('header').getByRole('link', {name:'Sign in', exact:true}).isVisible());
         assert.equal(await page.getByRole('combobox', {name:'Appearance'}).inputValue(), 'dark');
         assert.ok(await page.evaluate(() => Math.abs(document.querySelector('.faq-intro').offsetWidth - document.querySelector('main').clientWidth) <= 1));
