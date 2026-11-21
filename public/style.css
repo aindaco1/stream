@@ -41,6 +41,15 @@ video { display: block; background: #080808; width: 100%; aspect-ratio: 16 / 9; 
 #subtitles { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 1rem; cursor: pointer; }
 #subtitle-control:has(option:not([value=""]):checked) .caption-icon,
 #picture-in-picture[aria-pressed="true"] .pip-icon { background: white; color: #151515; }
+.airplay-icon {
+  position: relative; width: 1.3rem; height: .9rem; border: 1.5px solid currentColor; border-radius: .12rem;
+}
+.airplay-icon::after {
+  content: ''; position: absolute; left: 50%; bottom: -.24rem; transform: translateX(-50%);
+  border-inline: .35rem solid transparent; border-bottom: .4rem solid currentColor;
+  filter: drop-shadow(0 -1px 0 #111);
+}
+#airplay[aria-pressed="true"] { background: #f2f2f2; color: #151515; }
 .pip-icon {
   position: relative; width: 1.3rem; height: .95rem; border: 1.5px solid currentColor; border-radius: .14rem;
 }

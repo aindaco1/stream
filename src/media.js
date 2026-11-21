@@ -5,7 +5,7 @@ import {
   Input, MP4, Mp4OutputFormat, MpegTsOutputFormat, Output
 } from 'mediabunny';
 import { BLOCK_SIZE } from './source.js';
-import { picturePackets, probeFilm, renderText, transcode } from './media-compat.js';
+import { picturePackets, probeFilm, renderText, segmentWatermark, transcode } from './media-compat.js';
 
 const META = { metadataOnly: true };
 const EPSILON = 1e-8;
@@ -248,16 +248,20 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
       return data;
     });
   }
-  function render(start, end, preview, index, track) {
+  function render(start, end, preview, index, track, watermark) {
     if (closed) throw new Error('Film is closed.');
-    return share([start, end, preview, track?.id].join('/'), async () => {
-      if (remux && !track) {
+    const label = segmentWatermark(watermark, start, end);
+    // Keep the same encoding throughout a marked rental. Only visible intervals need
+    // a separate job per reference; viewers can share the other in-flight intervals.
+    const variant = label ?? (watermark ? 'screener' : '');
+    return share([start, end, preview, track?.id, variant].join('/'), async () => {
+      if (remux && !track && !watermark) {
         try { return await (preview ? remux.preview(end) : remux.segment(index)); }
         catch (error) { if (!/exceeds prototype|read budget|Unsupported packet timing/.test(error.message)) throw error; }
       }
       await current();
       const data = track && (preview ? await picturePackets(source, head, media, track, end) : await pictures(track));
-      return transcode(source, head, media, start, end, preview, data);
+      return transcode(source, head, media, start, end, preview, data, label);
     });
   }
   return Object.freeze({
@@ -278,10 +282,10 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
       if (!closed && bytes.byteLength <= MAX_CACHED_PREVIEW_BYTES) lastPreview = {seconds, subtitleId, bytes};
       return bytes;
     },
-    async segment(index, { subtitleId } = {}) {
+    async segment(index, { subtitleId, watermark } = {}) {
       if (!Number.isInteger(index) || index < 0 || index >= segments.length) throw new Error('Unknown segment.');
       const { start, end } = segments[index];
-      return render(start, end, false, index, bitmap(subtitleId));
+      return render(start, end, false, index, bitmap(subtitleId), watermark);
     },
     async subtitles(id, { end } = {}) {
       const track = media.subtitleTracks.find(s => s.id === id && s.format === 'text');

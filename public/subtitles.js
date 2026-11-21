@@ -34,7 +34,7 @@ export function attachSubtitles(video, setRendition) {
   const select = document.getElementById('subtitles');
   const status = document.getElementById('subtitle-status');
   let source, scope, grant, selected = '', preference, request, suspended = false;
-  let placeholder;
+  let placeholder, nativeHls = false;
   const entries = new Map();
 
   function clear() {
@@ -42,7 +42,7 @@ export function attachSubtitles(video, setRendition) {
     request = undefined;
     suspended = true;
     for (const { element, url } of entries.values()) {
-      element.remove();
+      element?.remove();
       if (url) URL.revokeObjectURL(url);
     }
     entries.clear();
@@ -68,6 +68,10 @@ export function attachSubtitles(video, setRendition) {
     selected = id;
     select.value = id;
     status.textContent = '';
+    if (nativeHls) {
+      if (fromViewer) setRendition(id);
+      return;
+    }
     for (const [key, { element }] of entries) {
       element.default = key === id;
       element.track.mode = key === id ? 'showing' : 'disabled';
@@ -93,17 +97,18 @@ export function attachSubtitles(video, setRendition) {
 
   select.addEventListener('change', () => choose(select.value, true));
   video.textTracks.addEventListener('change', () => {
-    if (!entries.size || suspended || video.readyState < 2) return;
+    if (nativeHls || !entries.size || suspended || video.readyState < 2) return;
     const active = [...entries].find(([, entry]) => entry.element.track.mode === 'showing')?.[0] || '';
     const current = entries.get(selected);
     if (!active && current && (current.loading || current.element.readyState !== HTMLTrackElement.LOADED || video.seeking)) return;
     if (active !== selected) choose(active, true);
   });
 
-  async function show(prefix, nextScope, nextGrant) {
-    if (source === prefix && scope === nextScope && grant === nextGrant)
-      return entries.get(selected)?.track.format === 'bitmap' ? selected : '';
+  async function show(prefix, nextScope, nextGrant, native = false) {
+    if (source === prefix && scope === nextScope && grant === nextGrant && native === nativeHls)
+      return nativeHls || entries.get(selected)?.track.format === 'bitmap' ? selected : '';
     clear();
+    nativeHls = native;
     source = prefix;
     scope = nextScope;
     grant = nextGrant;
@@ -114,9 +119,12 @@ export function attachSubtitles(video, setRendition) {
       if (!response.ok) throw Error();
       const tracks = await response.json();
       if (request !== controller) return '';
-      if (tracks.length) placeholder = URL.createObjectURL(new Blob(['WEBVTT\n\n'], { type: 'text/vtt' }));
+      if (tracks.length && !nativeHls) placeholder = URL.createObjectURL(new Blob(['WEBVTT\n\n'], { type: 'text/vtt' }));
       for (const track of tracks) {
         const {id, label, language, kind} = track;
+        select.add(new Option(label, id));
+        // Receiver-side HLS supplies the chosen text track or captioned video itself.
+        if (nativeHls) { entries.set(id, {track}); continue; }
         const element = document.createElement('track');
         element.kind = kind === 'captions' ? 'captions' : 'subtitles';
         element.label = label;
@@ -126,14 +134,13 @@ export function attachSubtitles(video, setRendition) {
           if (selected === id && entries.get(id)?.element === element) element.track.mode = 'showing';
         });
         entries.set(id, { element, track });
-        select.add(new Option(label, id));
         video.append(element);
       }
       control.hidden = !entries.size;
       const match = matchingCaption(tracks, preference, source);
       choose(match?.id || '');
       if (preference && !match) status.textContent = 'Your selected captions are unavailable for this title.';
-      return match?.format === 'bitmap' ? match.id : '';
+      return match && (nativeHls || match.format === 'bitmap') ? match.id : '';
     } catch {
       if (request === controller) clear();
       return '';
@@ -141,7 +148,12 @@ export function attachSubtitles(video, setRendition) {
   }
   return { show, clear, suspend() { suspended = true; }, resume() {
     const entry = entries.get(selected);
-    if (entry) entry.element.track.mode = 'showing';
+    if (nativeHls) {
+      for (const track of video.textTracks) {
+        if (track.kind === 'subtitles' || track.kind === 'captions')
+          track.mode = entry && entry.track.format !== 'bitmap' ? 'showing' : 'disabled';
+      }
+    } else if (entry) entry.element.track.mode = 'showing';
     suspended = false;
   } };
 }

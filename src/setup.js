@@ -72,7 +72,11 @@ function settingsForm(data, saved) {
   if (hours === null) throw new SetupError('Choose a rental duration from 1 to 720 whole hours.', 422);
   const prices = data.buyPrice === undefined && data.rentPrice === undefined ? filmPrices(saved.prices) : priceForm(data);
   if (!prices) throw new SetupError('Check the film prices.', 422);
-  return { prices, previewSeconds: seconds, rentalHours: hours };
+  if (data.screenerWatermark !== undefined && !['on', 'off'].includes(data.screenerWatermark)) {
+    throw new SetupError('Choose On or Off for the rental screener watermark.', 422);
+  }
+  const screenerWatermark = data.screenerWatermark === undefined ? saved.screenerWatermark === true : data.screenerWatermark === 'on';
+  return { prices, previewSeconds: seconds, rentalHours: hours, screenerWatermark };
 }
 
 function viewerOrigin(env, origin) {
@@ -433,7 +437,7 @@ export async function createSetup({
         const removing = data.action.startsWith('remove-');
         const removedId = removing ? data[data.action.slice(7)] : undefined;
         const saved = store.saveProgram(owner, program.id, { title:data.title || '', members:submittedLineup(data),
-          ...settingsForm(data, {}), previewFilmId:data.previewFilmId === removedId ? null : data.previewFilmId || null,
+          ...settingsForm(data, {screenerWatermark:program.screenerWatermark}), previewFilmId:data.previewFilmId === removedId ? null : data.previewFilmId || null,
           rights:removing ? null : rights }, version);
         if (data.action === 'publish') {
           const result = await provider.refresh(store.stripeContext(owner, mode));

@@ -296,6 +296,15 @@ async function submitKeyPair(form, key, buttonLabel, keyId = access) {
   await form.getByRole('button', { name: buttonLabel }).click();
 }
 
+async function checkBucketTokenLinks(page) {
+  for (const [type, label] of [['account', 'Create an account token'], ['user', 'Create a user token']]) {
+    const href = await page.getByRole('link', { name: label, exact: true }).getAttribute('href');
+    assert.equal(href, `https://dash.cloudflare.com/${accountId}/r2/api-tokens/create?type=${type}`);
+  }
+  const instructions = await page.locator('main ol').innerText();
+  assert.ok(instructions.includes('Object Read & Write') && instructions.includes('Apply to specific buckets only') && instructions.includes(bucket));
+}
+
 async function connectBucket(page, method, recover) {
   await openSection(page, 'storage');
   const card = page.locator('#storage');
@@ -306,7 +315,7 @@ async function connectBucket(page, method, recover) {
     await card.getByRole('button', { name: 'Continue with this bucket' }).click();
     const token = page.getByLabel('R2 token value');
     await token.waitFor();
-    assert.ok((await page.locator('main').innerText()).includes(bucket));
+    await checkBucketTokenLinks(page);
     assert.equal(await token.getAttribute('type'), 'password');
     if (method === 'selected keys') {
       await page.getByText('Use an existing access key pair', { exact: true }).click();
@@ -363,6 +372,7 @@ async function replaceBucketKey(page, owner) {
   assert.equal(await storage.getByLabel('Bucket dashboard URL').count(), 0);
   await storage.getByRole('link', { name: 'Replace R2 key' }).click();
   await page.getByRole('heading', { name: 'Replace R2 key' }).waitFor();
+  await checkBucketTokenLinks(page);
   const token = page.getByLabel('R2 token value');
   const form = page.locator('form').filter({ has: token });
   assert.equal(await form.locator('[name=bucketUrl]').inputValue(), bucketUrl);

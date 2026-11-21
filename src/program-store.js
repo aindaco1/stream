@@ -176,6 +176,8 @@ export function programStore(db, transaction, filmFor) {
           seconds = previewSeconds(data.previewSeconds);
         if (!prices || hours === null || seconds === null)
           throw invalid('Check the program prices, rental duration, and preview length.');
+        if (data.screenerWatermark !== undefined && typeof data.screenerWatermark !== 'boolean')
+          throw invalid('Choose On or Off for the rental screener watermark.');
         if (data.rights && !validRights(data.rights)) throw invalid('Confirm your program distribution rights.');
         const updated = {
           title: data.title.trim(),
@@ -184,6 +186,7 @@ export function programStore(db, transaction, filmFor) {
           previewSeconds: seconds,
           prices,
           rentalHours: hours,
+          screenerWatermark: data.screenerWatermark ?? (current.screenerWatermark === true),
           rights: data.rights || null
         };
         if (current.thumbnail) updated.thumbnail = current.thumbnail;

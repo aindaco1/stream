@@ -72,7 +72,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     // A null recipient is an existing-order lookup only. Use the claimed
     // seller recorded on that order, even while this filmmaker reconnects.
     const spec = Object.freeze({ id, title: film.title, info: film.info, thumbnail: film.thumbnail, owner, account: entitled ? null : account, scope: savedFilmScope(owner, id),
-      revision: film.revision, authority, prices, duration: film.duration, previewSeconds: seconds, rentalHours: hours });
+      revision: film.revision, authority, prices, duration: film.duration, previewSeconds: seconds, rentalHours: hours, screenerWatermark:film.screenerWatermark === true });
     return { spec, bucket: film.bucket, objectKey: film.objectKey, extension: film.extension || 'mp4' };
   }
 

@@ -9,8 +9,8 @@ export function renderFilmmakerFaq() {
     </section>
     <section id="storage"><h2>How do I connect my storage?</h2>
       <p>Open <strong>Settings → Storage</strong>. Sign in to Cloudflare or create an account and activate R2. Choose a private bucket for your films, or create one using Standard storage. In its settings, keep the public development URL disabled and custom domains disconnected. Copy the bucket’s dashboard address into Stream. <a href="#storage-pricing">What will storage cost?</a></p>
-      <p>In Cloudflare’s R2 overview, open <strong>Manage API tokens</strong>. Create a token with <strong>Object Read &amp; Write</strong>, choose <strong>Apply to specific buckets only</strong> and select just your film bucket. This key can read and change every file in that bucket. Paste its token value into Stream, or use its access key ID and secret. Stream checks the key before saving it encrypted. <a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare’s R2 token guide</a></p>
-      <p>To rotate a key, create a new token for the same bucket and choose <strong>Replace R2 key</strong> in Storage. Once Stream accepts it, you can revoke the old key in Cloudflare if nothing else uses it. Choose <strong>Use a different bucket</strong> for future uploads. Keep earlier buckets and their keys available for films already using them.</p>
+      <p>Stream opens Cloudflare’s token form for the account that owns your bucket. Choose <strong>Create an account token</strong> if you manage the account, or <strong>Create a user token</strong> if someone gave you access. Select <strong>Object Read &amp; Write</strong>, change the scope to <strong>Apply to specific buckets only</strong> and select just your film bucket. Paste the token value into Stream, or use your existing access key pair. Stream checks access to the bucket. You confirm the full permission scope in Cloudflare. <a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare’s R2 token guide</a></p>
+      <p>To rotate a key, choose <strong>Replace R2 key</strong> in Storage. The link opens Cloudflare for the same bucket’s account. Once Stream accepts it, you can revoke the old key in Cloudflare if nothing else uses it. Choose <strong>Use a different bucket</strong> for future uploads. Keep earlier buckets and their keys available for films already using them.</p>
     </section>
     <section id="payments"><h2>When can I start selling?</h2>
       <p>Connect Stripe and finish verification before you publish a paid film or program. In the pilot you can try checkout and transfers with test cards. No money reaches a bank account. <a href="#stripe-fees">What are the fees?</a> · <a href="#payouts">How do payouts work?</a> · <a href="#countries">Can I join from my country?</a></p>
@@ -44,8 +44,14 @@ export function renderFilmmakerFaq() {
       <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
       <p>After you connect your private Cloudflare bucket, you can upload the film and its thumbnail right from Stream, or choose a film already in the bucket. The original stays in your account. For a thumbnail, use a JPEG, PNG or WebP up to 8 MB. We recommend 1920 × 1080 pixels.</p>
     </section>
+    <section><h2>Can I watermark a rental screener?</h2>
+      <p>Yes. In Prices and playback for a film or program, turn on <strong>Rental screener watermark</strong>. A short, anonymous rental reference appears in an upper corner for four seconds each minute. It travels with the video during playback and uses no viewer name or email address. Previews, purchases and original downloads keep their usual picture.</p>
+    </section>
     <section><h2>Can viewers turn subtitles on?</h2>
       <p>Yes. If the film has subtitles, tap or move over the video to show its controls. Choose the captions button to pick a language or turn subtitles off. Stream supports embedded text subtitles and DVD or Blu-ray picture subtitles. Check the private preview for the tracks available in your file.</p>
+    </section>
+    <section><h2>Can I watch a rental on my TV?</h2>
+      <p>In the pilot, open a rented film in Safari on the same Wi-Fi network as your AirPlay TV. Start the rental, choose <strong>AirPlay</strong> on the video, then select your TV. If a code appears on the TV, enter it on your Apple device. The rental ends at its original time. AirPlay is available for individual film rentals.</p>
     </section>
     <section><h2>Can I keep watching in a floating window?</h2>
       <p>Start the film, then choose the picture-in-picture button on the video. It appears when your browser, device and the site hosting the player allow it.</p>

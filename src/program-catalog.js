@@ -53,6 +53,7 @@ export function programCatalog({
         title: p.title,
         prices: p.prices,
         rentalHours: p.rentalHours,
+        ...(p.screenerWatermark === true && {screenerWatermark:true}),
         previewId,
         previewSeconds: p.previewSeconds,
         duration: lineup.reduce((sum, m) => sum + m.duration, 0),
@@ -110,6 +111,7 @@ export function programCatalog({
       duration,
       prices,
       rentalHours,
+      screenerWatermark: snapshot.screenerWatermark === true,
       thumbnail,
       lineup
     };

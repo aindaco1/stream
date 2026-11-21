@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
+import { airplayLeases, captionCues, captionMaster, captionSegment, screenerReference } from './airplay.js';
 import { openFilm } from './media.js';
 import { faqLink, siteFooter } from './site-frame.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
@@ -14,6 +15,7 @@ import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
   ['/app.js', ['../public/app.js', 'text/javascript']],
+  ['/airplay.js', ['../public/airplay.js', 'text/javascript']],
   ['/film-embed.js', ['./film-embed.js', 'text/javascript']],
   ['/program-lineup.css', ['../public/program-lineup.css', 'text/css']],
   ['/program-player.js', ['../public/program-player.js', 'text/javascript']],
@@ -52,13 +54,14 @@ function rangeFor(header, size) {
   if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end && start < size) return [start, end];
 }
 
-function playlist(segments, subtitleId) {
+function playlist(segments, subtitleId, captions = false) {
   const lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-PLAYLIST-TYPE:VOD',
     '#EXT-X-TARGETDURATION:' + Math.ceil(Math.max(...segments.map(s => s.duration))),
-    '#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-INDEPENDENT-SEGMENTS', '#EXT-X-KEY:METHOD=AES-128,URI="key"'];
+    '#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-INDEPENDENT-SEGMENTS'];
+  if (!captions) lines.push('#EXT-X-KEY:METHOD=AES-128,URI="key"');
   segments.forEach(({ duration }, index) => {
     if (index) lines.push('#EXT-X-DISCONTINUITY');
-    lines.push('#EXTINF:' + duration.toFixed(6) + ',', index + '.ts' + (subtitleId ? '?subtitle=' + subtitleId : ''));
+    lines.push('#EXTINF:' + duration.toFixed(6) + ',', index + (captions ? '.vtt' : '.ts') + (subtitleId ? '?subtitle=' + subtitleId : ''));
   });
   return [...lines, '#EXT-X-ENDLIST', ''].join('\n');
 }
@@ -132,6 +135,8 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
     if (url.protocol !== 'https:' || url.origin !== publicOrigin) throw new Error('Set STREAM_PUBLIC_ORIGIN to an HTTPS origin.');
   }
   const connections = new Map();
+  const receivers = airplayLeases();
+  const receiverCues = new WeakMap();
   let stopping = false;
   function retire(entry) {
     if (connections.get(entry.key) !== entry) return;
@@ -272,13 +277,15 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       }
       const versioned = /^\/film\/(p-[a-f0-9-]{36})\/v\/([\w-]{43})(?:\/title\/(f-[a-f0-9-]{36}))?\/(.+)$/.exec(path);
       const mediaPath = versioned ? '/film/' + versioned[1] + '/' + versioned[4] : path;
-      const route = /^\/film\/([a-z0-9-]+)\/(checkout|buy|abandon|order|session|download|restore|redeem|position|view|preview\.mp4|(?:preview|play)\/subtitles(?:\/([a-zA-Z0-9_-]{1,64})\.vtt)?|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(mediaPath);
+      const receiver = /^\/film\/([a-z0-9-]+)\/airplay\/([A-Za-z0-9_-]{43})\/(index\.m3u8|video\.m3u8|captions\.m3u8|key|(?:0|[1-9]\d{0,3})\.(?:ts|vtt))$/.exec(path);
+      const route = receiver ? [path, receiver[1], 'play/' + receiver[3], undefined, receiver[3]] : /^\/film\/([a-z0-9-]+)\/(checkout|buy|abandon|order|session|airplay|download|restore|redeem|position|view|preview\.mp4|(?:preview|play)\/subtitles(?:\/([a-zA-Z0-9_-]{1,64})\.vtt)?|play\/(index\.m3u8|key|(?:0|[1-9]\d{0,3})\.ts))$/.exec(mediaPath);
       if (!route) return fail(404);
       const [, id, action, trackId, asset] = route;
-      const entitled = ['abandon', 'order', 'session', 'download', 'restore', 'redeem', 'position', 'view'].includes(action) || action.startsWith('play/');
+      const entitled = ['abandon', 'order', 'session', 'airplay', 'download', 'restore', 'redeem', 'position', 'view'].includes(action) || action.startsWith('play/');
       const revision = versioned?.[2], memberId = versioned?.[3];
       const spec = lookup(id, entitled, revision);
       if (!spec) return fail(404);
+      if ((action === 'airplay' || receiver) && (!checkout || !spec.id || spec.type === 'program')) return fail(404);
       if (spec.type === 'program') {
         const memberAction = action.startsWith('play/') || action === 'position';
         if ((revision && revision !== spec.revision) ||
@@ -288,7 +295,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
             (!revision && ['session','download'].includes(action))) return fail(404);
       } else if (versioned) return fail(404);
       const grant = /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(req.headers.authorization || '')?.[1];
-      if (action.startsWith('play/') && !grant) return fail(403);
+      if (action.startsWith('play/') && !grant && !receiver) return fail(403);
       if (['restore', 'redeem', 'position', 'view'].includes(action)) {
         if (!checkout || !spec.id) return fail(404);
         if (req.method !== 'POST') return fail(405);
@@ -379,7 +386,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         finally { res.off('close', cancel); }
         return;
       }
-      if (['checkout', 'buy', 'abandon', 'order', 'session'].includes(action)) {
+      if (['checkout', 'buy', 'abandon', 'order', 'session', 'airplay'].includes(action)) {
         if (action !== 'session' && (!checkout || !spec.id)) return fail(404);
         if (req.method !== 'POST') return fail(405);
         if (req.headers.origin !== origin) return fail(403);
@@ -387,8 +394,8 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const type = req.headers['content-type'];
         const jsonOrder = opening && type === 'application/json';
         if (type !== 'text/plain' && !jsonOrder) return fail(403);
-        const token = (await body(req, jsonOrder ? 2048 : action === 'session' ? 4096 : 64)).toString('utf8');
-        if (action !== 'session') {
+        const token = (await body(req, jsonOrder ? 2048 : ['session', 'airplay'].includes(action) ? 4096 : 64)).toString('utf8');
+        if (action !== 'session' && action !== 'airplay') {
           let input;
           if (jsonOrder) input = viewingOrder(token);
           else {
@@ -417,10 +424,16 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const runtime = spec.id ? { authority: spec.authority, revision: spec.revision } : await connection(spec);
         try {
           const grant = await runtime.authority.exchange(token, { film: spec.scope, revision: runtime.revision ?? runtime.film.revision });
+          if (action === 'airplay' && (grant.access !== 'rent' || !grant.orderId)) return fail(403);
           if (spec.id && !await checkout.verifyPlayback({ offer: spec, kind: grant.access || 'rent',
             orderId: grant.orderId, rentalExpiresAt: grant.rentalExpiresAt })) return fail(403);
+          if (action === 'airplay') {
+            const lease = receivers.issue(spec, grant);
+            if (!lease) return fail(403);
+            return send(200, 'application/json', JSON.stringify({ path: '/film/' + id + '/airplay/' + lease.token + '/index.m3u8', expiresAt: lease.rentalExpiresAt }));
+          }
           return send(200, 'application/json', JSON.stringify(grant));
-        } catch { return fail(403); }
+        } catch (error) { return fail(error.statusCode === 429 ? 429 : 403); }
       }
       if (!read) return fail(405);
       const subtitles = new URL(req.url, origin).searchParams.getAll('subtitle');
@@ -453,12 +466,19 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       const { authority } = runtime;
       const scope = { film: spec.scope, revision: runtime.revision ?? runtime.film.revision };
       let key, access;
-      const authorized = () => !spec.id || (access?.expiresAt > Date.now()/1000 && checkout.accessAllowed({
-        offer:spec,kind:access.access || 'rent',orderId:access.orderId,rentalExpiresAt:access.rentalExpiresAt}));
+      const order = () => ({ offer: spec, kind: access.access || 'rent', orderId: access.orderId, rentalExpiresAt: access.rentalExpiresAt });
+      const authorized = () => !spec.id || ((receiver ? receivers.active(access) : access.expiresAt > Date.now()/1000) && checkout.accessAllowed(order()));
       try {
-        if (spec.id || asset === 'index.m3u8' || !asset) access = await authority.verifyGrant(grant, scope);
-        if (!authorized()) return fail(403);
-        if (asset && asset !== 'index.m3u8') key = await authority.keyForGrant(grant, scope, memberId);
+        if (receiver) {
+          access = receivers.read(receiver[2], spec);
+          if (!access || !authorized() || !await checkout.verifyPlayback(order()) || !authorized()) return fail(403);
+          receivers.touch(access);
+          key = access.key;
+        } else {
+          if (spec.id || asset === 'index.m3u8' || !asset) access = await authority.verifyGrant(grant, scope);
+          if (!authorized()) return fail(403);
+          if (asset && asset !== 'index.m3u8') key = await authority.keyForGrant(grant, scope, memberId);
+        }
       } catch { return fail(403); }
       if (asset === 'key') return send(200, 'application/octet-stream', key);
       const film = runtime.film || (await connection(spec, true, memberId)).film;
@@ -467,11 +487,29 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const live = lookup(id, true, revision);
         return authorized() && access.expiresAt > Date.now() / 1000 && live?.scope === spec.scope && live.revision === spec.revision;
       });
+      const hlsType = 'application/vnd.apple.mpegurl';
+      if (receiver && rendition && film.subtitleTracks?.some(track => track.id === rendition && track.format === 'text')) {
+        if (asset === 'index.m3u8') return send(200, hlsType, captionMaster({id:rendition}));
+        if (asset === 'captions.m3u8') return send(200, hlsType, playlist(film.segments, rendition, true));
+        if (!asset.endsWith('.vtt')) return fail(404);
+        const interval = film.segments[Number.parseInt(asset, 10)];
+        if (!interval) return fail(404);
+        let tracks = receiverCues.get(film);
+        if (!tracks) { tracks = new Map(); receiverCues.set(film, tracks); }
+        let cues = tracks.get(rendition);
+        if (!cues) {
+          cues = captionCues(await film.subtitles(rendition));
+          if (tracks.size >= 2) tracks.delete(tracks.keys().next().value);
+          tracks.set(rendition, cues);
+        }
+        return authorized() ? send(200, 'text/vtt; charset=utf-8', captionSegment(cues, interval)) : fail(403);
+      }
       if (!hasRendition(film)) return fail(404);
-      if (asset === 'index.m3u8') return send(200, 'application/vnd.apple.mpegurl', playlist(film.segments, rendition));
-      const index = Number(asset.slice(0, -3));
+      if (asset === 'index.m3u8' || asset === 'video.m3u8') return send(200, hlsType, playlist(film.segments, rendition));
+      if (!asset.endsWith('.ts')) return fail(404);
+      const index = Number.parseInt(asset, 10);
       if (index >= film.segments.length) return fail(404);
-      const segment = await film.segment(index, { subtitleId: rendition });
+      const segment = await film.segment(index, { subtitleId: rendition, watermark: screenerReference(spec, access) });
       if (!authorized()) return fail(403);
       return send(200, 'video/mp2t', encrypt(segment, key, index));
     } catch (error) {

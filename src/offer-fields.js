@@ -33,6 +33,13 @@ export function priceFields(film, program = false) {
       </div>
       <p class="hint">${maxPreview ? `Choose up to ${maxPreview} seconds. Set 0 to show the offers immediately. The preview must end before the film does.` :
         'This film is too short for a free preview. Set 0 to show the offers immediately.'}</p>
+      <div class="watermark-setting"><label>Rental screener watermark
+        <select name="screenerWatermark" aria-describedby="watermark-${escapeHtml(film.id || 'draft')}">
+          <option value="off"${film.screenerWatermark !== true ? ' selected' : ''}>Off</option>
+          <option value="on"${film.screenerWatermark === true ? ' selected' : ''}>On</option>
+        </select>
+      </label>
+      <p class="hint" id="watermark-${escapeHtml(film.id || 'draft')}">Show an anonymous rental reference briefly each minute in the video.</p></div>
     </div>
   </fieldset>`;
 }

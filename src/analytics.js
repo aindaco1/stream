@@ -69,8 +69,8 @@ export function analyticsReports(db) {
         FROM (${byOwner}) a JOIN films f ON a.id=f.id
         JOIN buckets b ON b.id=f.bucket_id AND b.owner=f.owner ORDER BY f.rowid DESC`).all(owner);
       return rows.map(({ metadata, uploads, ...stats }) => {
-        const { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail, unsupportedSubtitles } = JSON.parse(metadata);
-        return { id, title, prices, previewSeconds, rentalHours, duration, info, thumbnail, unsupportedSubtitles, uploads: Boolean(uploads), stats };
+        const { id, title, prices, previewSeconds, rentalHours, screenerWatermark, duration, info, thumbnail, unsupportedSubtitles } = JSON.parse(metadata);
+        return { id, title, prices, previewSeconds, rentalHours, screenerWatermark, duration, info, thumbnail, unsupportedSubtitles, uploads: Boolean(uploads), stats };
       });
     },
     platformReport(owner, page = 1) {
