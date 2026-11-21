@@ -40,8 +40,7 @@ test('the public FAQ explains costs, the pilot and how to sell films', () => {
   }
   assert.doesNotMatch(faq, /<form\b|<script\b|Stream on GitHub/);
   const questions = [...faq.matchAll(/<h2>(.*?)<\/h2>/g)].map(match => match[1]);
-  const ownership = questions.indexOf('Who owns my film and how do I get paid?');
-  assert.equal(questions[ownership - 1], 'How do I put a film on my site?');
+  assert.deepEqual(questions.slice(0, 2), ['How do I put a film on my site?', 'Who owns my film and how do I get paid?']);
   for (const step of ['Copy embed code','Custom HTML','publish your page']) assert.ok(faq.includes(step));
   for (const text of ['invite-only','permission to distribute','10 GB','180 seconds','starts when they pay','original file',
     'embed code','record their screen','private access link','text subtitles','picture subtitles']) assert.ok(faq.includes(text),text);
