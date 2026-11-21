@@ -7,7 +7,7 @@ import { faqLink, siteFooter } from './site-frame.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
-import { embedLayout, escapeHtml, iframeCode, infoFields, selectedFields } from './film-embed.js';
+import { embedLayout, escapeHtml, iframeCode, infoFields, posterChoice, posterStyles, selectedFields } from './film-embed.js';
 
 export function renderStripeCountryForm(csrf, mode) {
   const options = payoutCountryOptions.map(({ code, label }) => `<option value="${code}">${escapeHtml(label)}</option>`).join('');
@@ -284,24 +284,30 @@ export function renderPlatformDashboard(csrf, report, metricsOnly = false) {
       ${paging}</section>`, { admin: true });
 }
 
-function filmInfoEditor(film, csrf, selection, saved) {
+function filmInfoEditor(film, csrf, selection, style, saved) {
   const fields = infoFields.map(({ name, label, limit }) =>
     `<div><label for="${escapeHtml(film.id)}-${name}">${label}</label>
-      <textarea id="${escapeHtml(film.id)}-${name}" name="${name}" rows="2" maxlength="${limit}">${escapeHtml(film.info?.[name])}</textarea></div>`).join('');
+      ${name === 'byline'
+        ? `<input id="${escapeHtml(film.id)}-byline" name="byline" maxlength="${limit}" placeholder="Director’s name or names" value="${escapeHtml(film.info?.byline)}">`
+        : `<textarea id="${escapeHtml(film.id)}-${name}" name="${name}" rows="2" maxlength="${limit}">${escapeHtml(film.info?.[name])}</textarea>`}</div>`).join('');
   return `<form id="info-${escapeHtml(film.id)}" class="film-info-editor" method="post" action="/setup/dashboard/info">
-    ${hidden('csrf', csrf)}${hidden('filmId', film.id)}${hidden('show', selection)}
+    ${hidden('csrf', csrf)}${hidden('filmId', film.id)}${hidden('show', selection)}${hidden('poster', style)}
     <h4>Film details</h4><p class="hint">Each embed can show any of these fields. Saved edits appear wherever that field is included.</p>
     <div class="info-fields">${fields}</div><div class="film-actions"><button type="submit">Save film details</button>
     ${saved ? '<span role="status">Film details saved.</span>' : ''}</div></form>`;
 }
 
-function embedBuilder(film, url, previewUrl, selection, program = false) {
+function embedBuilder(film, url, previewUrl, selection, style, program = false) {
   const fields = selectedFields(selection);
   const populated = infoFields.filter(({ name }) => program || film.info?.[name]).map(field => field.name);
-  const layout = embedLayout(url, fields, populated, program);
+  const lineupSize = film.publishedOffer?.lineupSize ?? film.members?.length ?? 0;
+  const layoutFor = source => embedLayout(source, fields, populated, program, style, lineupSize);
+  const layout = layoutFor(url);
+  const designs = [...posterStyles].map(([value, name]) =>
+    `<option value="${value}"${value === style ? ' selected' : ''}>${name}</option>`).join('');
   const code = iframeCode(layout, film.title);
   const options = infoFields.map(field =>
-    `<label><input type="checkbox" name="include" value="${field.name}"${fields.includes(field) ? ' checked' : ''}> ${field.label}</label>`).join('');
+    `<label><input type="checkbox" name="include" value="${field.name}"${fields.includes(field) ? ' checked' : ''}> ${program && field.name === 'byline' ? 'Bylines' : field.label}</label>`).join('');
   let pricingNote = '';
   if (program && film.publishedOffer) {
     const published = programOfferSummary(film.publishedOffer);
@@ -313,9 +319,10 @@ function embedBuilder(film, url, previewUrl, selection, program = false) {
         <p><a href="/setup/preview/${escapeHtml(film.id)}">Preview saved draft</a> · <a href="/setup/program/${escapeHtml(film.id)}">Review and publish</a></p></aside>`;
     }
   }
-  return `<section class="film-sharing"${program ? ' data-program' : ''} id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}" data-preview="${escapeHtml(previewUrl)}" data-populated="${populated.join(',')}">
+  return `<section class="film-sharing"${program ? ' data-program' : ''} id="embed-${escapeHtml(film.id)}" data-player="${escapeHtml(url)}" data-preview="${escapeHtml(previewUrl)}" data-populated="${populated.join(',')}" data-lineup-size="${lineupSize}">
     <div class="embed-controls"><h4>Embed this ${program ? 'program' : 'film'}</h4>
       <form method="get" action="/setup/dashboard#embed-${escapeHtml(film.id)}">${hidden('film', film.id)}
+        <label>Poster style<select name="poster">${designs}</select></label>
         <fieldset class="embed-options"><legend>Include in this embed</legend><div class="embed-checks">${options}</div><p class="hint">Only fields with saved text will appear.</p></fieldset>
         <noscript><button>Update preview and code</button></noscript></form>
       <div><label for="code-${escapeHtml(film.id)}">Embed code</label>
@@ -323,18 +330,19 @@ function embedBuilder(film, url, previewUrl, selection, program = false) {
       <div class="film-actions"><button class="secondary copy-embed" type="button">Copy embed code</button><span class="copy-status" role="status"></span></div>
     </div>
     <div class="embed-preview"><div class="preview-heading"><h5>${program ? 'Published embed preview' : 'Live preview'}</h5><a class="public-player" href="${escapeHtml(layout.src)}">Open public player</a></div>
-      ${pricingNote}${iframeCode(embedLayout(previewUrl, fields, populated, program), film.title, false)}</div>
+      ${pricingNote}${iframeCode(layoutFor(previewUrl), film.title, false)}</div>
     </section>`;
 }
 
-export function renderDashboard({ csrf, owner, error, films, programs = [], origin, previewOrigin = origin, draft, completedDraft = films.some(film => film.id === draft.id), selectionFilm, selection = '', infoSaved = false, metricsOnly = false }) {
+export function renderDashboard({ csrf, owner, error, films, programs = [], origin, previewOrigin = origin, draft, completedDraft = films.some(film => film.id === draft.id), selectionFilm, selection = '', poster, infoSaved = false, metricsOnly = false }) {
   const items = [...films, ...programs];
   const overview = statsList(sumFilmStats(items));
   const reports = new Map(items.map(item => [item.id, statsList({...item.stats, ...item.lineupViews}, detailLabels, item.id)]));
   if (metricsOnly) return overview + [...reports.values()].join('');
   const cards = films.map(film => {
     const path = '/embed/' + encodeURIComponent(film.id);
-    const fields = selectionFilm === film.id ? selection : '';
+    const fields = selectionFilm === film.id ? selection : film.info?.byline ? 'byline' : '';
+    const style = posterChoice(selectionFilm === film.id ? poster : null);
     const preview = savedPreviewSeconds(film.previewSeconds, film.duration) ? `<a class="primary-link secondary" href="/setup/preview/${escapeHtml(film.id)}">Watch private preview</a>` : '';
     const terms = film.published ? 'Unpublishing closes the preview and new sales. Existing viewers retain paid access.' :
       'Publishing makes this film available to viewers and allows other sites to embed it.';
@@ -342,8 +350,8 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
       <summary><span class="film-title">${escapeHtml(film.title)}</span><span class="film-meta">${film.published ? 'Published' : 'Private'} · ${formatDuration(film.duration)}</span></summary>
       <div class="film-panel">${preview}
       ${film.unsupportedSubtitles?.length ? '<p class="hint">The player could not use these subtitle tracks: ' + film.unsupportedSubtitles.map(escapeHtml).join(', ') + '. Include a text, DVD or Blu-ray subtitle track when preparing the film.</p>' : ''}
-      ${reports.get(film.id)}${thumbnailEditor(film, csrf)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, infoSaved && selectionFilm === film.id)}
-      ${film.published ? embedBuilder(film, origin + path, previewOrigin + path, fields) : ''}
+      ${reports.get(film.id)}${thumbnailEditor(film, csrf)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, style, infoSaved && selectionFilm === film.id)}
+      ${film.published ? embedBuilder(film, origin + path, previewOrigin + path, fields, style) : ''}
       <form class="film-publication" action="/setup/dashboard/publication" method="post">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
         <p class="hint">${terms}</p><button type="submit" class="${film.published ? 'secondary' : 'primary'}" name="visibility" value="${film.published ? 'private' : 'public'}">
           ${film.published ? 'Unpublish film' : 'Publish film'}</button></form></div></details>`;
@@ -351,6 +359,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
   const programCards = programs.map(program => {
     const id = escapeHtml(program.id), path = '/embed/' + id;
     const fields = selectionFilm === program.id ? selection : infoFields.map(field => field.name).join(',');
+    const style = posterChoice(selectionFilm === program.id ? poster : null);
     const count = program.members.filter(item => item.role === 'film').length;
     const status = program.published ? 'Published' : program.unavailableTitle ? 'Sales paused' : 'Draft';
     return `<details class="dashboard-film" name="programs" id="${id}"${selectionFilm === program.id ? ' open' : ''}>
@@ -359,7 +368,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
       <div class="film-actions"><a class="primary-link" href="/setup/program/${id}">Edit program</a>
       ${count >= 2 ? `<a href="/setup/preview/${id}">Private program preview</a>` : ''}</div>
       ${reports.get(program.id)}
-      ${program.published ? embedBuilder(program, origin + path, previewOrigin + path, fields, true) +
+      ${program.published ? embedBuilder(program, origin + path, previewOrigin + path, fields, style, true) +
         `<form method="post" action="/setup/program/${id}">${hidden('csrf', csrf)}${hidden('version', program.version)}
         <button class="secondary" name="action" value="unpublish">Unpublish program</button></form>` : ''}
       </div></details>`;

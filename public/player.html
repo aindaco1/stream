@@ -4,11 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{title}} · Stream</title>
-  <link rel="stylesheet" href="/style.css">{{programStyles}}
+  <link rel="stylesheet" href="/style.css">{{programStyles}}{{posterStyles}}
   <script src="/app.js" type="module"></script>
 </head>
-<body data-program="{{program}}" data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
+<body{{posterAttribute}} data-program="{{program}}" data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
   <main aria-labelledby="film-title">
+    {{masthead}}
     <div class="video-stage">
       <video controls playsinline preload="none"{{poster}} aria-label="{{title}}"></video>
       <button type="button" id="start-video" aria-label="Play in player" hidden><span aria-hidden="true"></span></button>
@@ -24,7 +25,8 @@
       </div>
     </div>
     <div class="details">
-      <div><h1 id="film-title">{{title}}</h1><p id="program-summary" hidden></p><p id="program-now" role="status" hidden></p></div>
+      <div class="title-block">{{detailsTitle}}<p id="program-now" role="status" hidden></p></div>
+      {{posterInfo}}
       <button type="button" id="play">Play {{preview}}-second preview</button>
     </div>
     <section id="purchase" aria-label="Film offers" hidden>

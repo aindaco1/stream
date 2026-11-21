@@ -174,7 +174,7 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.equal((await catalog.verify(ada.id, { entitled: true })).scope, spec.scope);
   assert.equal(catalog.recordView(ada.id, 'paid', randomUUID()), true);
   assert.doesNotMatch(await ada.get(), /Copy embed code/);
-  const info = { synopsis: 'A desert film.', credits: 'Camera <A> & B', message: 'For our crew.' };
+  const info = { byline: 'Ada & Jo', synopsis: 'A desert film.', credits: 'Camera <A> & B', message: 'For our crew.' };
   const player = show => fetch(origin + '/embed/' + ada.id + '?show=' + show).then(r => r.text());
   assert.equal((await ben.post('info', { ...info, filmId: ada.id })).status, 404);
   assert.equal((await ada.post('info', { ...info, csrf: 'old' })).status, 403);
@@ -182,6 +182,12 @@ test('filmmaker dashboard publishes verified films, scopes analytics and honors 
   assert.equal((await ada.post('info', info)).status, 303);
   assert.doesNotMatch(await player('synopsis,credits,message'), /A desert film|For our crew/);
   assert.equal((await ada.post('publication', { visibility: 'public' })).status, 303);
+  const poster = async (style, selection) => (await fetch(origin + '/embed/' + ada.id + '?poster=' + style + '&show=' + selection)).text();
+  assert.match(await poster('marquee', 'byline'), /A film by Ada &amp; Jo/);
+  assert.doesNotMatch(await poster('marquee', 'byline'), /Camera &lt;A&gt;/);
+  assert.doesNotMatch(await poster('broadside', 'credits'), /A film by Ada/);
+  assert.doesNotMatch(await poster('unknown', 'credits'), /data-poster=|poster\.css/);
+  assert.equal((await ada.post('info', { ...info, byline: 'x'.repeat(161) })).status, 422);
   assert.match(await player('credits,message'), /Camera &lt;A&gt; &amp; B/);
   assert.match(await player('credits,message'), /For our crew/);
   assert.doesNotMatch(await player('credits,message'), /A desert film/);

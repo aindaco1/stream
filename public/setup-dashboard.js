@@ -1,4 +1,4 @@
-import { embedLayout, iframeCode, selectedFields } from './film-embed.js';
+import { embedLayout, iframeCode, posterFrameStyle, selectedFields } from './film-embed.js';
 
 function openFilmAtFragment() {
   const target = document.getElementById(location.hash.slice(1));
@@ -21,18 +21,23 @@ for (const builder of document.querySelectorAll('.film-sharing')) {
   const card = builder.closest('.dashboard-film');
   const program = builder.hasAttribute('data-program');
   function update() {
-    const selection = new FormData(form).getAll('include').join(',');
+    const data = new FormData(form);
+    const selection = data.getAll('include').join(',');
     const fields = selectedFields(selection);
-    const layout = embedLayout(builder.dataset.player, fields, populated, program);
-    const preview = embedLayout(builder.dataset.preview, fields, populated, program);
+    const style = data.get('poster');
+    const layoutFor = source => embedLayout(source, fields, populated, program, style, Number(builder.dataset.lineupSize));
+    const layout = layoutFor(builder.dataset.player);
+    const preview = layoutFor(builder.dataset.preview);
     if (frame.src !== preview.src) frame.src = preview.src;
     frame.height = layout.height;
-    // Match the 16:9 picture to this column. Long text can scroll inside the
-    // preview; a checkout or a restore form never resizes the dashboard.
-    frame.style.height = `calc(56.25cqw + var(--preview-controls) + ${program ? '12rem + ' : ''}${layout.populatedCount} * var(--preview-field))`;
+    frame.style.cssText = posterFrameStyle(layout.height);
     code.value = iframeCode(layout, frame.title);
     builder.querySelector('.public-player').href = layout.src;
-    if (!program) card.querySelector('[name=show]').value = selection;
+    if (!program) {
+      const editor = card.querySelector('.film-info-editor');
+      editor.elements.show.value = selection;
+      editor.elements.poster.value = style;
+    }
     status.textContent = '';
   }
   // A history traversal may restore checkbox values without firing change.

@@ -5,7 +5,10 @@ const fieldHelp = {
   previewSeconds: 'How much viewers can watch for free before checkout. Try 10 seconds to start, or 0 to show the price right away. The limit is 180 seconds or one second less than the preview video, whichever is shorter.',
   screenerWatermark: 'Turn this on for a private screener to show a brief, anonymous rental code each minute. Leave it off for a clean picture.',
   synopsis: 'Give viewers a sense of the story. One or two sentences usually fit well beside the player.',
-  credits: 'Name the people who made the film. Include a role with each name, such as “Directed by Alex Rivera.”',
+  credits: 'List cast and crew with their roles. You can keep the director here or use “A film by” to show that name above the title.',
+  byline: 'Enter the name or names to print after “A film by.” Leave this blank if the director is already listed in Credits.',
+  curator: 'Enter the name or names to print after “Curated by” on the program poster. Each film keeps its own director credit.',
+  poster: 'Choose Midnight Marquee for a dark theatrical poster or Festival Broadside for bold type on paper. The style applies to this embed.',
   message: 'Add a personal note that appears in italics. A short introduction or thank-you works well.',
   thumbnail: 'Choose the image viewers see before playback. A 1920 × 1080 landscape JPEG, PNG or WebP up to 8 MB works well.',
   x: 'Slide left or right to keep your subject in the frame. Start in the center.',
@@ -42,6 +45,7 @@ function explanation(control) {
     case 'rightsAccepted': return program ? 'Confirm you have permission to offer every video in this lineup under the prices and viewing options you chose.' :
       'Confirm you own the video or have permission to distribute it before you upload or choose the file.';
     case 'include': {
+      if (control.value === 'byline') return program ? 'Show the program curator and each film’s director when a name has been entered.' : 'Show the director credit above the film title.';
       const content = {synopsis:'synopsis', credits:'credits', message:'personal note'}[control.value];
       return 'Include ' + (program ? 'each film’s ' : 'the film’s ') + content + ' in this embed wherever that text has been saved. Each embed can use different choices.';
     }

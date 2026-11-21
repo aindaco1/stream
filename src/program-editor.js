@@ -58,6 +58,7 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
     <form method="post" action="/setup/program/${id}" class="film-card program-editor">
       ${hidden('csrf', csrf)}${hidden('version', program.version)}
       <label>Program title<input name="title" maxlength="160" value="${esc(program.title)}"></label>
+      <label>Curated by <small>(optional)</small><input name="curator" maxlength="160" value="${esc(program.curator)}" placeholder="Curator’s name or names"></label>
       <fieldset class="program-lineup"><legend>Screening order</legend><div class="field-stack">
         ${extraSlot('opening', 'Opening')}
         <div data-slot="films"><strong>Films</strong>
@@ -96,7 +97,7 @@ export function renderPrivateProgram(program, films, path) {
     return `<li>${renderProgramEntry({...film, title:item.title || film.title, role:item.role}, infoFields, posterUrl)}</li>`;
   }).join('');
   return `<p class="account">Private program preview</p><div class="private-screening">
-    <div class="private-player">${video}<p>${esc(programOfferSummary(program))}</p></div>
+    <div class="private-player">${program.curator ? `<p>Curated by ${esc(program.curator)}</p>` : ''}${video}<p>${esc(programOfferSummary(program))}</p></div>
     <section><h2>In this program</h2><ol class="program-list private-lineup" role="list">${items}</ol></section></div>
     <a href="/setup/program/${esc(program.id)}">Back to program</a>`;
 }

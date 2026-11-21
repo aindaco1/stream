@@ -149,7 +149,7 @@ const app = 'http://127.0.0.1:' + player.address().port;
 const publisher = createServer((req, res) => {
   const embed = program.offer.id + '?show=synopsis';
   const dimensions = req.url === '/program-layout' ? [[embed, 320, 640], [embed, 900, 640]] :
-    [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660], [embed, 480, 640]];
+    [['first?poster=marquee', 320, 600], ['second?poster=broadside', 375, 680], ['first', 300, 150], ['legacy', 900, 660], [embed + '&poster=broadside', 480, 640]];
   const frames = dimensions.map(([id, width, height]) => `<iframe allow="autoplay; payment; picture-in-picture ${id === 'legacy' ? "'none'" : '*'}" width="${width}" height="${height}" src="${app}/embed/${id}"></iframe>`);
   res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Publisher</title>' +
     '<style>body{margin:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px}iframe{border:0}</style>' + frames.join('\n'));
@@ -833,7 +833,7 @@ try {
   const programPage = await context.newPage();
   await programPage.goto(host);
   const programFrame = programPage.frame({url:url=>url.pathname === '/embed/' + program.offer.id});
-  const adjacent = programPage.frames().filter(frame => frame.url() === app + '/embed/first')[1];
+  const adjacent = programPage.frame({url:app + '/embed/first'});
   await checkProgramPlayer({ frame:programFrame, neighbor:adjacent, app, fixture:program, preview, complete, context, requests });
   const programViews = views.filter(v => v.id === program.offer.id && v.kind === 'paid');
   assert.ok(programViews.some(v => v.seconds >= 1));

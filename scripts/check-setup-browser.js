@@ -620,6 +620,7 @@ async function checkProgramEditor(page) {
   await form.getByLabel('Opening video', {exact:true}).selectOption(intro);
   await form.getByLabel('Preview video').selectOption({label:'Meet the director'});
   await form.getByLabel('Opening title in this program').fill('Before the screening');
+  await form.getByLabel('Curated by').fill('Maya & Lee');
   const img = await sharp({create:{width:320,height:180,channels:3,background:'#898989'}}).jpeg().toBuffer();
   await page.getByLabel('Thumbnail image').setInputFiles({name:'program.jpg',mimeType:'image/jpeg',buffer:img});
   await page.locator('.thumbnail-editor canvas').waitFor();
@@ -648,7 +649,17 @@ async function checkProgramEditor(page) {
     assert.equal(corners.bottom,corners.open ? 0 : corners.inside);
   }
   const preview = card.locator('.film-sharing iframe');
-  assert.match(await preview.getAttribute('src'),/show=synopsis%2Ccredits%2Cmessage/);
+  assert.deepEqual(new URL(await preview.getAttribute('src')).searchParams.get('show').split(','), ['synopsis','byline','credits','message']);
+  const posterStyle = card.getByLabel('Poster style');
+  assert.equal(await posterStyle.inputValue(), 'marquee');
+  await posterStyle.selectOption('broadside');
+  const programFrame = preview.contentFrame();
+  await programFrame.locator('body[data-poster=broadside] .poster-head #film-title').waitFor();
+  await programFrame.getByText('Curated by Maya & Lee', {exact:true}).waitFor();
+  await programFrame.getByText('A film by Ada & Jo', {exact:true}).waitFor();
+  await card.getByRole('checkbox', {name:'Bylines'}).uncheck();
+  await programFrame.getByText('Curated by Maya & Lee', {exact:true}).waitFor({state:'detached'});
+  assert.equal(await programFrame.locator('.member-byline').count(), 0);
   const embedUrl = await preview.getAttribute('src');
   const publishedBuy = async () => {
     const response = await page.request.get(embedUrl);
@@ -917,11 +928,11 @@ try {
         const frame = sharing.frameLocator('iframe');
         const publicUrl = env.STREAM_VIEWER_ORIGIN + '/embed/' + privatePath.split('/').pop();
         await checkThumbnails(page, publicUrl, artwork);
-        assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl);
+        assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl + '?poster=marquee');
         assert.equal(await frame.locator('.film-info').count(), 0);
         const blankField = sharing.getByRole('checkbox', { name: 'Filmmaker message' });
         await blankField.check();
-        assert.equal(await sharing.locator('iframe').getAttribute('height'), '480');
+        assert.equal(await sharing.locator('iframe').getAttribute('height'), '610');
         await blankField.uncheck();
         await page.setViewportSize({ width: 1024, height: 844 });
         const controlOffsets = () => sharing.evaluate(section => {
@@ -929,32 +940,45 @@ try {
           return ['h4', 'form', '.embed-code', '.copy-embed'].map(selector =>
             Math.round(section.querySelector(selector).getBoundingClientRect().top - top));
         });
+        const stylePicker = sharing.getByLabel('Poster style');
+        await stylePicker.selectOption('broadside');
+        await frame.locator('body[data-poster=broadside] .poster-head #film-title').waitFor();
         const defaultOffsets = await controlOffsets();
         await sharing.getByRole('checkbox', { name: 'Credits' }).check();
-        assert.equal(await sharing.locator('iframe').getAttribute('height'), '528');
+        assert.equal(await sharing.locator('iframe').getAttribute('height'), '658');
         assert.deepEqual(await controlOffsets(), defaultOffsets, 'Growing the preview must preserve control spacing');
         await frame.getByText('Directed by <Ada>', { exact: true }).waitFor();
         assert.equal(await frame.getByText('A short film.').count(), 0);
         const embedUrl = await sharing.locator('iframe').getAttribute('src');
         const creditsCode = await code.inputValue();
-        assert.equal(embedUrl, publicUrl + '?show=credits');
-        assert.ok((await code.inputValue()).includes(embedUrl));
+        assert.equal(embedUrl, publicUrl + '?poster=broadside&show=credits');
+        assert.equal(await sharing.locator('.public-player').getAttribute('href'), embedUrl);
+        assert.ok(creditsCode.includes(embedUrl.replace('&', '&amp;')));
         assert.ok(!(await code.inputValue()).includes(savedKey));
         await page.getByRole('button', { name: 'Copy embed code' }).click();
         await page.locator('.copy-status').filter({ hasText: /copied|selected/ }).waitFor();
+        await page.getByRole('textbox', { name: 'A film by', exact: true }).fill('Ada & Jo');
         await page.getByRole('textbox', { name: 'Credits', exact: true }).fill('Camera and sound by Bea');
         await page.getByRole('button', { name: 'Save film details' }).click();
         await frame.getByText('Camera and sound by Bea', { exact: true }).waitFor();
         assert.equal(await sharing.locator('iframe').getAttribute('src'), embedUrl);
+        await sharing.getByRole('checkbox', {name:'A film by'}).check();
+        await frame.getByText('A film by Ada & Jo', {exact:true}).waitFor();
+        await sharing.getByRole('checkbox', {name:'A film by'}).uncheck();
+        await stylePicker.selectOption('marquee');
+        await frame.locator('body[data-poster=marquee] .details #film-title').waitFor();
         if (evidence) await sharing.screenshot({ path: path.join(evidence, 'film-embed-builder.png') });
         await sharing.getByRole('checkbox', { name: 'Credits' }).uncheck();
         await frame.getByText('Camera and sound by Bea').waitFor({state:'detached'});
-        assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl);
+        assert.equal(await sharing.locator('iframe').getAttribute('src'), publicUrl + '?poster=marquee');
         const host = await context.newPage();
         try {
           publishedEmbeds = creditsCode + (await code.inputValue());
           await host.goto(origin + '/fixture/embed-host');
           const copies = host.locator('iframe');
+          assert.ok((await copies.first().boundingBox()).height >= 478, 'Copied code has a usable poster height');
+          assert.equal(await copies.first().contentFrame().locator('body').getAttribute('data-poster'), 'broadside');
+          assert.equal(await copies.last().contentFrame().locator('body').getAttribute('data-poster'), 'marquee');
           await copies.nth(0).contentFrame().getByText('Camera and sound by Bea', { exact: true }).waitFor();
           await copies.nth(1).contentFrame().getByRole('heading', { name: 'Projection test <first cut>' }).waitFor();
           assert.equal(await copies.nth(1).contentFrame().locator('.film-info').count(), 0);

@@ -25,6 +25,11 @@ export function attachProgram(initial, prefix, onNavigate, onDownload) {
 
   function render() {
     byId('film-title').textContent = program.title;
+    const byline = byId('poster-byline');
+    if (byline) {
+      byline.textContent = program.curator && fields.some(field => field.name === 'byline') ? 'Curated by ' + program.curator : '';
+      byline.hidden = !byline.textContent;
+    }
     document.title = program.title + ' · Stream';
     list.replaceChildren();
     const items = program.lineup;

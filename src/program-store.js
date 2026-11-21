@@ -182,7 +182,11 @@ export function programStore(db, transaction, filmFor) {
         if (data.screenerWatermark !== undefined && typeof data.screenerWatermark !== 'boolean')
           throw invalid('Choose On or Off for the rental screener watermark.');
         if (data.rights && !validRights(data.rights)) throw invalid('Confirm your program distribution rights.');
+        const curator = data.curator ?? current.curator ?? '';
+        if (typeof curator !== 'string' || curator.length > 160 || /[\u0000-\u001f\u007f]/u.test(curator))
+          throw invalid('Enter a curator credit of up to 160 characters on one line.');
         const updated = {
+          ...(curator.trim() && {curator:curator.trim()}),
           title: data.title.trim(),
           members,
           previewFilmId,

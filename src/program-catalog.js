@@ -52,6 +52,7 @@ export function programCatalog({
       version: p.version,
       snapshot: {
         title: p.title,
+        ...(p.curator && {curator:p.curator}),
         prices: p.prices,
         rentalHours: p.rentalHours,
         ...(p.screenerWatermark === true && {screenerWatermark:true}),
@@ -106,6 +107,7 @@ export function programCatalog({
       title,
       owner,
       type: 'program',
+      ...(snapshot.curator && {curator:snapshot.curator}),
       revision,
       account,
       authority,

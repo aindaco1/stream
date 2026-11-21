@@ -21,7 +21,7 @@ import { isProgramId, validRights } from './program-store.js';
 import { programRights, renderPrivateProgram, renderProgramEditor, submittedLineup } from './program-editor.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { escapeHtml, infoFields, selectedFields } from './film-embed.js';
+import { escapeHtml, infoFields, posterChoice, selectedFields } from './film-embed.js';
 import { filmSection, renderBucketAccess, renderDashboard, renderPlatformDashboard, renderSettingsPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
@@ -278,7 +278,7 @@ export async function createSetup({
       const {draft} = store.maker(owner);
       return html(status, renderDashboard({ csrf: session.csrf, owner, error, draft, completedDraft: Boolean(store.film(owner, draft.id)),
         origin: viewer, previewOrigin, selectionFilm, infoSaved: searchParams.get('saved') === 'details',
-        selection: searchParams.getAll('include').join(','),
+        selection: searchParams.getAll('include').join(','), poster: searchParams.get('poster'),
         programs: store.programs(owner),
         films: store.dashboardFilms(owner).map(film => ({ ...film, published: publications.isPublished(owner, film.id) }))
       }), { 'Content-Security-Policy': csp.replace("img-src 'self'", "img-src 'self' blob:") + "; connect-src 'self'; frame-src " + previewOrigin });
@@ -496,7 +496,7 @@ export async function createSetup({
           const first = members.find(member => member.role === 'film');
           settings.previewSeconds = savedPreviewSeconds(settings.previewSeconds, first && store.film(owner, first.filmId)?.duration);
         }
-        const saved = store.saveProgram(owner, program.id, { title:data.title || '', members,
+        const saved = store.saveProgram(owner, program.id, { title:data.title || '', curator:data.curator, members,
           ...settings, previewFilmId: removedPreview ? null : data.previewFilmId || null,
           rights:removing ? null : rights }, version);
         if (data.action === 'publish') {
@@ -577,14 +577,14 @@ export async function createSetup({
         if (path === '/setup/dashboard/info') {
           const info = {};
           for (const { name, label, limit } of infoFields) {
-            const value = (data[name] ?? '').replace(/\r\n?/g, '\n').trim();
-            if (value.length > limit || /[\u0000-\u0008\u000b-\u001f\u007f]/u.test(value)) {
+            const value = (data[name] ?? saved.info?.[name] ?? '').replace(/\r\n?/g, '\n').trim();
+            if (value.length > limit || (name === 'byline' && /[\n\t]/u.test(value)) || /[\u0000-\u0008\u000b-\u001f\u007f]/u.test(value)) {
               throw new SetupError(`Enter up to ${limit} characters of plain text for ${label.toLowerCase()}.`, 422);
             }
             info[name] = value;
           }
           store.setFilmInfo(owner, saved.id, info);
-          const query = new URLSearchParams({ film: saved.id, saved: 'details' });
+          const query = new URLSearchParams({ film: saved.id, saved: 'details', poster: posterChoice(data.poster) });
           for (const field of selectedFields(data.show || '')) query.append('include', field.name);
           return redirect('/setup/dashboard?' + query + '#info-' + saved.id);
         }

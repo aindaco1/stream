@@ -186,7 +186,7 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .info-fields { display: grid; gap: 1rem; }
 @media (min-width: 42rem) {
   .info-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .info-fields > :first-child { grid-column: 1 / -1; }
+  .info-fields > :first-child, .info-fields > :last-child { grid-column: 1 / -1; }
 }
 .film-info-editor textarea { width: 100%; resize: vertical; }
 .embed-options { min-width: 0; padding: 0; border: 0; }
@@ -195,9 +195,9 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .embed-checks label:has(input) { align-items: center; min-height: 2.25rem; gap: .375rem; cursor: pointer; }
 .embed-checks input { margin: 0; }
 @media (pointer: coarse) { .embed-checks label:has(input) { min-height: 2.75rem; } }
-.embed-preview iframe { --preview-controls: 9rem; --preview-field: 3.5rem; display: block; width: 100%; border: 0; background: #181818; }
-@container (max-width: 34rem) { .embed-preview iframe { --preview-controls: 11.25rem; --preview-field: 4rem; } }
-@container (min-width: 40rem) { .embed-preview iframe { --preview-field: 3.25rem; } }
+.embed-controls form { display: grid; gap: .875rem; }
+.embed-controls select { width: fit-content; max-width: 100%; }
+.embed-preview iframe { display: block; width: 100%; max-width: 640px; border: 0; background: #181818; }
 .film-thumbnail { display: grid; min-width: 0; gap: .75rem; border-block-start: 1px solid var(--line); padding-block-start: 1.25rem; }
 .file-picker [hidden], .video-upload [hidden], .film-thumbnail [hidden] { display: none; }
 .film-thumbnail h4 { font-size: 1.125rem; margin: 0; }

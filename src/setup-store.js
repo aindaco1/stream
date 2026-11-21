@@ -681,10 +681,11 @@ export function openSetupStore(directory) {
       });
     },
     programs(owner) {
-      const editions = sql(`SELECT p.id, v.metadata->>'$.prices' AS prices, v.metadata->>'$.rentalHours' AS rentalHours
+      const editions = sql(`SELECT p.id, v.metadata->>'$.prices' AS prices, v.metadata->>'$.rentalHours' AS rentalHours,
+          json_array_length(v.metadata,'$.lineup') AS lineupSize
         FROM programs p JOIN program_versions v ON v.programId=p.id AND v.revision=p.revision
         WHERE p.owner=? AND p.published=1`).all(owner);
-      const offers = new Map(editions.map(({id,prices,rentalHours}) => [id, {prices:JSON.parse(prices), rentalHours}]));
+      const offers = new Map(editions.map(({id,prices,rentalHours,lineupSize}) => [id, {prices:JSON.parse(prices), rentalHours,lineupSize}]));
       return store.programStats(owner).map(({id,stats,lineupViews}) => ({ ...store.program(owner,id), publishedOffer:offers.get(id), stats, lineupViews }));
     },
     bucketFilmTitles(owner, config, keys) {

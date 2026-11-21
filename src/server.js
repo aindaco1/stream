@@ -10,7 +10,8 @@ import { openFilm } from './media.js';
 import { faqLink, siteFooter } from './site-frame.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
-import { escapeHtml, renderFilmInfo, selectedFields } from './film-embed.js';
+import { escapeHtml, filmByline, posterStyles, renderFilmInfo, selectedFields } from './film-embed.js';
+import { formatDuration } from './offer-fields.js';
 import { programPresentation, streamProgramArchive } from './program-delivery.js';
 import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
@@ -33,6 +34,7 @@ const assets = new Map([
   ['/dust-wave-square.webp', ['../public/dust-wave-square.webp', 'image/webp']],
   ['/site-frame.css', ['../public/site-frame.css', 'text/css']],
   ['/screening.css', ['../public/screening.css', 'text/css']],
+  ['/poster.css', ['../public/poster.css', 'text/css']],
   ['/style.css', ['../public/style.css', 'text/css']],
   ['/hls.js', ['../node_modules/hls.js/dist/hls.light.min.js', 'text/javascript']]
 ]);
@@ -267,9 +269,29 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const spec = published || lookup(id, true);
         if (!spec) return fail(404);
         const payable = Boolean(checkout && spec.id);
-        const show = new URL(req.url, origin).searchParams.get('show');
+        const params = new URL(req.url, origin).searchParams;
+        const show = params.get('show'), style = params.get('poster');
+        const themed = posterStyles.has(style);
         const fields = selectedFields(show || '');
-        const text = { title: escapeHtml(published?.title || 'Private screening'), poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '', filmInfo: renderFilmInfo(published?.info, fields) };
+        const title = escapeHtml(published?.title || 'Private screening');
+        const heading = `<h1 id="film-title">${title}</h1>`;
+        const summary = '<p id="program-summary" hidden></p>';
+        const info = renderFilmInfo(published?.info, fields);
+        const text = {
+          title, poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '',
+          posterAttribute: '', posterStyles: '', masthead: '', detailsTitle: heading + summary, filmInfo: info, posterInfo: ''
+        };
+        if (themed) {
+          const program = spec.type === 'program';
+          const byline = program ? '' : filmByline(published?.info, fields);
+          const runtime = program ? summary : `<span>${escapeHtml(formatDuration(published?.duration))}</span>`;
+          text.posterAttribute = ` data-poster="${style}"`;
+          text.posterStyles = '<link rel="stylesheet" href="/poster.css">';
+          text.masthead = `<header class="poster-head"><div class="poster-imprint"><span id="poster-byline"${byline ? '' : ' hidden'}>${escapeHtml(byline)}</span>${runtime}</div>${style === 'broadside' ? heading : ''}</header>`;
+          text.detailsTitle = style === 'marquee' ? heading : '';
+          text.posterInfo = info;
+          text.filmInfo = '';
+        }
         text.programStyles = spec.type === 'program' ? '<link rel="stylesheet" href="/program-lineup.css">' : '';
         text.program = spec.type === 'program' ? escapeHtml(JSON.stringify(published ?
           programPresentation(published, show === null ? undefined : fields) : {title:'Private screening',lineup:[]})) : '';
@@ -281,7 +303,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           .replaceAll('{{rent}}', String(published?.prices?.rent ?? ''))
           .replaceAll('{{rentalHours}}', String(published?.rentalHours ?? 48))
           .replaceAll('{{buy}}', String(published?.prices?.buy ?? ''))
-          .replace(/\{\{(title|filmInfo|poster|program|programStyles)\}\}/g, (_, key) => text[key]);
+          .replace(/\{\{(title|filmInfo|poster|program|programStyles|posterStyles|masthead|detailsTitle|posterInfo|posterAttribute)\}\}/g, (_, key) => text[key]);
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
       const versioned = /^\/film\/(p-[a-f0-9-]{36})\/v\/([\w-]{43})(?:\/title\/(f-[a-f0-9-]{36}))?\/(.+)$/.exec(path);
