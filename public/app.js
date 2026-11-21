@@ -195,8 +195,9 @@ async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
     stream = undefined;
     clearTimeout(renewal);
     playGrant = grant;
-    rendition = await subtitles.show(media, 'play', grant, Boolean(lease));
+    const selected = await subtitles.show(media, 'play', grant, Boolean(lease));
     if (generation !== playbackGeneration) return;
+    rendition = selected;
     stagePlay.hidden = true;
     video.controls = true;
     const ready = (shouldPlay) => {

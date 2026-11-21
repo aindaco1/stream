@@ -10,14 +10,14 @@ export async function requestAirPlayLease(prefix, receipt, rentalEnd) {
     const { path, expiresAt } = await response.json();
     const base = prefix + '/airplay/';
     if (typeof path !== 'string' || !path.startsWith(base) ||
-        !/^[A-Za-z0-9_-]{16,128}\/index\.m3u8$/.test(path.slice(base.length)) ||
-        !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()/1000 || expiresAt > rentalEnd) return;
+        !/^[A-Za-z0-9_-]{43}\/index\.m3u8$/.test(path.slice(base.length)) ||
+        !Number.isSafeInteger(rentalEnd) || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()/1000 || expiresAt > rentalEnd) return;
     return {path, expiresAt};
   } catch { /* Local playback still works if a receiver lease cannot be issued. */ }
 }
 
 export function attachAirPlay(video, status) {
-  const button = document.querySelector('#airplay');
+  const button = video.closest('.video-stage').querySelector('#airplay');
   const supported = typeof video.webkitShowPlaybackTargetPicker === 'function' &&
     Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
   let active;
@@ -60,9 +60,9 @@ export function attachAirPlay(video, status) {
       else expiry = setTimeout(checkEnd, Math.min(remaining, 2147483647));
     }
     const player = {selectAirPlaySubtitle, destroy() {
-      active = undefined;
+      if (active === player) active = undefined;
       clearTimeout(expiry);
-      selection.abort();
+      selection?.abort();
       life.abort();
       video.preload = previousPreload;
       update();
@@ -81,7 +81,7 @@ export function attachAirPlay(video, status) {
       if (video.error) retry(lastPosition, wantsPlay);
     }, {signal:life.signal, once:true});
     selectAirPlaySubtitle(caption, position, autoplay);
-    checkEnd();
+    expiry = setTimeout(checkEnd, 0);
     update();
     return player;
   }
