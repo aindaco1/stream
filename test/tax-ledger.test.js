@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { openSetupStore } from '../src/setup-store.js';
+import { newMexicoReport } from '../src/nm-tax-report.js';
 import { importTaxFeeReport } from '../src/tax-fee-report.js';
 import { filmTaxFeeShare } from '../src/checkout-tips.js';
 import { renderPlatformDashboard } from '../src/setup-view.js';
@@ -230,4 +231,23 @@ test('the operator can reconcile a reported fee and explicit exceptions from the
   assert.throws(() => run('confirm','ch_manual','8','txn_manualfee'));
   assert.doesNotMatch(run('pending'),/ch_reported|ch_free|ch_manual/);
   assert.deepEqual(ctx.store.pendingViewerTransfers(ctx.platform).map(o => o.taxBasicFeeCents).sort(),[0,6,7]);
+});
+
+test('New Mexico district export uses local calendar boundaries and separates manual from Stripe-calculated sales', async t => {
+  const ctx = await setup(t), db = new DatabaseSync(join(ctx.stateDir,'filmmakers','setup.sqlite'));
+  t.after(() => db.close());
+  function buy(date, manual, adjusted = false) {
+    const o = ctx.reserve({nmQuote:manual ? {code:'02-701',ratePartsPerMillion:76250} : null});
+    db.prepare("UPDATE viewer_test_orders SET status='paid',paidAt=?,taxCents=83,tipTaxCents=7,refundedAmount=? WHERE orderId=?")
+      .run(Date.parse(date)/1000, adjusted ? 100 : 0, o.orderId);
+  }
+  buy('2026-11-01T05:59:59Z',true);
+  buy('2026-11-01T06:00:00Z',true);
+  buy('2026-12-01T06:59:59Z',true,true);
+  buy('2026-12-01T07:00:00Z',true);
+  buy('2026-11-20T12:00:00Z',false);
+  const rows = newMexicoReport(ctx.store,'2026-11').trim().split('\r\n');
+  assert.equal(rows.length,2);
+  assert.equal(rows[1],'2026-11,02-701,7.6250,2,20.00,1.86,21.86,1.52,0.14,1.66,1');
+  assert.throws(() => newMexicoReport(ctx.store,'2026-13'));
 });

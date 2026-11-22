@@ -57,3 +57,37 @@ test('operator-only analytics has its own invitations, session, directory and si
   assert.equal((await get('/setup/admin', cookie)).status, 303);
   assert.equal((await get('/setup/dashboard', ordinaryCookie)).status, 200);
 });
+
+test('manual Tax fee review requires a live super-admin session, matching origin, and its CSRF token', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'stream-admin-fee-'));
+  const publicOrigin = 'https://stream.example';
+  let checks = 0;
+  const setup = await createSetup({directory,env:{STRIPE_CONNECT_LIVE:'1',STREAM_PUBLIC_ORIGIN:publicOrigin,STREAM_VIEWER_ORIGIN:'https://watch.example'},
+    viewerCheckout:{platformId:async () => {checks++;return 'acct_platform';}}});
+  const app=await makeServer(null,{setup});
+  await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{await new Promise(resolve=>app.close(resolve));setup.close();await rm(directory,{recursive:true,force:true});});
+  const base='http://127.0.0.1:'+app.address().port;
+  const admin=setup.store.signIn(setup.store.invite('Reviewer','admin'),'admin');
+  const maker=setup.store.signIn(setup.store.invite('Maker'));
+  const path='/setup/admin/tax-fees';
+  const post=(cookie,csrf,origin=base)=>fetch(base+path,{method:'POST',redirect:'manual',headers:{Origin:origin,Cookie:cookie},
+    body:new URLSearchParams({csrf,charge:'x',report:'y'})});
+  assert.equal((await post('','')).status,401);
+  assert.equal((await post('stream_admin='+maker,'x')).status,401);
+  assert.equal((await post('stream_admin='+admin,'x')).status,403);
+  const csrf=setup.store.session(admin,'admin').csrf;
+  assert.equal((await post('stream_admin='+admin,csrf,'https://another.example')).status,403);
+  assert.equal(checks,0);
+  const page=await fetch(base+path,{headers:{Cookie:'stream_admin='+admin}});
+  assert.equal(page.status,200);
+  assert.match(await page.text(),/No fees are waiting/);
+  assert.equal((await post('stream_admin='+admin,csrf)).status,422);
+  const report = '/setup/admin/new-mexico.csv?month=2026-11';
+  assert.equal((await fetch(base+report,{headers:{Cookie:'stream_admin='+maker},redirect:'manual'})).status,303);
+  const csv = await fetch(base+report,{headers:{Cookie:'stream_admin='+admin}});
+  assert.equal(csv.status,200);
+  assert.equal(csv.headers.get('cache-control'),'no-store');
+  assert.match(csv.headers.get('content-disposition'),/stream-nm-2026-11.csv/);
+  assert.match(await csv.text(),/nm_reporting_location/);
+});

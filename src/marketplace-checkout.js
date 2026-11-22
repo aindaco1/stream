@@ -1,3 +1,4 @@
+import { stripeSecretMode } from './stripe-mode.js';
 import { readBoundedJson } from '@dustwave/worker-core/response-body';
 import { newMexicoTotals } from './new-mexico-grt.js';
 
@@ -29,6 +30,26 @@ export function checkoutItems(order) {
   return order.tipAmount ? [film, item('tip', order.tipAmount, 'Optional tip to Stream')] : [film];
 }
 
+// The state-limited pilot verifies a New Mexico viewing address before creating
+// a manual-tax Session. For whole countries Stripe enforces the allowed list
+// in its own address element at confirmation, independently of the embed UI.
+export function liveSalesTerritory(value) {
+  if (!value?.trim() || value.trim().toLowerCase() === 'closed') return 'closed';
+  if (value.trim().toLowerCase() === 'worldwide') return 'worldwide';
+  const territories = [...new Set(value.split(',').map(code => code.trim().toUpperCase()))].sort();
+  if (territories.length === 1 && territories[0] === 'US-NM') return 'US-NM';
+  if (territories.length > 100 || !territories.every(code => /^[A-Z]{2}$/.test(code))) {
+    throw Error('Set STREAM_SALES_TERRITORIES to worldwide, US-NM or a list of approved country codes.');
+  }
+  return territories.join(',');
+}
+
+export function checkoutCountries(order) {
+  if (order.nmQuote) return;
+  if (order.viewingAddressTag) return ['US'];
+  if (order.salesTerritory && !['US-NM','worldwide'].includes(order.salesTerritory)) return order.salesTerritory.split(',');
+}
+
 export function matchesMarketplaceSession(session, order) {
   const base = order.amount + order.tipAmount;
   const tax = session.automatic_tax;
@@ -41,9 +62,12 @@ export function matchesMarketplaceSession(session, order) {
       [base,base - totals.tipTaxCents].includes(session.amount_subtotal);
   }
   if (!tax?.enabled || tax.liability?.type !== 'self') return false;
-  if (order.viewingAddressTag) {
+  const expected = checkoutCountries(order);
+  if (expected) {
     const countries = session.shipping_address_collection?.allowed_countries;
-    if (countries?.length !== 1 || countries[0] !== 'US') return false;
+    if (!Array.isArray(countries) || countries.length !== expected.length || !expected.every(code => countries.includes(code))) return false;
+    if (order.salesTerritory && session.payment_status === 'paid' &&
+        !expected.includes(session.collected_information?.shipping_details?.address?.country)) return false;
   }
   // Until the billing address is complete, Checkout can return provisional amounts.
   if (tax.status !== 'complete') return session.payment_status === 'unpaid';
@@ -54,7 +78,7 @@ export function matchesMarketplaceSession(session, order) {
     (session.amount_subtotal === base || session.amount_subtotal === base - included);
 }
 
-// A platform-scoped API call is authenticated by the configured sandbox key. Never pass a seller header.
+// A platform-scoped API call is authenticated by the configured Stripe key. Never pass a seller header.
 async function platformRequest(key, path, fetchImpl, form, idempotencyKey, version = 'v1') {
   const response = await fetchImpl('https://api.stripe.com/' + version + '/' + path, {
     method: form ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(15000),
@@ -83,7 +107,7 @@ export async function manualCheckoutItems(key, order, store, fetchImpl) {
         display_name:'NM gross receipts tax', jurisdiction:'NM ' + quote.code, country:'US', state:'NM',
         percentage:(quote.ratePartsPerMillion / 10000).toFixed(4), inclusive:String(inclusive)
       }, ['stream-nm-grt-v1',order.platform,quote.code,quote.ratePartsPerMillion,inclusive].join('-'));
-      if (rate.object !== 'tax_rate' || rate.livemode !== false || !/^txr_[A-Za-z0-9]+$/.test(rate.id) ||
+      if (rate.object !== 'tax_rate' || rate.livemode !== (stripeSecretMode(key) === 'live') || !/^txr_[A-Za-z0-9]+$/.test(rate.id) ||
           !rate.active || rate.inclusive !== inclusive || rate.jurisdiction !== 'NM ' + quote.code ||
           rate.country !== 'US' || rate.state !== 'NM' || Math.round(rate.percentage * 10000) !== quote.ratePartsPerMillion) {
         throw Error('Stripe did not confirm the New Mexico tax rate.');
@@ -158,7 +182,7 @@ export async function settleFilmmaker(key, order, store, fetchImpl) {
       if (error.recipientRejected) {
         const account = await platformRequest(key,'core/accounts/' + order.account + '?include[0]=configuration.recipient',
           fetchImpl, undefined, undefined, 'v2');
-        if (account.object === 'v2.core.account' && account.id === order.account && account.livemode === false &&
+        if (account.object === 'v2.core.account' && account.id === order.account && account.livemode === (stripeSecretMode(key) === 'live') &&
             account.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.status === 'active') {
           store.advanceRejectedTransfer(order);
         }
@@ -166,7 +190,7 @@ export async function settleFilmmaker(key, order, store, fetchImpl) {
       throw error;
     }
   }
-  if (transfer.object !== 'transfer' || !/^tr_[A-Za-z0-9]+$/.test(transfer.id) || transfer.livemode !== false ||
+  if (transfer.object !== 'transfer' || !/^tr_[A-Za-z0-9]+$/.test(transfer.id) || transfer.livemode !== (stripeSecretMode(key) === 'live') ||
       transfer.amount !== amount || transfer.currency !== 'usd' || transfer.destination !== order.account ||
       transfer.source_transaction !== order.chargeId || transfer.transfer_group !== group || transfer.metadata?.order !== order.orderId ||
       !store.setViewerTransfer(order.orderId, transfer.id)) throw Error('Filmmaker transfer could not be verified.');

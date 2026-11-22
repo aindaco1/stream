@@ -1,19 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { agreementPath, agreementVersion } from '../src/filmmaker-agreement.js';
+import { agreementFor, agreementPath, agreementVersion } from '../src/filmmaker-agreement.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSetup } from '../src/setup.js';
 import { makeServer } from '../src/server.js';
 
-async function fixture(t) {
+async function fixture(t, env = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'stream-login-'));
   const messages = [];
   const actions = [];
   const setup = await createSetup({directory, env:{RESEND_API_KEY:'fixture',STREAM_RECOVERY_FROM:'film@example.test',
-    STREAM_TURNSTILE_SECRET_KEY:'secret',STREAM_TURNSTILE_SITE_KEY:'public'},
+    STREAM_TURNSTILE_SECRET_KEY:'secret',STREAM_TURNSTILE_SITE_KEY:'public',...env},
     verifyChallenge:async (_req,_env,token,options) => {
       actions.push(options.action);
       return token === 'verified' ? {ok:true} : {ok:false,status:400};
@@ -117,4 +117,40 @@ test('public signup creates one filmmaker only after verified email and agreemen
   db.prepare('UPDATE signup_links SET expires=0 WHERE email=?').run(expired.email);
   assert.equal(setup.store.confirmSignup(expired.code,agreementVersion),undefined);
   assert.equal(db.prepare('SELECT count(*) AS n FROM makers').get().n,2);
+});
+
+
+test('live signup requires the live terms, preserves the previous edition and sends an HTTPS confirmation', async t => {
+  const {origin, post, messages, directory} = await fixture(t, {
+    STRIPE_CONNECT_LIVE:'1', STREAM_PUBLIC_ORIGIN:'https://stream.example', STREAM_VIEWER_ORIGIN:'https://watch.stream.example'
+  });
+  const live = agreementFor('live');
+  const home = await (await fetch(origin + '/')).text();
+  assert.ok(home.includes(live.path));
+  assert.doesNotMatch(home, /test payments/);
+  const faq = await (await fetch(origin + '/faq')).text();
+  assert.ok(faq.includes(live.path));
+  assert.doesNotMatch(faq, /test cards|sandbox policy|test payments/);
+  assert.match(await (await fetch(origin + live.path)).text(), /charged real money/);
+  assert.match(await (await fetch(origin + agreementPath)).text(), /Stripe test payments/);
+  const fields = {email:'maker@example.test', agreement:agreementVersion, 'cf-turnstile-response':'verified'};
+  assert.equal((await post('/setup/sign-up/request',fields)).status,400);
+  assert.equal((await post('/setup/sign-up/request',{...fields,agreement:live.version})).status,200);
+  const link = new URL(messages[0].text.match(/https:\S+/)[0]);
+  assert.equal(link.origin,'https://stream.example');
+  const code = new URLSearchParams(link.hash.slice(1)).get('magic-link');
+  assert.equal((await post('/setup/sign-up',{agreement:agreementVersion,code})).status,401);
+  assert.equal((await post('/setup/sign-up',{agreement:live.version,code})).status,303);
+  const db = new DatabaseSync(join(directory,'setup.sqlite'),{readOnly:true});
+  try { assert.equal(db.prepare('SELECT version FROM filmmaker_agreements').get().version,live.version); }
+  finally { db.close(); }
+});
+
+test('live workspace refuses rehearsal media, insecure origin configuration and dummy challenges', async t => {
+  const directory = await mkdtemp(join(tmpdir(),'stream-live-config-'));
+  t.after(() => rm(directory,{recursive:true,force:true}));
+  const env = {STRIPE_CONNECT_LIVE:'1',STREAM_PUBLIC_ORIGIN:'https://stream.example',STREAM_VIEWER_ORIGIN:'https://watch.stream.example'};
+  await assert.rejects(createSetup({directory,env:{...env,STREAM_VIEWER_ORIGIN:'http://example.test'}}),/HTTPS/);
+  await assert.rejects(createSetup({directory,env:{...env,STREAM_TURNSTILE_SITE_KEY:'1x00000000000000000000AA'}}),/production Turnstile/);
+  await assert.rejects(makeServer(() => {},{mode:'live'}),/rehearsal films/);
 });

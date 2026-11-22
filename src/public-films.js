@@ -1,3 +1,4 @@
+import { stripeMode, stripeSecretMode } from './stripe-mode.js';
 import { isProgramId, validRights } from './program-store.js';
 import { programCatalog } from './program-catalog.js';
 import { openFilm, revisionFor } from './media.js';
@@ -49,18 +50,18 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     if (choice) return choice.published || (entitled && store.priorOrderOwner(id) === choice.owner) ? choice.owner : undefined;
     return listed ?? (entitled ? store.priorOrderOwner(id) : undefined);
   }
-  const sandbox = () => env.STRIPE_CONNECT_LIVE !== '1' && /^(sk|rk)_test_[A-Za-z0-9]+$/.test(env.STRIPE_CONNECT_SECRET_KEY || '');
+  const checkoutConfigured = () => stripeMode(env) === store.paymentMode && stripeSecretMode(env.STRIPE_CONNECT_SECRET_KEY) === store.paymentMode;
   function seller(owner) {
     const maker = store.maker(owner);
     if (!maker) return;
-    const state = stripeSetupStateForMode(maker.stripe, 'test');
+    const state = stripeSetupStateForMode(maker.stripe, store.paymentMode);
     const account = state.accountId;
-    if (state.mode === 'test' && state.creatorId === owner && ['hosted', 'oauth'].includes(state.channel) &&
+    if (state.mode === store.paymentMode && state.creatorId === owner && ['hosted', 'oauth'].includes(state.channel) &&
         state.status === 'ready' && state.chargesEnabled === true && state.payoutsEnabled === true &&
-        accountId.test(account) && account !== platformAccount && store.ownsTestAccount(owner, account)) return account;
+        accountId.test(account) && account !== platformAccount && store.ownsAccount(owner, account)) return account;
   }
   function savedRecord(owner, id, entitled = false) {
-    if (!owner || !sandbox()) return;
+    if (!owner || !checkoutConfigured()) return;
     const film = store.film(owner, id);
     if (film?.id !== id || film.programId || !film.bucket || !film.objectKey || !/^[A-Za-z0-9_-]{43}$/.test(film.revision) ||
         typeof film.title !== 'string' || !film.title.trim() || film.title.length > 160 || !validRights(film.rights)) return;
@@ -165,7 +166,7 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     };
   }
 
-  const programs = programCatalog({store,authority,sandbox,seller,privateSource,openMedia,originalFile,thumbnails});
+  const programs = programCatalog({store,authority,checkoutConfigured,seller,privateSource,openMedia,originalFile,thumbnails});
   return Object.freeze({
     programPreview: programs.programPreview,
     openProgramPreview: programs.openProgramPreview,

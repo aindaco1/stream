@@ -9,12 +9,13 @@ import { createRentalAuthority } from './rental.js';
 import { airplayLeases, captionCues, captionMaster, captionSegment, screenerReference } from './airplay.js';
 import { openFilm } from './media.js';
 import { faqLink, siteFooter, siteIcons } from './site-frame.js';
-import { agreementPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
+import { agreementModeForPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
 import { escapeHtml, filmByline, posterChoice, renderFilmInfo, selectedFields } from './film-embed.js';
 import { formatDuration } from './offer-fields.js';
 import { programPresentation, streamProgramArchive } from './program-delivery.js';
+import { stripeMode } from './stripe-mode.js';
 import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
@@ -139,7 +140,8 @@ const checkoutHeaders = {
   'X-Robots-Tag': 'noindex'
 };
 
-export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout, recovery, workspaceOrigin = process.env.STREAM_WORKSPACE_ORIGIN, maxIndexes = 32 } = {}) {
+export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout, recovery, workspaceOrigin = process.env.STREAM_WORKSPACE_ORIGIN, mode = stripeMode(process.env), maxIndexes = 32 } = {}) {
+  if (mode === 'live' && openMaker) throw new Error('Live Stream cannot serve rehearsal films.');
   if (!Number.isSafeInteger(maxIndexes) || maxIndexes < 1) throw new Error('A positive media index limit is required.');
   if (publicOrigin) {
     const url = new URL(publicOrigin);
@@ -190,7 +192,10 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
   const [template, payPage, returnPage, screening] = await Promise.all(
     ['player', 'checkout', 'return', 'screening'].map(async name => {
       const html = await readFile(new URL('../public/' + name + '.html', import.meta.url), 'utf8');
-      return html.replace('{{siteIcons}}', siteIcons);
+      return html.replace('{{siteIcons}}', siteIcons).replaceAll('{{paymentMode}}', mode)
+        .replaceAll('{{checkoutLabel}}', mode === 'live' ? 'Checkout' : 'Sandbox checkout')
+        .replaceAll('{{screeningIntro}}', mode === 'live' ? 'Choose a film or program to preview, rent or buy in the player.' :
+          'Preview films and programs and try checkout with a Stripe test card.');
     }));
   const lookup = (id, entitled = false, revision) => catalog?.get(id, { entitled, ...(revision && {revision}) }) || (openMaker && filmSpec(id));
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
@@ -226,13 +231,14 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       }
       const hasWorkspace = workspaceOrigin && workspaceOrigin !== origin && (!publicOrigin || workspaceOrigin.startsWith('https://'));
       if (!setup && read && path === '/' && hasWorkspace) return send(303, 'text/plain', '', { Location: workspaceOrigin + '/' });
-      if (path === '/faq' || path === agreementPath) {
+      const edition = agreementModeForPath(path);
+      if (path === '/faq' || edition) {
         if (!read) return fail(405);
         if (hasWorkspace) {
           return send(303, 'text/plain', '', { Location: new URL(path, workspaceOrigin).href });
         }
         return send(200, 'text/html; charset=utf-8', workspacePage(path === '/faq' ? 'FAQ' : 'Filmmaker agreement', null,
-          path === '/faq' ? renderFilmmakerFaq() : renderFilmmakerAgreement(), { faq: path === '/faq', signInHref: '/faq#getting-started' }),
+          path === '/faq' ? renderFilmmakerFaq(mode, checkout?.salesTerritory) : renderFilmmakerAgreement(edition), { faq: path === '/faq', signInHref: '/faq#getting-started' }),
           { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
       if (read && staticFiles.has(path)) {
@@ -302,6 +308,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         text.program = spec.type === 'program' ? escapeHtml(JSON.stringify(published ?
           programPresentation(published, show === null ? undefined : fields) : {title:'Private screening',lineup:[]})) : '';
         const html = template.replaceAll('{{checkout}}', String(payable))
+          .replaceAll('{{salesTerritory}}', escapeHtml(checkout?.salesTerritory ?? ''))
           .replaceAll('{{manualNm}}', String(payable && checkout.manualNmEnabled === true))
           .replaceAll('{{preview}}', String(published ? spec.previewSeconds ?? 10 : 0))
           .replaceAll('{{emailRecovery}}', String(Boolean(recovery && payable)))
@@ -590,11 +597,13 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const server = await makeServer(async maker => {
+  const demo = stripeMode(process.env) === 'test' ? async maker => {
     const env = await playbackSettings({ signing: true, maker });
     const authority = createRentalAuthority(env.STREAM_RENTAL_SECRET);
     return { film: await openFilm(sourceFromEnv(env, maker)), authority };
-  }, { setup: await createSetup(), publicOrigin: process.env.STREAM_PUBLIC_ORIGIN });
-  server.listen(Number(process.env.PORT || 8787), '127.0.0.1', () =>
+  } : null;
+  const server = await makeServer(demo, { setup: await createSetup(), publicOrigin: process.env.STREAM_PUBLIC_ORIGIN });
+  const host = process.env.STREAM_STORE_TRANSPORT === 'durable-object' ? '0.0.0.0' : '127.0.0.1';
+  server.listen(Number(process.env.PORT || 8787), host, () =>
     console.log('Stream home: ' + (process.env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + server.address().port) + '/'));
 }

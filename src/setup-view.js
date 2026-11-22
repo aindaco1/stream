@@ -1,9 +1,11 @@
+import { reportingMonth } from './nm-tax-report.js';
 import { bucketSelection, hasVideoExtension } from './bucket-videos.js';
 import { sumFilmStats } from './analytics.js';
 import { savedPreviewSeconds } from './prices.js';
 import { formatDuration, hidden, priceFields, programOfferSummary } from './offer-fields.js';
 import { payoutCountryOptions } from './payout-countries.js';
-import { faqLink, siteFooter, siteIcons } from './site-frame.js';
+import { workspacePage } from './workspace-page.js';
+export { workspacePage };
 import { thumbnailEditor } from './thumbnail-view.js';
 import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
@@ -46,7 +48,7 @@ function stripeCard(stripe, csrf) {
     status: stripe.configured ? (statuses[stripe.status] || 'Not connected') : 'Payments setup unavailable',
     // The shared renderer uses this flag to hide onboarding controls. Status
     // text and payment authorization retain their independent provider values.
-    description, csrfToken: csrf, ready: ready || stripe.status === 'pending' || stripe.unsupportedCountry, existingOAuth: stripe.existingAvailable === true,
+    description: [description, stripe.availability].filter(Boolean).join(' '), csrfToken: csrf, ready: ready || stripe.status === 'pending' || stripe.unsupportedCountry, existingOAuth: stripe.existingAvailable === true,
     resume: stripe.hasAccount === true || stripe.creating === true,
     action: stripe.configured ? '/setup/stripe/start' : undefined,
     checkAction: stripe.configured && stripe.hasAccount ? '/setup/stripe/check' : undefined,
@@ -159,48 +161,6 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
       ])}`);
 }
 
-const publicDescriptions = new Map([
-  ['Create your filmmaker workspace', 'Embed your films on your own website. Join the Stream pilot to try previews, rentals and downloads with your own film storage.'],
-  ['Filmmaker sign-in', 'Sign in to your Stream filmmaker workspace with a private email link.'],
-  ['FAQ', 'Learn how to put a film on your website, create a program, connect storage and payments, and understand fees and viewer access.'],
-  ['Filmmaker agreement', 'Read the Stream pilot terms for filmmakers, including film ownership, permissions, storage and viewer access.']
-]);
-
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, signInHref = '/setup/sign-in', turnstile = false } = {}) {
-  const current = ' aria-current="page"';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="referrer" content="same-origin">
-    ${siteIcons}
-    ${publicDescriptions.has(title) ? `<meta name="description" content="${escapeHtml(publicDescriptions.get(title))}">` : ''}
-    <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css">
-    <link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
-    ${programPreview ? '<link rel="stylesheet" href="/program-lineup.css">' : ''}
-    <script src="/appearance.js" data-appearance-key="stream.filmmaker.appearance"></script>
-    <script type="module" src="/select-focus.js"></script>
-    ${csrf ? '<script type="module" src="/setup/field-help.js"></script>' : ''}
-    ${turnstile ? '<script src="/setup/turnstile-size.js" defer></script>' : ''}
-    ${signIn ? '<script src="/setup/sign-in.js" defer></script>' : csrf && !admin ? '<script type="module" src="/setup/navigation.js"></script>' : ''}
-    ${(builder || admin) && csrf ? '<script type="module" src="/setup/analytics-refresh.js"></script>' : ''}
-    ${builder ? '<script type="module" src="/setup/dashboard.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
-    ${programEditor ? '<script type="module" src="/setup/program-editor.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
-    ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>
-    <body><a class="skip" href="#main">Skip to content</a>
-    <header class="masthead"><div class="bar"><a class="brand" href="${admin ? '/setup/admin' : '/'}" aria-label="Stream home">Stream</a>
-      ${faqLink(faq, admin ? '/setup/admin/faq' : csrf ? '/setup/faq' : '/faq')}
-      <label class="appearance" title="Appearance"><span aria-hidden="true">🌓</span><select aria-label="Appearance" data-appearance-select>
-        <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
-      </select></label>
-      ${csrf ? `<form method="post" action="${admin ? '/setup/admin/sign-out' : '/setup/sign-out'}">${hidden('csrf', csrf)}
-        <button class="sign-out" type="submit">Sign out</button></form>` : signIn ? '' : `<a href="${escapeHtml(signInHref)}">Sign in</a>`}</div>
-      ${csrf && !admin ? `<nav class="workspace-nav" aria-label="Workspace navigation"><div class="tab-bar">
-        <a href="/setup/dashboard"${dashboard && !faq ? current : ''}>Dashboard</a>
-        <a href="/setup/settings"${dashboard || faq || reference ? '' : current}>Settings</a>
-      </div></nav>` : ''}</header>
-    <main class="setup-shell${faq ? ' filmmaker-help' : ''}" id="main" tabindex="-1">${content}</main>
-    ${siteFooter(admin ? '/setup/admin' : '/')}</body></html>`;
-}
-
 const primaryLabels = { plays: 'Paid plays', averageWatch: 'Avg. watch time', rentals: 'Rentals', purchases: 'Purchases', netRevenue: 'Net Revenue' };
 const detailLabels = {
   previews: 'Preview starts', revenue: 'Revenue',
@@ -260,7 +220,7 @@ function analyticsGuide(admin = false) {
   return `<p class="hint"><a href="${faq}#dashboard-analytics">How these numbers are calculated</a></p>`;
 }
 
-export function renderPlatformDashboard(csrf, report, metricsOnly = false) {
+export function renderPlatformDashboard(csrf, report, metricsOnly = false, live = false) {
   const { owner, rows, page, pages, total, makers } = report;
   const url = (maker, number = 1) => {
     const query = new URLSearchParams();
@@ -286,6 +246,11 @@ export function renderPlatformDashboard(csrf, report, metricsOnly = false) {
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
       <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films${total.programs ? ' · ' + total.programs + ' programs' : ''}</p></div>
     <section class="film-card"><h2>Overview</h2>${overview}${analyticsGuide(true)}
+      ${live && platform ? `<form class="film-actions" method="get" action="/setup/admin/new-mexico.csv">
+        <label>New Mexico sales month<input type="month" name="month" required value="${reportingMonth()}"></label>
+        <button type="submit">Download district totals</button></form>
+        <small>These totals cover orders where Stream calculated New Mexico tax. Use Stripe’s tax report for orders calculated by Stripe. Review any flagged adjustments before filing.</small>` : ''}
+      ${live && platform && total.pendingTaxFees ? '<p><a href="/setup/admin/tax-fees">Review pending Stripe Tax fees</a></p>' : ''}
       ${total.transfersToReview ? '<p class="hint">Review the affected marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
     <section class="film-list"><h2>${platform ? 'Filmmakers' : total.programs ? 'Films and programs' : 'Films'}</h2>
       ${tableRows ? `<label class="analytics-columns"><input type="checkbox"> Show detailed metrics</label><div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>

@@ -1,3 +1,4 @@
+import { stripeSecretMode } from './stripe-mode.js';
 import { readBoundedJson } from '@dustwave/worker-core/response-body';
 
 const closed = new Set(['won', 'prevented', 'warning_closed']);
@@ -7,7 +8,7 @@ export const adjustmentEvents = new Set(['charge.refunded', 'charge.refund.updat
 export function adjustmentReference(event) {
   const object = event.data?.object;
   const type = event.type.startsWith('charge.dispute.') ? 'dispute' : event.type === 'charge.refunded' ? 'charge' : 'refund';
-  if (object?.object !== type || object.livemode === true ||
+  if (object?.object !== type || (object.livemode !== undefined && object.livemode !== event.livemode) ||
       (type === 'refund' && !/^re_[a-zA-Z0-9]+$/.test(object.id)) ||
       (type === 'dispute' && !/^du_[a-zA-Z0-9]+$/.test(object.id))) return;
   const chargeId = type === 'charge' ? object.id : object.charge;
@@ -19,6 +20,7 @@ export function adjustmentReference(event) {
 
 // These read-only resources aren't exposed by the pinned worker-core client.
 export function adjustmentReader(key, account, fetchImpl) {
+  const live = stripeSecretMode(key) === 'live';
   async function get(path) {
     const response = await fetchImpl('https://api.stripe.com/v1/' + path, {method:'GET', redirect:'error',
       headers:{Authorization:'Bearer ' + key,...(account && {'Stripe-Account':account}),'Stripe-Version':'2026-10-28.endive'},
@@ -33,7 +35,7 @@ export function adjustmentReader(key, account, fetchImpl) {
       const page = await get(resource + '?' + query);
       if (page?.object !== 'list' || !Array.isArray(page.data) || typeof page.has_more !== 'boolean') throw Error('Invalid payment adjustment list.');
       for (const row of page.data) {
-        if (row.charge !== charge || row.livemode === true || typeof row.id !== 'string' || seen.has(row.id)) throw Error('Invalid payment adjustment.');
+        if (row.charge !== charge || (row.livemode !== undefined && row.livemode !== live) || typeof row.id !== 'string' || seen.has(row.id)) throw Error('Invalid payment adjustment.');
         seen.add(row.id);
         yield row;
       }
@@ -46,7 +48,7 @@ export function adjustmentReader(key, account, fetchImpl) {
     async chargeIntent(id) {
       if (!/^ch_[a-zA-Z0-9]+$/.test(id)) throw Error('Invalid charge.');
       const row = await get('charges/' + id);
-      if (row?.object !== 'charge' || row.id !== id || row.livemode !== false) throw Error('Invalid charge.');
+      if (row?.object !== 'charge' || row.id !== id || row.livemode !== live) throw Error('Invalid charge.');
       return row.payment_intent;
     },
     async state(order,charge,hint) {

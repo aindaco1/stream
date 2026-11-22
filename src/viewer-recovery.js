@@ -8,14 +8,15 @@ const minute = 60_000;
 
 // Only the address fingerprint, token digests and play position persist.
 // The mailbox supplied on a restore request is used for that delivery only.
-export function recoveryStore(db, key) {
+export function recoveryStore(db, key, mode = 'test') {
+  if (!['live','test'].includes(mode)) throw Error('Invalid recovery mode.');
   db.exec(`CREATE TABLE IF NOT EXISTS viewer_recovery (
     orderId TEXT PRIMARY KEY, emailHash TEXT NOT NULL, accessHash TEXT NOT NULL UNIQUE,
     codeHash TEXT UNIQUE, sentAt INTEGER, used INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS recovery_email ON viewer_recovery(emailHash);
     CREATE INDEX IF NOT EXISTS recovery_recent ON viewer_recovery(sentAt) WHERE sentAt IS NOT NULL;
     CREATE VIEW IF NOT EXISTS viewer_claimed_orders AS SELECT o.* FROM viewer_test_orders o
-      JOIN claims c ON c.owner=o.owner AND c.account=o.account AND c.mode='test'`);
+      JOIN claims c ON c.owner=o.owner AND c.account=o.account AND c.mode='${mode}'`);
   const fingerprint = (purpose, value) => createHmac('sha256', key).update(purpose + '\0' + value).digest('base64url');
   const accessToken = orderId => fingerprint('viewer-restore', orderId);
   const active = "o.status='paid' AND (o.kind='buy' OR o.paidAt+o.rentalHours*3600>unixepoch())";

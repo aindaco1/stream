@@ -1,8 +1,3 @@
-// U.S. standard domestic card estimate in cents, rounded per successful charge.
-function estimateStripeFee(chargedCents) {
-  return Math.round(chargedCents * 29 / 1000) + 30;
-}
-
 const viewing = ['previews','plays','timedPlays','watchSeconds'];
 const metrics = [...viewing, 'rentals', 'purchases', 'revenue', 'netRevenue', 'processingFees', 'reportedFees', 'paymentAdjustments',
   'filmTaxFees', 'tipTaxFees', 'pendingTaxFees', 'platformTips', 'taxCollected', 'estimatedOrders', 'transfersToReview'];
@@ -14,7 +9,8 @@ export function sumFilmStats(films) {
 // Start from the selected films. A filmmaker dashboard and a single directory
 // page should only read the settled ledger entries for the films being shown.
 function filmStats(filter = '', includeLineup = false) {
-  const estimated = 'stream_fee_estimate(COALESCE(o.chargedTotalCents,o.amount + o.tipAmount))';
+  // 2.9% rounded to the nearest cent plus 30 cents. All inputs are nonnegative integer cents.
+  const estimated = '((COALESCE(o.chargedTotalCents,o.amount + o.tipAmount) * 29 + 500) / 1000 + 30)';
   return `SELECT amounts.*, revenue - processingFees - filmTaxFees - paymentAdjustments AS netRevenue
     FROM (SELECT f.owner, f.id, json_extract(f.metadata, '$.title') AS title,
     ${viewing.map(key => `${includeLineup ? `COALESCE(pc.${key},0) + ` : ''}COALESCE(c.${key},0) + COALESCE((SELECT SUM(ec.${key}) FROM program_videos v
@@ -36,8 +32,7 @@ function filmStats(filter = '', includeLineup = false) {
     ${filter} GROUP BY f.id) amounts`;
 }
 
-export function analyticsReports(db) {
-  db.function('stream_fee_estimate', { deterministic: true }, estimateStripeFee);
+export function analyticsReports(db, transaction) {
   db.exec(`CREATE INDEX IF NOT EXISTS film_owner ON films(owner);
     CREATE INDEX IF NOT EXISTS sales_by_film ON viewer_test_orders(filmId,owner) WHERE paidAt IS NOT NULL AND intentId IS NOT NULL;`);
   const totals = metrics.map(key => 'COALESCE(SUM(a.' + key + '),0) AS ' + key).join(', ');
@@ -80,12 +75,7 @@ export function analyticsReports(db) {
       });
     },
     platformReport(owner, page = 1) {
-      db.exec('BEGIN');
-      try {
-        return report(owner, page);
-      } finally {
-        db.exec('ROLLBACK'); // End the read snapshot shared by totals and rows.
-      }
+      return transaction(() => report(owner, page), true);
     }
   };
 }

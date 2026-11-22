@@ -19,12 +19,14 @@ const secret = 'whsec_fixture';
 const viewerToken = () => randomBytes(32).toString('base64url');
 const sourceHead = {revision:'"test-cut-one"', size:4};
 
-async function context(t, { legacy = false, marketplace = false } = {}) {
+async function context(t, { legacy = false, marketplace = false, live = false } = {}) {
+  const mode = live ? 'live' : 'test';
+  const origin = live ? 'https://viewer.example' : 'http://127.0.0.1:8787';
   const folder = await mkdtemp(join(tmpdir(), 'stream-viewer-test-'));
   const owner = 'Buyer rehearsal filmmaker', account = 'acct_seller';
   const id = 'f-' + randomUUID();
   const offer = { id, owner, account, title: 'A short film', scope: savedFilmScope(owner,id),
-    prices: {rent:99,buy:499}, revision: revisionFor(sourceHead), authority: createRentalAuthority(randomBytes(32)) };
+    prices: {rent:99,buy:499}, revision: revisionFor(sourceHead), authority: createRentalAuthority(randomBytes(32), { live }) };
   const token = viewerToken();
   const orderId = randomUUID();
   if (legacy) {
@@ -39,11 +41,11 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
       .run(await sha256Hex(token),orderId,offer.id,owner,account,offer.scope,offer.revision,'acct_platform',offer.title,origin,Date.now(),'cs_test_legacy');
     db.close();
   }
-  const store = openSetupStore(folder);
+  const store = openSetupStore(folder, mode);
   t.after(async () => { store.close(); await rm(folder, { recursive: true, force: true }); });
   store.invite(owner);
-  store.claimAccount(owner, account, 'test');
-  store.saveStripe(owner, { byMode: { test: { mode: 'test', creatorId: owner, channel: 'oauth', accountId: account,
+  store.claimAccount(owner, account, mode);
+  store.saveStripe(owner, { byMode: { [mode]: { mode, creatorId: owner, channel: 'oauth', accountId: account,
     status:'ready',chargesEnabled:true,payoutsEnabled:true } } });
   const bucket = { accountId: 'fixture', bucket: 'synthetic', jurisdiction: 'default' };
   store.saveBucket(owner, { ...bucket, accessKeyId: 'fixture', secretAccessKey: 'fixture' });
@@ -55,14 +57,14 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
   const behavior = { available: true, platform: 'acct_platform', sellers:new Set([account]), origin, lose: false, missingSecret: false };
   const purchased = Math.floor(Date.now() / 1000) - 300;
   function addSession(suffix, amount, markers, uiMode, allowedMethods = null) {
-    const id = 'cs_test_' + suffix, pi = 'pi_' + suffix;
+    const id = 'cs_' + mode + '_' + suffix, pi = 'pi_' + suffix;
     sessions.set(id, { id, object:'checkout.session', status:'open', payment_status:'unpaid', payment_intent:pi,
-      livemode:false, mode:'payment', currency:'usd', amount_total:amount, amount_subtotal:amount,
+      livemode:live, mode:'payment', currency:'usd', amount_total:amount, amount_subtotal:amount,
       metadata:markers, client_reference_id:markers.order, ui_mode:uiMode,
       allowed_payment_method_types:allowedMethods,
       client_secret:uiMode !== 'hosted' && !behavior.missingSecret ? id+'_secret_rehearsal' : null });
-    intents.set(pi, {id:pi, object:'payment_intent', livemode:false, status:'succeeded', amount, amount_received:amount, currency:'usd', metadata:{...markers},
-      latest_charge:{id:'ch_' + suffix,object:'charge',livemode:false,status:'succeeded',paid:true,captured:true,refunded:false,disputed:false,
+    intents.set(pi, {id:pi, object:'payment_intent', livemode:live, status:'succeeded', amount, amount_received:amount, currency:'usd', metadata:{...markers},
+      latest_charge:{id:'ch_' + suffix,object:'charge',livemode:live,status:'succeeded',paid:true,captured:true,refunded:false,disputed:false,
         amount, amount_captured:amount,amount_refunded:0,currency:'usd',created:purchased,payment_intent:pi,payment_method_details:{type:'card'}}});
     return id;
   }
@@ -77,7 +79,7 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
     calls.push({ method, path: url.pathname, recipient });
     if (url.pathname === '/v1/account') return Response.json({ id: behavior.platform, object: 'account' });
     if (marketplace && url.pathname === '/v2/core/accounts/' + account) {
-      return Response.json({id:account,object:'v2.core.account',livemode:false,configuration:{recipient:{capabilities:{
+      return Response.json({id:account,object:'v2.core.account',livemode:live,configuration:{recipient:{capabilities:{
         stripe_balance:{stripe_transfers:behavior.transferCapability === false ? null : {status:'active',requested:true}}
       }}}});
     }
@@ -89,7 +91,7 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
     if (url.pathname === '/v1/tax_rates') {
       const inclusive = form.get('inclusive') === 'true';
       assert.equal(form.get('percentage'),'7.6250');
-      return Response.json({object:'tax_rate',active:true,livemode:false,id:inclusive ? 'txr_tip' : 'txr_film',
+      return Response.json({object:'tax_rate',active:true,livemode:live,id:inclusive ? 'txr_tip' : 'txr_film',
         inclusive,percentage:7.625,country:'US',state:'NM',jurisdiction:form.get('jurisdiction')});
     }
     if (url.pathname.endsWith('/line_items')) {
@@ -101,7 +103,7 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
       if (behavior.denyFirstTransfer && !headers.get('Idempotency-Key').endsWith('-transfer-1')) {
         return Response.json({error:{code:'insufficient_capabilities_for_transfer'}},{status:400});
       }
-      const transfer = {object:'transfer',livemode:false,id:'tr_fixture',amount:Number(form.get('amount')),currency:'usd',
+      const transfer = {object:'transfer',livemode:live,id:'tr_fixture',amount:Number(form.get('amount')),currency:'usd',
         destination:account,source_transaction:form.get('source_transaction'),transfer_group:form.get('transfer_group'),metadata:{order:form.get('metadata[order]')}};
       transfers.push(transfer);
       if (behavior.loseTransfer) throw Error('Transfer response interrupted');
@@ -228,7 +230,7 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
     assert.ok(['latest_charge','latest_charge.balance_transaction'].includes(url.searchParams.get('expand[0]')));
     return Response.json(intents.get(id));
   }
-  const env = { STREAM_STRIPE_TAX_MODE:marketplace ? 'marketplace' : 'off', STRIPE_PLATFORM_WEBHOOK_SECRET:'whsec_platform', STRIPE_CONNECT_SECRET_KEY: 'sk_test_fixture', STRIPE_CONNECT_PUBLISHABLE_KEY:'pk_test_fixture', STRIPE_CONNECT_WEBHOOK_SECRET: secret };
+  const env = { STRIPE_CONNECT_LIVE:live ? '1' : '0', ...(live && {STREAM_PUBLIC_ORIGIN:origin,STREAM_SALES_TERRITORIES:'worldwide'}), STREAM_STRIPE_TAX_MODE:marketplace ? 'marketplace' : 'off', STRIPE_PLATFORM_WEBHOOK_SECRET:'whsec_platform', STRIPE_CONNECT_SECRET_KEY: 'sk_' + mode + '_fixture', STRIPE_CONNECT_PUBLISHABLE_KEY:'pk_' + mode + '_fixture', STRIPE_CONNECT_WEBHOOK_SECRET: secret };
   const checkout = createViewerCheckout({ store, env, fetchImpl });
   const first = () => sessions.values().next().value;
   const sign = (event, time = Math.floor(Date.now()/1000), signingSecret = secret) => {
@@ -236,9 +238,9 @@ async function context(t, { legacy = false, marketplace = false } = {}) {
     const digest = createHmac('sha256',signingSecret).update(time + '.' + payload).digest('hex');
     return [Buffer.from(payload), 't=' + time + ',v1=' + digest];
   };
-  const event = () => ({object:'event',id:'evt_fixture',type:'checkout.session.completed',account,livemode:false,data:{object:first()}});
+  const event = () => ({object:'event',id:'evt_fixture',type:'checkout.session.completed',account,livemode:live,data:{object:first()}});
   const pay = () => { Object.assign(first(), { status:'complete', payment_status:'paid' }); };
-  return { folder, store, env, fetchImpl, offer, token, checkout, calls, first, sessions, intents, refunds, disputes, transfers, lineItems, behavior, purchased, sign, event, pay,
+  return { folder, store, env, origin, fetchImpl, offer, token, checkout, calls, first, sessions, intents, refunds, disputes, transfers, lineItems, behavior, purchased, sign, event, pay,
     start: (kind = 'rent') => checkout.start({ offer,token,origin,kind }), status: () => checkout.status({offer,token}) };
 }
 
@@ -1364,4 +1366,78 @@ test('zero customer tax never substitutes for confirmation of the actual Stripe 
     assert.equal(c.store.viewerOrderById(opened.orderId).taxBasicFeeCents, null);
     assert.equal(c.transfers.length, 0);
   }
+});
+
+test('live and sandbox cannot share a payment database, including unmarked rehearsal databases', async t => {
+  const folder = await mkdtemp(join(tmpdir(), 'stream-mode-'));
+  t.after(() => rm(folder, {recursive:true,force:true}));
+  const sandbox = join(folder,'sandbox'), live = join(folder,'live');
+  openSetupStore(sandbox).close();
+  assert.throws(() => openSetupStore(sandbox,'live'), /mode does not match/);
+  openSetupStore(live,'live').close();
+  assert.throws(() => openSetupStore(live,'test'), /mode does not match/);
+  openSetupStore(live,'live').close();
+  const db = new DatabaseSync(join(sandbox,'setup.sqlite'));
+  db.exec('DROP TABLE stream_payment_mode');
+  db.close();
+  assert.throws(() => openSetupStore(sandbox,'live'), /rehearsal database/);
+  openSetupStore(sandbox,'test').close();
+});
+
+test('live marketplace purchase enforces mode on webhooks, Stripe records, grants and settlement', async t => {
+  const c = await context(t,{marketplace:true,live:true});
+  const start = () => c.checkout.start({offer:c.offer,token:c.token,origin:c.origin,kind:'buy',tipPercent:10});
+  assert.equal(c.checkout.configured,true);
+  assert.equal(createViewerCheckout({store:c.store,env:{...c.env,STRIPE_CONNECT_LIVE:'0'},fetchImpl:c.fetchImpl}).configured,false);
+  assert.equal(createViewerCheckout({store:c.store,env:{...c.env,STREAM_STRIPE_TAX_MODE:'off'},fetchImpl:c.fetchImpl}).configured,false);
+  const opened = await start();
+  assert.equal(opened.publishableKey,'pk_live_fixture');
+  assert.match(opened.clientSecret,/^cs_live_/);
+  const {session,charge}=completeTaxedPurchase(c);
+  const event=structuredClone(c.event());
+  assert.equal(session.metadata.product,'stream');
+  delete event.account;
+  const deliver = e => c.checkout.webhook(...c.sign(e,undefined,'whsec_platform'),true);
+  await deliver({...event,livemode:false});
+  assert.equal(c.store.viewerOrderById(opened.orderId).paidAt,null);
+  for (const object of [charge,c.intents.get(session.payment_intent),session]) {
+    object.livemode=false;
+    await assert.rejects(deliver(event),{statusCode:409});
+    assert.equal(c.store.viewerOrderById(opened.orderId).paidAt,null);
+    object.livemode=true;
+  }
+  await deliver(event);
+  const paid = await c.status();
+  assert.equal(paid.status,'paid');
+  const film = {film:c.offer.scope,revision:c.offer.revision};
+  const entitlement = await c.offer.authority.exchange(paid.receipt,film);
+  assert.equal((await c.offer.authority.verifyDownloadGrant(entitlement.grant,film)).orderId,opened.orderId);
+  const order=c.store.viewerOrderById(opened.orderId);
+  c.store.recordTaxFees(order.platform,[{chargeId:charge.id,feeCents:8,reference:'txn_confirmed'}]);
+  await c.checkout.retryFilmmakerTransfers();
+  assert.equal(c.store.viewerOrderById(order.orderId).transferId,'tr_fixture');
+  assert.equal(c.transfers[0].amount,445);
+  assert.equal(c.transfers[0].destination,c.offer.account);
+});
+
+test('live checkout stays closed until the territory and both signed event destinations are configured', async t => {
+  const c = await context(t,{marketplace:true,live:true});
+  const checkoutWith = changes => createViewerCheckout({store:c.store,env:{...c.env,...changes},fetchImpl:c.fetchImpl});
+  const start = checkout => checkout.start({offer:c.offer,token:c.token,origin:c.origin});
+  for (const change of [{STRIPE_CONNECT_WEBHOOK_SECRET:''}, {STRIPE_PLATFORM_WEBHOOK_SECRET:''},
+    {STRIPE_PLATFORM_WEBHOOK_SECRET:secret}]) {
+    await assert.rejects(start(checkoutWith(change)),{statusCode:503});
+  }
+  await assert.rejects(start(checkoutWith({STREAM_SALES_TERRITORIES:''})),{statusCode:403});
+  const local = checkoutWith({STREAM_SALES_TERRITORIES:'US-NM'});
+  await assert.rejects(start(local),{statusCode:422});
+  await assert.rejects(local.start({offer:c.offer,token:c.token,origin:c.origin,viewingAddress:{country:'CA'}}),{statusCode:422});
+  assert.equal(c.calls.length,0);
+  assert.equal(c.store.viewerOrderForToken(await sha256Hex(c.token)),undefined);
+  const us = await start(checkoutWith({STREAM_SALES_TERRITORIES:'US'}));
+  assert.equal(us.useViewingAddress,true);
+  assert.deepEqual(c.first().shipping_address_collection.allowed_countries,['US']);
+  c.store.withdrawOutsideTerritory('closed');
+  await c.checkout.closeWithdrawnSessions();
+  assert.equal(c.first().status,'expired');
 });

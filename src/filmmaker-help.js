@@ -1,14 +1,25 @@
-import { agreementPath } from './filmmaker-agreement.js';
+import { agreementFor } from './filmmaker-agreement.js';
 import { payoutCountryOptions } from './payout-countries.js';
 
-export function renderFilmmakerFaq() {
+export function checkoutAvailability(territory) {
+  if (!territory || territory === 'closed') return 'Viewer payments are paused. You can still open a filmmaker account.';
+  if (territory === 'worldwide') return 'Viewers can pay wherever Stripe can process their payment.';
+  if (territory === 'US-NM') return 'The paid pilot is open to viewers watching in New Mexico.';
+  const labels = new Intl.DisplayNames('en', {type:'region'});
+  const countries = territory.split(',').filter(code => /^[A-Z]{2}$/.test(code)).map(code => labels.of(code));
+  return 'The paid pilot is open to viewers in ' + new Intl.ListFormat('en').format(countries) + '.';
+}
+
+export function renderFilmmakerFaq(mode = 'test', territory = '') {
+  const live = mode === 'live';
+  const agreementPath = agreementFor(mode).path;
   const countries = payoutCountryOptions.map(country => country.label).join(', ');
   return `<h1>FAQ</h1>
     <p class="faq-intro">Put your film wherever your audience finds you on the open web. You keep your rights, choose the price and decide where it plays. Viewers can preview, pay and watch without leaving the page.</p>
     <section id="getting-started"><h2>How do I get started?</h2>
-      <p>On the Stream home page, choose <strong>Sign up</strong>, enter your email, read and accept the <a href="${agreementPath}">filmmaker agreement</a>, and complete the security check. Open the email from Stream and choose <strong>Agree and create workspace</strong>. The pilot is open to new filmmakers. Your business country determines whether you can connect Stripe for payments.</p>
+      <p>On the Stream home page, choose <strong>Sign up</strong>, enter your email, read and accept the <a href="${agreementPath}">filmmaker agreement</a>, and complete the security check. Open the email from Stream and choose <strong>Agree and create workspace</strong>. The pilot is open to new filmmakers. ${live ? checkoutAvailability(territory) + ' ' : ''}Your business country determines whether you can connect Stripe for payments.</p>
       <p>Already have a workspace? Choose <strong>Sign in</strong> on the same page and use the email linked to your account. Sign-up and sign-in links work once and expire after 15 minutes. If yours expires, request a new one.</p>
-      <p>Connect your storage in Settings, then add a film in the Dashboard. You can upload it and watch a private preview before connecting Stripe. The pilot uses test cards. Your Cloudflare account uses real storage.</p>
+      <p>Connect your storage in Settings, then add a film in the Dashboard. You can upload it and watch a private preview before connecting Stripe. ${live ? 'Your Cloudflare account pays for storage above its free allowance.' : 'The pilot uses test cards. Your Cloudflare account uses real storage.'}</p>
     </section>
     <section id="storage"><h2>How do I connect my storage?</h2>
       <p>Open <strong>Settings → Storage</strong>. Sign in to Cloudflare or create an account and activate R2. Choose a private bucket for your films, or create one using Standard storage. In its settings, keep the public development URL disabled and custom domains disconnected. Copy the bucket’s dashboard address into Stream. <a href="#storage-pricing">What will storage cost?</a></p>
@@ -16,7 +27,7 @@ export function renderFilmmakerFaq() {
       <p>To rotate a key, choose <strong>Replace R2 key</strong> in Storage. The link opens Cloudflare for the same bucket’s account. Once Stream accepts it, you can revoke the old key in Cloudflare if nothing else uses it. Choose <strong>Use a different bucket</strong> for future uploads. Keep earlier buckets and their keys available for films already using them.</p>
     </section>
     <section id="payments"><h2>When can I start selling?</h2>
-      <p>Connect Stripe and finish verification before you publish a paid film or program. In the pilot you can try checkout and transfers with test cards. No money reaches a bank account. <a href="#stripe-fees">What are the fees?</a> · <a href="#payouts">How do payouts work?</a> · <a href="#countries">Can I join from my country?</a></p>
+      <p>Connect Stripe and finish verification before you publish a paid film or program. ${live ? 'A viewer who completes checkout pays the displayed total. Stripe sends the film proceeds to your connected balance after fees are confirmed.' : 'In the pilot you can try checkout and transfers with test cards. No money reaches a bank account.'} <a href="#stripe-fees">What are the fees?</a> · <a href="#payouts">How do payouts work?</a> · <a href="#countries">Can I join from my country?</a></p>
       <p>In <strong>Settings → Payments</strong>, choose the new or existing account option. Enter identity and bank details directly on Stripe. Depending on your account, you can connect it or reuse verified details for a new one. Return to Stream and choose <strong>Check Stripe status</strong> to see whether anything is missing. <a href="https://docs.stripe.com/connect/hosted-onboarding">Stripe’s onboarding guide</a></p>
       <p>To change accounts, choose <strong>Reset Stripe connection</strong> and confirm the account shown. New sales pause until you reconnect. Your Stripe account stays open, earlier payments stay with their original account, and viewers keep their purchases and unexpired rentals.</p>
     </section>
@@ -47,8 +58,8 @@ export function renderFilmmakerFaq() {
     <section id="tax"><h2>What tax will my viewers pay?</h2>
       <p>Viewers see their total before they pay. Any film tax is added to your price. Any tax on an optional tip is included in the tip amount they select. It all goes through as one payment.</p>
       <p>For eligible New Mexico orders, Stream uses the address where the viewer will watch to look up the local gross receipts tax rate. If the lookup cannot confirm a rate, checkout uses Stripe Tax with a viewing address. Elsewhere, Stripe Tax uses the viewer’s billing address. <a href="https://www.srca.nm.gov/parts/title03/03.001.0004.html">New Mexico reporting locations</a></p>
-      <p>The pilot treats Stream’s operator as the marketplace provider and the tip as taxable at the film’s rate in New Mexico. In our Albuquerque test, a 99¢ rental with a 10¢ tip came to $1.17. That included 8¢ tax on the film and 1¢ within the tip. This example reflects the sandbox policy.</p>
-      <p>Older pilot orders used a checkout with tax turned off. For new orders using marketplace checkout, a test charge can show zero tax where no sandbox registration applies. For live sales, Stream’s operator would need to arrange any required marketplace registrations, filing and remittance. Stripe Tax Basic calculates checkout tax. A sandbox registration creates no live registration. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>
+      ${live ? `<p>Stream treats the film and optional tip as one marketplace order in New Mexico. Where Stream collects marketplace tax, the operator is responsible for reporting and remitting it. Filmmakers still handle their own income taxes. Checkout shows the amount due before the viewer pays. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for marketplaces</a></p>` : `<p>The pilot treats Stream’s operator as the marketplace provider and the tip as taxable at the film’s rate in New Mexico. In our Albuquerque test, a 99¢ rental with a 10¢ tip came to $1.17. That included 8¢ tax on the film and 1¢ within the tip. This example reflects the sandbox policy.</p>
+      <p>Older pilot orders used a checkout with tax turned off. For new orders using marketplace checkout, a test charge can show zero tax where no sandbox registration applies. For live sales, Stream’s operator would need to arrange any required marketplace registrations, filing and remittance. Stripe Tax Basic calculates checkout tax. A sandbox registration creates no live registration. <a href="https://docs.stripe.com/tax/connect">Stripe Tax for marketplaces</a> · <a href="https://docs.stripe.com/tax/testing">Testing Stripe Tax</a></p>`}
     </section>
     <section><h2>What can I upload?</h2>
       <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
@@ -92,9 +103,13 @@ export function renderFilmmakerFaq() {
       <p>Renting or buying a program counts as one sale. If that viewer starts two titles, the program records two paid plays. Each film shows its own plays, including those from programs. The program also shows plays across its lineup, including opening and closing videos. The Overview counts each play once. Older plays still count for each film. Stream began tracking which program a film was watched in when watch timing started.</p>
       <p><strong>Revenue</strong> adds up the prices viewers paid for films and programs before fees or payment adjustments. Tips and tax are tracked separately. <strong>Net Revenue</strong> subtracts card fees, the filmmaker’s share of confirmed Stripe Tax fees, and any payment adjustments recorded by Stripe. When an adjustment affects your earnings, the breakdown shows the calculation. <strong>Tax charged</strong> shows tax at the time of sale, including tax within a tip.</p>
       <p><strong>Stripe fees</strong> shows the card processing fees used to calculate net revenue. For each payment, Stream uses the fee Stripe reports. Until it arrives, Stream estimates 2.9% plus 30¢ on the full charge, including any tip and tax. Stream checks for final fees automatically. The info button shows how much is confirmed and how much is still estimated. <strong>Stripe Tax fees</strong> shows the filmmaker’s share of the confirmed fee for calculating tax. Pending means Stream is waiting for fee confirmation.</p>
-      <p>All Dashboard amounts are in U.S. dollars. The pilot shows test payments. For bank payouts and adjustments to disputed payments, check your Stripe Dashboard. <a href="#stripe-fees">More about Stripe fees</a> · <a href="#payouts">How payouts work</a></p>
+      <p>All Dashboard amounts are in U.S. dollars. ${live ? 'The Dashboard shows sales made through this workspace.' : 'The pilot shows test payments.'} For bank payouts and adjustments to disputed payments, check your Stripe Dashboard. <a href="#stripe-fees">More about Stripe fees</a> · <a href="#payouts">How payouts work</a></p>
     </section>
     <section><h2>What if I take my film or program offline?</h2>
       <p>Unpublishing stops free previews and new sales. People who bought the film or have time left on a rental can still watch. Keep the original files in your bucket so their access keeps working. Publishing a new lineup preserves the edition earlier viewers paid for.</p>
+    </section>
+    <section id="support"><h2>How do I get help or report a rights issue?</h2>
+      <p>Email <a href="mailto:info@dustwave.xyz">Stream support</a>. Include the address of the page with the player and describe what happened. Keep sign-in links, private viewing links and payment details out of the message.</p>
+      <p>Stream keeps your sign-in email, agreement acceptance and workspace settings so you can return to your films. It keeps order and access records to honor purchases and rentals and reconcile payments. Playback events supply dashboard totals such as plays and watch time. Stripe handles card details, Resend delivers private links, and Cloudflare checks the sign-in form. Contact support about access to your information or closing your workspace.</p>
     </section>`;
 }

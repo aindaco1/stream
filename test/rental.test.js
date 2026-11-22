@@ -155,3 +155,14 @@ test('the order, amount, offer type and capture must match before either entitle
   await assert.rejects(authority.issueReceipt(rent, film, { amount: 299 }));
   await assert.rejects(authority.issuePurchaseReceipt(purchase(), film, { ...order, amount: 99 }));
 });
+
+test('a sandbox receipt and grant cannot authorize live playback even with the same configured root secret', async () => {
+  const secret = randomBytes(32), now = () => purchasedAt * 1000;
+  const sandbox = createRentalAuthority(secret,{now});
+  const live = createRentalAuthority(secret,{now,live:true});
+  const receipt = await sandbox.issueReceipt(purchase(),film);
+  const {grant} = await sandbox.exchange(receipt,film);
+  await assert.rejects(live.exchange(receipt,film));
+  await assert.rejects(live.verifyGrant(grant,film));
+  await assert.rejects(live.issueReceipt(purchase(),film));
+});

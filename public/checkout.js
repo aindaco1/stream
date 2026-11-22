@@ -70,6 +70,9 @@ function viewerSlot(film) {
 }
 
 export function attachViewerCheckout(film, returnedToken, onPaid, currentRevision) {
+  const testMode = document.body.dataset.paymentMode !== 'live';
+  const rentalLabel = testMode ? 'Test rental' : 'Rental';
+  const purchaseLabel = testMode ? 'Test purchase' : 'Purchase';
   const byId = id => document.getElementById(id);
   const panel = byId('purchase');
   const payment = byId('payment');
@@ -105,6 +108,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
   const priorTip = validToken(attempts[activeKind]) ? (attempts[activeKind + 'Tip'] ?? 0) : tip.defaultValue;
   tip.value = String(attempts.selectedTip ?? priorTip);
   const starts = new Map();
+  const salesTerritory = document.body.dataset.salesTerritory;
   const manualNm = document.body.dataset.manualNm === 'true';
   const locationForm = byId('viewing-location');
   const nmFields = byId('nm-location-fields');
@@ -179,7 +183,12 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
 
   function showLocation(retry) {
     locationForm.hidden = false;
-    if (retry) byId('view-in-nm').click();
+    if (salesTerritory === 'US-NM') {
+      byId('view-elsewhere').hidden = true;
+      locationForm.querySelector('fieldset').hidden = true;
+      nmFields.querySelector('p').textContent = 'This pilot is open in New Mexico. Enter the address where you’ll watch.';
+    }
+    if (retry || salesTerritory === 'US-NM') byId('view-in-nm').click();
     else byId('view-in-nm').focus();
     return new Promise(resolve => {
       finishLocation = address => {
@@ -210,9 +219,10 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
 
   function showOffer() {
     const canUpgrade = unlocked?.kind === 'rent' && (!program || publishedRevision === unlocked.revision);
-    const available = refresh.hidden ? offers.filter(kind => !unlocked || (canUpgrade && kind === 'buy')) : [];
+    const salesClosed = salesTerritory === 'closed';
+    const available = !salesClosed && refresh.hidden ? offers.filter(kind => !unlocked || (canUpgrade && kind === 'buy')) : [];
     check.hidden = !payment.hidden || !token || token === unlocked?.token;
-    panel.hidden = !available.length && check.hidden && refresh.hidden;
+    panel.hidden = !available.length && check.hidden && refresh.hidden && (!salesClosed || unlocked);
     byId('tip-choice').hidden = !available.length;
     byId('tip-value').textContent = tip.value + '%';
     tip.setAttribute('aria-valuetext', tip.value + ' percent');
@@ -229,7 +239,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     const terms = [];
     if (available.includes('rent')) terms.push('Rent for ' + rentalLength(hours) + ' from payment.');
     if (available.includes('buy')) terms.push(program ? 'Buy to watch and download every title in one ZIP.' : 'Buy to watch and download.');
-    byId('terms').textContent = available.length ? 'Test checkout. ' + terms.join(' ') + ' Applicable film tax is added at checkout.' : '';
+    byId('terms').textContent = available.length ? (testMode ? 'Test checkout. ' : '') + terms.join(' ') + ' Applicable film tax is added at checkout.' : salesClosed && !unlocked ? 'Viewer payments have not opened yet.' : '';
   }
 
   function schedule() {
@@ -324,7 +334,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     window.scrollTo(0, 0);
     const heading = byId('checkout-heading');
     heading.textContent = byId('film-title').textContent;
-    byId('order-terms').textContent = kind === 'rent' ? 'Test rental · ' + rentalLength(hours) + ' from payment' : 'Test purchase · Watch and download';
+    byId('order-terms').textContent = kind === 'rent' ? rentalLabel + ' · ' + rentalLength(hours) + ' from payment' : purchaseLabel + ' · Watch and download';
     byId('order-price').textContent = '';
     byId('order-tip').hidden = true;
     byId('order-tax').textContent = '';
@@ -342,7 +352,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
         viewingAddress = await showLocation(unconfirmedLocation);
         if (run !== generation) return;
       }
-      status.textContent = 'Opening secure test checkout…';
+      status.textContent = testMode ? 'Opening secure test checkout…' : 'Opening secure checkout…';
       if (replace) {
         // A closed form can still be waiting for Stripe to open the session.
         // Resolve its outcome before replacing the viewer's only recovery token.
@@ -381,7 +391,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
         throw new Error('Invalid offer');
       }
       if (kind === 'rent' && Number.isInteger(result.rentalHours)) byId('order-terms').textContent =
-        'Test rental · ' + rentalLength(result.rentalHours) + ' from payment';
+        rentalLabel + ' · ' + rentalLength(result.rentalHours) + ' from payment';
       if (typeof result.title === 'string' && result.title) heading.textContent = result.title;
       if (!marketplace && result.currency === 'usd' && Number.isSafeInteger(result.amount) && result.amount > 0) {
         byId('order-price').textContent = currency.format(result.amount / 100);

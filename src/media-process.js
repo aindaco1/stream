@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { BLOCK_SIZE } from './source.js';
+import { mediaTransport } from './media-sandbox.js';
 
 const execute = promisify(execFile);
 const rendering = { slots: 2, active: 0, queue: [] };
@@ -77,9 +78,10 @@ export async function mediaProcess(source, head, format, { probe = false, before
     });
     server.maxConnections = 4;
     server.requestTimeout = timeout;
+    let transport;
     try {
-      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-      const proxy = 'http://127.0.0.1:' + server.address().port;
+      transport = await mediaTransport(server, probe ? 'ffprobe' : 'ffmpeg');
+      const { proxy } = transport;
       // Format selection comes from local magic bytes. Disable external QuickTime references and every
       // input protocol except the HTTP transport needed to read our own private socket.
       const input = ['-protocol_whitelist', 'http,tcp', '-http_proxy', proxy, '-format_whitelist', 'mov,matroska,webm', '-f', format,
@@ -87,7 +89,7 @@ export async function mediaProcess(source, head, format, { probe = false, before
         '-probesize', '2097152', '-analyzeduration', '2000000', '-max_streams', '64', ...before, '-i', url];
       const args = ['-hide_banner', '-loglevel', 'error', '-max_alloc', '134217728',
         ...(probe ? [] : ['-nostdin', '-filter_threads', '1', '-filter_complex_threads', '1']), ...input, ...after];
-      const running = execute(probe ? 'ffprobe' : 'ffmpeg', args, {
+      const running = execute(transport.executable, [...transport.prefix, ...args], {
         env: { PATH: process.env.PATH, LC_ALL: 'C', http_proxy: proxy }, encoding: 'buffer', timeout, maxBuffer: maxOutput, killSignal: 'SIGKILL'
       });
       running.child.stdin.on('error', () => {}); // A completed bounded interval can close the subtitle pipe early.
@@ -101,6 +103,7 @@ export async function mediaProcess(source, head, format, { probe = false, before
       const closed = new Promise(resolve => server.close(resolve));
       server.closeAllConnections();
       await closed;
+      await transport?.cleanup?.();
     }
   });
 }

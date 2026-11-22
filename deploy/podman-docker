@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Run Wrangler's Docker commands on Podman, which loads build results locally."""
+import os
+import sys
+
+args = sys.argv[1:]
+if args[:1] == ["build"]:
+    # Podman's local builder already loads images and emits no BuildKit provenance.
+    args = [arg for arg in args if arg not in ("--load", "--provenance=false")]
+os.execvp("podman", ["podman", *args])

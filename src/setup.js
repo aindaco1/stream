@@ -1,12 +1,13 @@
 import { staticAsset } from './static-asset.js';
-import { createHash } from 'node:crypto';
+import { accessPage, handleAccess, isAccessPath } from './workspace-access.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
-import { streamSender, sendStreamEmail, mailbox } from './stream-email.js';
-import { agreementPath, agreementVersion, renderFilmmakerAgreement } from './filmmaker-agreement.js';
-import { renderFilmmakerFaq } from './filmmaker-help.js';
+import { streamSender } from './stream-email.js';
+import { agreementModeForPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
+import { checkoutAvailability, renderFilmmakerFaq } from './filmmaker-help.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { localPreviewPort } from './config.js';
+import { stripeMode } from './stripe-mode.js';
 import { operatorDirectory } from './operator.js';
 import { openFilm } from './media.js';
 import { filmPrices, priceFromInput, maxPreviewSeconds, previewSeconds, savedPreviewSeconds, rentalHours } from './prices.js';
@@ -17,10 +18,12 @@ import { centerFrame } from './thumbnail-frame.js';
 import { verifyUploadAccess } from './r2-write.js';
 import { checkR2Bucket, createR2Source } from './source.js';
 import { guidedBucketForm, parseR2BucketUrl, R2SetupError } from './setup-r2.js';
-import { openSetupStore } from './setup-store.js';
+import { openRuntimeStore } from './runtime-store.js';
 import { bucketSelection, isBucketFileKey, listBucketVideos } from './bucket-videos.js';
 import { isProgramId, validRights } from './program-store.js';
 import { programRights, renderPrivateProgram, renderProgramEditor, submittedLineup } from './program-editor.js';
+import { newMexicoReport } from './nm-tax-report.js';
+import { reviewTaxFee } from './stripe-live-operations.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
 import { creditProblem, escapeHtml, infoFields, posterChoice, selectedFields } from './film-embed.js';
@@ -35,35 +38,6 @@ const rightsStatement = 'I own this film or have permission to distribute it thr
 
 class SetupError extends Error {
   constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; }
-}
-
-function accessPage({ admin, signup, siteKey, message, error }) {
-  const title = signup ? 'Create your filmmaker workspace' : admin ? 'Super admin sign-in' : 'Filmmaker sign-in';
-  const path = signup ? '/setup/sign-up' : admin ? '/setup/admin/sign-in' : '/setup/sign-in';
-  const feedback = message ? `<p class="feedback${error ? ' error' : ''}" role="${error ? 'alert' : 'status'}">${escapeHtml(message)}</p>` : '';
-  const agreement = `<a href="${agreementPath}" target="_blank" rel="noopener">filmmaker agreement</a>`;
-  const navigation = admin ? '' : `<nav class="tab-bar subtabs" aria-label="Filmmaker account">
-    <a href="/" ${signup ? 'aria-current="page"' : ''}>Sign up</a>
-    <a href="/setup/sign-in" ${signup ? '' : 'aria-current="page"'}>Sign in</a></nav>`;
-  const action = signup ? 'stream_signup' : admin ? 'stream_admin' : 'stream_filmmaker';
-  return workspacePage(title, null, `<section class="sign-in-panel"><h1>${title}</h1>${feedback}
-    <div class="field-stack" data-request-link>${navigation}
-      ${signup ? '<p>Bring your film to your own site. Join the free pilot to try rentals and downloads with test payments.</p>' : ''}
-      ${siteKey ? `<form method="post" action="${path}/request">
-        <label>Email address<input type="email" name="email" autocomplete="email" inputmode="email" required maxlength="254"></label>
-        ${signup ? `<label><input type="checkbox" name="agreement" value="${agreementVersion}" required><span>I agree to the ${agreement}.</span></label>` : ''}
-        <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}" data-action="${action}" data-size="compact"></div>
-        <button type="submit">${signup ? 'Email me a sign-up link' : 'Email me a sign-in link'}</button>
-        <p class="hint">Your email link works once and expires in 15 minutes.</p></form>` :
-        '<p>Email access is temporarily unavailable. Please try again later.</p>'}
-    </div>
-    <form method="post" action="${path}" data-exchange hidden><input type="hidden" name="code">
-      ${signup ? `<input type="hidden" name="agreement" value="${agreementVersion}">
-        <p>Confirm your email and accept the ${agreement} to open your workspace.</p>` :
-        `<p>Your private link is ready. Continue to open your ${admin ? 'platform analytics' : 'filmmaker workspace'}.</p>`}
-      <button type="submit">${signup ? 'Agree and create workspace' : admin ? 'Open platform analytics' : 'Open workspace'}</button></form>
-    ${signup ? '' : `<a href="${admin ? '/setup/sign-in' : '/setup/admin/sign-in'}">${admin ? 'Filmmaker sign-in' : 'Super admin sign-in'}</a>`}</section>`,
-    { admin, signIn: true, turnstile: Boolean(siteKey) });
 }
 
 async function readForm(req, limit = 8192, repeatable = []) {
@@ -128,7 +102,7 @@ function bucketForm(data) {
 }
 
 export async function createSetup({
-  directory = join(operatorDirectory(), 'filmmakers'), stripe, viewerCheckout, env = process.env,
+  env = process.env, directory = join(operatorDirectory(env), 'filmmakers'), stripe, viewerCheckout,
   sourceFor = createR2Source, checkBucket = checkR2Bucket, resolveBucket = guidedBucketForm, thumbnailFetch = fetch, uploadFetch = fetch, verifyChallenge = verifyTurnstile, mailFetch = fetch
 } = {}) {
   const style = staticAsset('text/css', await readFile(new URL('../public/setup.css', import.meta.url)));
@@ -151,7 +125,22 @@ export async function createSetup({
   }).map(async ([route, file]) => [route, staticAsset('text/javascript', await readFile(file))])));
   const from = streamSender(env);
   const siteKey = from && env.STREAM_TURNSTILE_SECRET_KEY && env.STREAM_TURNSTILE_SITE_KEY;
-  const store = openSetupStore(directory);
+  const mode = stripeMode(env);
+  if (mode === 'live') {
+    const origin = value => {
+      if (!value) throw new Error('Live Stream requires STREAM_PUBLIC_ORIGIN and STREAM_VIEWER_ORIGIN.');
+      const url = new URL(value);
+      if (url.origin !== value || url.protocol !== 'https:') throw new Error('Live origins must use HTTPS.');
+      return url.origin;
+    };
+    if (origin(env.STREAM_PUBLIC_ORIGIN) === origin(env.STREAM_VIEWER_ORIGIN)) {
+      throw new Error('Choose separate HTTPS origins for the workspace and viewer.');
+    }
+    if ([env.STREAM_TURNSTILE_SITE_KEY, env.STREAM_TURNSTILE_SECRET_KEY].some(key => /^[123]x0{10,}/.test(key ?? ''))) {
+      throw new Error('Live signup requires a production Turnstile widget.');
+    }
+  }
+  const store = openRuntimeStore(directory, mode);
   const thumbnails = createThumbnails(store, thumbnailFetch);
   const uploads = createFilmUploads(store, { fetchImpl: uploadFetch });
   const checkout = viewerCheckout ?? createViewerCheckout({store,env});
@@ -186,14 +175,13 @@ export async function createSetup({
     const sessionId = req.headers.cookie?.split(/;\s*/).find(v => v.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
     const session = store.session(sessionId, audience);
     const provider = stripe ?? createStripeSetup({ env, origin });
-    const mode = env.STRIPE_CONNECT_LIVE === '1' ? 'live' : 'test';
     const display = (status = 200, feedback = {}) => {
       const { r2, stripe: savedStripe } = store.maker(session.owner);
       const state = stripeSetupStateForMode(savedStripe, mode);
       return html(status, renderSettingsPage({
         filmmaker: { name: session.email || session.owner }, csrf: session.csrf,
         initialSection: path.startsWith('/setup/stripe/') ? 'payments' : path.startsWith('/setup/r2') ? 'storage' : undefined,
-        stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
+        stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, availability: mode === 'live' ? checkoutAvailability(checkout.salesTerritory) : '', hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
           canReset: Boolean(state.accountId || state.flow || state.createRequest),
           unsupportedCountry: state.unsupportedCountry,
           status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName, accountId: state.accountId },
@@ -207,47 +195,17 @@ export async function createSetup({
     if (get && path === '/setup/dark.css') return darkStyle(req, send, commonHeaders);
     if (get && scripts.has(path)) return scripts.get(path)(req, send, commonHeaders);
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
-    if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(), { faq: true, admin }));
-    if (get && path === agreementPath) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(), { reference: true }));
+    if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(mode, checkout.salesTerritory), { faq: true, admin }));
+    const edition = agreementModeForPath(path);
+    if (get && edition) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(edition), { reference: true }));
     const signup = ['/setup/home', '/setup/sign-up', '/setup/sign-up/request'].includes(path);
-    const showAccess = (status, message = '', error = false) => html(status, accessPage({ message, admin, signup, siteKey, error }), siteKey ? {
+    const showAccess = (status, message = '', error = false) => html(status, accessPage({ message, admin, signup, siteKey, error, mode }), siteKey ? {
       'Content-Security-Policy': csp.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com") +
         "; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com"
     } : {});
     if (get && path === '/setup/home') return session ? redirect('/setup/dashboard') : showAccess(200);
-    if (path === basePath + '/sign-in/request' || path === '/setup/sign-up/request') {
-      if (method !== 'POST') return reject(405, 'Use the email form.');
-      if (!siteKey) return showAccess(503, 'Email access is temporarily unavailable.', true);
-      let form;
-      try { form = await readForm(req); } catch { return showAccess(400, 'Use the email form.', true); }
-      if (!mailbox(form.email)) return showAccess(400, 'Enter a valid email address.', true);
-      if (signup && form.agreement !== agreementVersion) return showAccess(400, 'Read and agree to the filmmaker agreement to sign up.', true);
-      const challenge = await verifyChallenge(new Request(origin), env, form['cf-turnstile-response'],
-        { secretEnvNames: ['STREAM_TURNSTILE_SECRET_KEY'], action: signup ? 'stream_signup' : 'stream_' + audience });
-      if (!challenge.ok) return showAccess(challenge.status, 'The security check could not be verified. Please try again.', true);
-      const delivery = signup ? store.requestSignup(form.email, form.agreement) : store.requestLogin(form.email, audience);
-      if (delivery) {
-        const home = env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1:' + req.socket.localPort;
-        const link = home + (delivery.signup ? '/setup/sign-up' : basePath + '/sign-in') + '#magic-link=' + delivery.code;
-        const payload = { from, to: [delivery.email], subject: delivery.signup ? 'Confirm your email for Stream' : admin ? 'Sign in to Stream administration' : 'Sign in to Stream',
-          text: (delivery.signup ? 'To create your filmmaker workspace, open this link and confirm the filmmaker agreement within 15 minutes.' :
-            'Open this private link within 15 minutes to sign in to Stream.') + '\n\n' + link + '\n\nIf you didn’t request this link, you can ignore this email.' };
-        void sendStreamEmail({ key: env.RESEND_API_KEY, payload, fetchImpl: mailFetch,
-          idempotencyKey: 'stream-login-' + createHash('sha256').update(delivery.code).digest('hex') })
-          .then(response => { if (!response.ok) throw new Error(); }).catch(() => console.error('Stream sign-in email delivery failed.'));
-      }
-      return showAccess(200, signup ? 'Check your inbox for a private link to your workspace. If it hasn’t arrived in a few minutes, check your spam folder or try again.' : 'If this email is linked to an account, a sign-in link will arrive shortly. Check your spam folder, too.');
-    }
-    if (path === basePath + '/sign-in' || path === '/setup/sign-up') {
-      if (get) return showAccess(200);
-      if (method !== 'POST') return reject(405, 'Use the email form.');
-      try {
-        const { code, agreement } = await readForm(req);
-        const id = signup ? store.confirmSignup(code || '', agreement) : store.signIn(code || '', audience);
-        if (!id) return showAccess(401, 'This link is no longer valid. Request a fresh email link.', true);
-        return redirect(admin ? basePath : '/setup/settings', { 'Set-Cookie': cookie(id, admin ? 12 * 3600 : 14 * 86400) });
-      } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
-    }
+    if (isAccessPath(path)) return handleAccess({path, method, get, origin, env, store, mode, siteKey, from,
+      showAccess, redirect, reject, cookie, formData: () => readForm(req), verifyChallenge, mailFetch});
     const metricsOnly = get && req.headers['x-stream-analytics'] !== undefined;
     if (metricsOnly && (!session || req.headers['x-stream-analytics'] !== session.csrf)) return reject(401, 'Sign in again.');
     const metrics = markup => html(200, markup, {'X-Stream-Analytics':'1', 'Cache-Control':'no-store'});
@@ -257,7 +215,39 @@ export async function createSetup({
         const report = store.platformReport(searchParams.get('maker'), Number(searchParams.get('page') || 1));
         if (!report) return reject(404, 'Filmmaker unavailable.');
         if (metricsOnly) return metrics(renderPlatformDashboard(session.csrf, report, true));
-        return html(200, renderPlatformDashboard(session.csrf, report), {'Content-Security-Policy': csp + "; connect-src 'self'"});
+        return html(200, renderPlatformDashboard(session.csrf, report, false, mode === 'live'), {'Content-Security-Policy': csp + "; connect-src 'self'"});
+      }
+      if (mode === 'live' && get && path === basePath + '/new-mexico.csv') {
+        const month = searchParams.get('month');
+        if (!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)) return reject(400,'Choose a valid reporting month.');
+        return send(200,'text/csv; charset=utf-8',newMexicoReport(store,month),{...commonHeaders,
+          'Cache-Control':'no-store','Content-Disposition':'attachment; filename="stream-nm-' + month + '.csv"'});
+      }
+      if (mode === 'live' && path === basePath + '/tax-fees') {
+        if (get) {
+          const platform = await checkout.platformId();
+          const pending = store.pendingTaxFees(platform);
+          const options = pending.slice(0,100).map(row =>
+            '<option value="' + escapeHtml(row.chargeId) + '">' + escapeHtml(row.chargeId) + ' · ' +
+            new Date(row.paidAt * 1000).toISOString().slice(0,10) + '</option>').join('');
+          const form = options ? `<form method="post" class="film-form">
+            <input type="hidden" name="csrf" value="${escapeHtml(session.csrf)}">
+            <label>Pending charge<select name="charge" required>${options}</select></label>
+            <label>Stripe Fees report ID<input name="report" required pattern="frr_[A-Za-z0-9]+" maxlength="104" placeholder="frr_…" autocomplete="off"></label>
+            <p>Use a completed itemized report by incurred date. Stream reads the amount directly from Stripe.</p>
+            <label><input type="checkbox" name="zero"> If the report has no matching row, I have checked this specific charge in Stripe and confirmed its Tax Basic fee was zero.</label>
+            <button type="submit">Record verified fee</button></form>` : '<p>No fees are waiting for confirmation.</p>';
+          return html(200,workspacePage('Stripe Tax fees',session.csrf,'<a href="/setup/admin">Platform analytics</a><h1>Stripe Tax fees</h1>' + form,{admin:true}));
+        }
+        if (method !== 'POST') return reject(405,'Use the review form.');
+        let form;
+        try { form = await readForm(req); } catch { return reject(400,'Use the review form.'); }
+        if (form.csrf !== session.csrf) return reject(403,'Reload before recording fee evidence.');
+        try {
+          await reviewTaxFee({store,key:env.STRIPE_CONNECT_SECRET_KEY,platform:await checkout.platformId(),
+            chargeId:form.charge,reportId:form.report,confirmZero:form.zero === 'on',reviewer:session.owner});
+        } catch (error) { return reject(422,error.message); }
+        return redirect(basePath + '/tax-fees');
       }
       if (method === 'POST' && path === basePath + '/sign-out') {
         let form;
@@ -560,7 +550,7 @@ export async function createSetup({
         if (!store.resetStripe(owner, mode, data.confirmation)) {
           throw new SetupError('The Stripe connection changed. Review the current connection before resetting it.', 409);
         }
-        if (mode === 'test' && await checkout.closeWithdrawnSessions(owner)) {
+        if (await checkout.closeWithdrawnSessions(owner)) {
           return display(200, { notice: 'Stripe was reset. Stream is closing unfinished checkouts and will retry automatically.' });
         }
         return redirect('/setup/settings#payments');
@@ -640,7 +630,7 @@ export async function createSetup({
               if (result.status !== 'ready') throw new Error('Payments unavailable');
               await publications.publish(owner, saved.id);
             }
-            catch { throw new SetupError('Publishing requires a ready Stripe test account, confirmed rights and access to the saved original in R2. Check your connections and try again.', 422); }
+            catch { throw new SetupError('Publishing requires a ready Stripe account, confirmed rights and access to the saved original in R2. Check your connections and try again.', 422); }
           } else throw new SetupError('Choose whether to publish this film.');
         } else store.setFilmSettings(owner, saved.id, settingsForm(data, saved));
         return redirect('/setup/dashboard#' + saved.id);

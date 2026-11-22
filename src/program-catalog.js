@@ -13,7 +13,7 @@ export function programCatalog({
   store,
   authority,
   seller,
-  sandbox,
+  checkoutConfigured,
   privateSource,
   openMedia,
   originalFile,
@@ -66,7 +66,7 @@ export function programCatalog({
 
   function version(id, { entitled = false, revision } = {}) {
     const owner = store.programOwner(id);
-    if (!owner || !sandbox()) return;
+    if (!owner || !checkoutConfigured()) return;
     const p = store.program(owner, id);
     const account = seller(owner);
     if (revision === undefined) {
@@ -185,7 +185,7 @@ export function programCatalog({
       return authority && v ? project(v) : undefined;
     },
     async publish(owner, id) {
-      if (!sandbox() || !seller(owner)) throw unavailable();
+      if (!checkoutConfigured() || !seller(owner)) throw unavailable();
       const v = draft(owner, id, true);
       const validate = check(v);
       for (const m of v.snapshot.lineup) {

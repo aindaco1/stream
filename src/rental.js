@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { isPrice, rentalHours } from './prices.js';
 import { hmacSha256, randomToken } from '@dustwave/worker-core/crypto';
 import { signExpiringToken, verifyExpiringToken } from '@dustwave/worker-core/session-security';
@@ -24,12 +24,16 @@ function denied() {
   return new Error('Rental access unavailable.');
 }
 
-export function createRentalAuthority(secret, { now = Date.now } = {}) {
-  const signingKey = Buffer.isBuffer(secret) ? secret.toString('base64url') : secret;
-  if (typeof signingKey !== 'string' || !/^[a-zA-Z0-9_-]{43}$/.test(signingKey) ||
-      Buffer.from(signingKey, 'base64url').toString('base64url') !== signingKey) {
+export function createRentalAuthority(secret, { now = Date.now, live = false } = {}) {
+  const rawKey = Buffer.isBuffer(secret) ? secret.toString('base64url') : secret;
+  if (typeof rawKey !== 'string' || !/^[a-zA-Z0-9_-]{43}$/.test(rawKey) ||
+      Buffer.from(rawKey, 'base64url').toString('base64url') !== rawKey) {
     throw new TypeError('A 32-byte rental signing key is required.');
   }
+
+  // Distinct key material prevents cross-mode grants even when an operator
+  // accidentally supplies the same secret to a rehearsal and the live service.
+  const signingKey = live ? createHmac('sha256', Buffer.from(rawKey, 'base64url')).update('stream-live-grants-v1').digest('base64url') : rawKey;
 
   async function read(token, types, film) {
     const time = now();
@@ -57,14 +61,14 @@ export function createRentalAuthority(secret, { now = Date.now } = {}) {
     const scope = rentalScope(film);
     const charge = intent?.latest_charge;
     const meta = intent?.metadata;
-    const legacy = meta?.kind === undefined && meta?.amount === undefined && kind === 'rent' && amount === 99;
+    const legacy = !live && meta?.kind === undefined && meta?.amount === undefined && kind === 'rent' && amount === 99;
     const subtotal = agreedSubtotal ?? amount;
     if (!isPrice(subtotal) || (subtotal !== amount && (meta?.tax_policy !== 'marketplace-v1' || subtotal > amount)) ||
         !isPrice(amount) || intent?.object !== 'payment_intent' || !intent.id?.startsWith('pi_') ||
-        intent.status !== 'succeeded' || intent.livemode !== false || intent.amount !== amount ||
-        intent.amount_received !== amount || intent.currency !== 'usd' || meta?.product !== 'stream-rental-prototype' ||
+        intent.status !== 'succeeded' || intent.livemode !== live || intent.amount !== amount ||
+        intent.amount_received !== amount || intent.currency !== 'usd' || meta?.product !== (live ? 'stream' : 'stream-rental-prototype') ||
         meta.scope !== scope || (!legacy && (meta.kind !== kind || meta.amount !== String(subtotal))) ||
-        charge?.object !== 'charge' || charge.livemode !== false || charge.status !== 'succeeded' ||
+        charge?.object !== 'charge' || charge.livemode !== live || charge.status !== 'succeeded' ||
         charge.payment_intent !== intent.id || charge.captured !== true || charge.paid !== true ||
         !Number.isSafeInteger(charge.created) || charge.created <= 0 || charge.created > Math.floor(now() / 1000)) throw denied();
     if (paymentState === undefined) {
@@ -78,7 +82,7 @@ export function createRentalAuthority(secret, { now = Date.now } = {}) {
   return {
     async issueReceipt(intent, film, { amount = 99, paidAt, orderId, rentalHours: hours = 48, paymentState, agreedSubtotal } = {}) {
       const { scope, created } = confirmedCharge(intent, film, amount, 'rent', paymentState, agreedSubtotal);
-      if (rentalHours(hours) !== hours || hours === null ||
+      if ((live && !validOrder(orderId)) || rentalHours(hours) !== hours || hours === null ||
           (orderId !== undefined && (!validOrder(orderId) || intent.metadata.order !== orderId))) throw denied();
       const duration = hours * 3600;
       // Hosted orders can settle after charge creation. Their stored, verified

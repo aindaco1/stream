@@ -17,7 +17,7 @@ export function streamSender(env) {
 
 export function sendStreamEmail({ key, payload, idempotencyKey, fetchImpl = fetch }) {
   return fetchImpl('https://api.resend.com/emails', {
-    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000),
     headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify(prepareResendEmail(payload))
   });
