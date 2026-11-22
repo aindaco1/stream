@@ -55,6 +55,15 @@ for (const [codec,extension,encoder,subtitleCodec] of codecs) {
         assert.ok(['h264','aac'].includes(stream.codec_name));
         assert.ok(Number(stream.duration) <= 5.00001, codec+' preview duration '+stream.duration);
       }
+      const paidStreams = probe(ending,'stream=codec_type,codec_name,profile,pix_fmt,sample_rate,channels').streams;
+      const video = paidStreams.find(stream => stream.codec_type === 'video');
+      const audio = paidStreams.find(stream => stream.codec_type === 'audio');
+      assert.equal(video.codec_name, 'h264');
+      assert.equal(video.pix_fmt, 'yuv420p');
+      assert.equal(audio.codec_name, 'aac');
+      assert.equal(audio.profile, 'LC');
+      assert.equal(audio.channels, 2);
+      assert.equal(audio.sample_rate, '48000');
       assert.ok(pixel(preview,4) < 16);
       assert.ok(pixel(ending,.5) > 230);
       ff(['-xerror','-i',ending,'-f','null','-']);
@@ -109,6 +118,58 @@ test('PGS, DVD and DVB pictures can be switched on/off and a sustained cue survi
       assert.ok(Math.abs(pixel(clear,2)-background)<5,codec+' cleared cue at 80s');
     } finally { film.close(); }
   }
+});
+
+test('rental references survive seeking and picture captions, with isolated visible frames', async () => {
+  const sup = join(dir,'mark.sup'), original = join(dir,'mark.mkv');
+  await writeFile(sup,pictureSubtitles([[0,false],[2,true],[4,false]]));
+  ff(['-f','lavfi','-i','color=c=gray:s=160x90:r=12:d=69','-i',sup,'-map','0:v','-map','1:s',
+    '-threads','1','-c:v','libx264','-g','24','-c:s','copy',original]);
+  const originalBytes = await readFile(original), film = await openFilm(createFileSource(original));
+  const sample = async (name, content) => {
+    const path = join(dir,name);
+    await writeFile(path,await content);
+    return path;
+  };
+  const corner = (path,time,side) => ff(['-i',path,'-ss',String(time),'-vf',
+    'crop=80:32:'+(side === 'right' ? 80 : 0)+':0,format=gray','-frames:v','1','-f','rawvideo','pipe:1']);
+  function changed(a,b) {
+    assert.equal(a.length,80*32);
+    assert.equal(b.length,a.length);
+    return a.reduce((count,value,i)=>count+Number(Math.abs(value-b[i])>8),0);
+  }
+  try {
+    const [track] = film.subtitleTracks;
+    const first = 'AAAAAAAA', second = 'WWWWWWWW';
+    const [plain,a,b,preview] = await Promise.all([
+      sample('plain.ts',film.segment(0)),
+      sample('a.ts',film.segment(0,{watermark:first})),
+      sample('b.ts',film.segment(0,{watermark:second})),
+      sample('unmarked.mp4',film.preview(5))
+    ]);
+    const clear = corner(plain,1,'right');
+    assert.ok(changed(corner(a,1,'right'),clear)>50, 'first minute starts with a readable mark on the right');
+    assert.ok(changed(corner(a,1,'right'),corner(b,1,'right'))>25, 'simultaneous viewers receive distinct references');
+    assert.ok(changed(corner(a,1,'left'),clear)<10);
+    assert.ok(changed(corner(a,5,'right'),clear)<10, 'the mark disappears after four seconds');
+    assert.ok(changed(corner(preview,1,'right'),clear)<10, 'the public preview stays clean');
+    const captioned = await sample('captioned.ts',film.segment(0,{watermark:first,subtitleId:track.id}));
+    assert.ok(changed(corner(captioned,3,'right'),clear)>50);
+    assert.ok(Math.abs(pixel(captioned,3)-pixel(a,3))>30,'selected picture subtitle is also visible');
+    const index = film.segments.findIndex(s => s.start === 60);
+    const late = await sample('late-mark.ts',film.segment(index,{watermark:first}));
+    assert.ok(changed(corner(late,1,'left'),clear)>50,'a seek to minute two switches to the left');
+    assert.ok(changed(corner(late,1,'right'),clear)<10);
+    const quiet = await Promise.all([first,second].map(watermark => film.segment(1,{watermark})));
+    assert.strictEqual(quiet[0],quiet[1], 'quiet intervals share a single in-flight encoding');
+    assert.strictEqual(await film.segment(1,{watermark:second}), quiet[0], 'quiet screener intervals are reusable');
+    assert.notStrictEqual(await film.segment(0,{watermark:first}), await film.segment(0,{watermark:first}),
+      'completed viewer-specific marks are not retained');
+    for (const watermark of ['toolong123','<markup>',null]) {
+      await assert.rejects(film.segment(1,{watermark}),/reference/);
+    }
+    assert.deepEqual(await readFile(original),originalBytes);
+  } finally { film.close(); }
 });
 
 test('source sizes accept decimal 10 GB and reject one byte over without loading a file', async () => {

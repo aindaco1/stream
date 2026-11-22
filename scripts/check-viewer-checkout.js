@@ -10,9 +10,11 @@ import { pictureSubtitles } from '../test/fixtures/picture-subtitles.js';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import sharp from 'sharp';
 import { openFilm } from '../src/media.js';
 import { createRentalAuthority, rentalScope } from '../src/rental.js';
 import { makeServer } from '../src/server.js';
+import { checkProgramLayout, checkProgramPlayer, programFixture } from './program-player-rehearsal.js';
 import { createFileSource } from '../src/source.js';
 
 const clock = fileURLToPath(new URL('../.local/clock.mp4', import.meta.url));
@@ -33,9 +35,17 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const expectedHash = hash(await readFile(path));
 const offers = new Map(['first', 'second', 'legacy'].map(id => [id, { id, title: 'Test film ' + id, scope: 'test/' + id,
   prices: { rent: 99, buy: 299 }, revision: film.revision, authority: createRentalAuthority(randomBytes(32)) }]));
+const program = await programFixture({ clock, directory, text, picture, path, duration:film.duration });
+offers.set(program.offer.id, program.offer);
+const poster = await sharp({create:{width:160,height:90,channels:3,background:'#777'}}).jpeg().toBuffer();
+const views = [];
 const catalog = {
-  get: id => offers.get(id), verify: id => offers.get(id), list: () => [...offers.values()],
-  open: () => openFilm(source),
+  recordView(id, kind, eventId, {memberId, seconds}) { views.push({id, kind, eventId, memberId, seconds}); },
+  poster: () => poster,
+  get: (id, options) => id === program.offer.id && program.withdrawn && !options?.entitled ? undefined : offers.get(id),
+  verify: id => offers.get(id), list: () => [...offers.values()],
+  open: (id, options) => id === program.offer.id ? program.open(options?.memberId) : openFilm(source),
+  programFile: (_id, _revision, memberId) => program.file(memberId),
   async download(id) { return { title: offers.get(id).title, size: fileHead.size, extension: 'mkv', contentType: 'video/x-matroska', stream: (start, end, signal) => createReadStream(path, { start, end: end - 1, signal }) }; }
 };
 const orders = new Map();
@@ -45,15 +55,23 @@ let mismatchedTotal;
 let opening;
 let downloadChecks = 0;
 const checkout = {
-  async start({ offer, token, kind, tipPercent }) {
+  async start({ offer, token, kind, tipPercent, viewingAddress }) {
     assert.match(token, /^[A-Za-z0-9_-]{43}$/);
     assert.ok(['rent', 'buy'].includes(kind));
     if (interruptNext) { interruptNext = false; throw Error('Simulated outage'); }
     if (opening) await opening.promise;
     if (!orders.has(token)) {
       const filmAmount = offer.prices[kind], tipAmount = Math.round(filmAmount * tipPercent / 100);
+      const taxPolicy = offer.id === 'second' || (offer.id === 'first' && kind === 'buy') ? 'marketplace-v1' : undefined;
       const order = { offer, kind, id: 'session_' + (orders.size + 1), status: 'pending',
-        filmAmount, tipPercent, tipAmount, amount: filmAmount + tipAmount, attempts: 0, submissions: 0, pendingChecks: 0 };
+        filmAmount, tipPercent, tipAmount, taxPolicy, amount: filmAmount + tipAmount, attempts: 0, submissions: 0, pendingChecks: 0 };
+      if (viewingAddress) {
+        assert.deepEqual([viewingAddress.country,viewingAddress.state,viewingAddress.city,viewingAddress.postalCode], ['US','NM','Albuquerque','87102']);
+        if (viewingAddress.line1 === '1 Civic Plaza NW') {
+          assert.deepEqual([filmAmount,tipAmount],[99,10]);
+          order.quote = { manualTax:true, chargedTotalCents:117, taxCents:9, tipTaxCents:1 };
+        } else order.quote = { useViewingAddress:true };
+      }
       orders.set(token, order);
       sessions.set(order.id, order);
     }
@@ -62,9 +80,9 @@ const checkout = {
     assert.equal(order.kind, kind);
     assert.equal(order.tipPercent, tipPercent);
     return order.status === 'paid' ? { status: 'paid' } :
-      { clientSecret: order.id, publishableKey: 'pk_test_fixture', account: 'acct_' + offer.id,
+      { clientSecret: order.id, publishableKey: 'pk_test_fixture', account: order.taxPolicy ? null : 'acct_' + offer.id, taxPolicy: order.taxPolicy,
         uiMode: offer.id === 'legacy' ? 'embedded_page' : 'elements', orderId: order.id, amount: order.amount,
-        filmAmount: order.filmAmount, tipPercent, tipAmount: order.tipAmount, currency: 'usd', title: offer.title, kind };
+        filmAmount: order.filmAmount, tipPercent, tipAmount: order.tipAmount, currency: 'usd', title: offer.title, kind, ...order.quote };
   },
   async abandon({ offer, token }) {
     const order = orders.get(token);
@@ -77,7 +95,15 @@ const checkout = {
     const order = orders.get(token);
     if (!order || order.offer !== offer) return { status: 'pending' };
     if (order.submissions && order.status === 'pending') order.pendingChecks++;
-    return { status: order.status, kind: order.kind, receipt: order.receipt };
+    const details = order.offer.type === 'program' ? {program: {title:offer.title, revision:offer.revision, lineup:offer.lineup}, memberId:order.memberId, position:order.position} : {};
+    return { status: order.status, kind: order.kind, receipt: order.receipt, ...details };
+  },
+  position({ offer, token, memberId, seconds }) {
+    const order = orders.get(token);
+    if (order?.offer !== offer || order.status !== 'paid') return false;
+    order.memberId = memberId;
+    order.position = seconds;
+    return true;
   },
   accessAllowed({ offer, orderId, kind }) {
     const order = sessions.get(orderId);
@@ -94,7 +120,7 @@ async function confirm(id) {
   const order = sessions.get(id);
   assert.ok(order);
   const { scope, revision, authority } = order.offer;
-  const { amount } = order;
+  const amount = order.charged ?? order.amount;
   const entitlement = { film: scope, revision };
   const pi = 'pi_' + id;
   const intent = { object: 'payment_intent', id: pi, status: 'succeeded', livemode: false, amount, amount_received: amount, currency: 'usd',
@@ -121,8 +147,10 @@ player.on('request', (req, res) => {
 await new Promise(resolve => player.listen(0, '127.0.0.1', resolve));
 const app = 'http://127.0.0.1:' + player.address().port;
 const publisher = createServer((req, res) => {
-  const frames = [['first', 320, 600], ['second', 375, 680], ['first', 300, 150], ['legacy', 900, 660]]
-    .map(([id, width, height]) => '<iframe allow="autoplay; payment" width="' + width + '" height="' + height + '" src="' + app + '/embed/' + id + '"></iframe>');
+  const embed = program.offer.id + '?show=synopsis';
+  const dimensions = req.url === '/program-layout' ? [[embed, 320, 640], [embed, 900, 640]] :
+    [['first?poster=marquee', 320, 600], ['second?poster=broadside', 375, 680], ['first', 300, 150], ['legacy', 900, 660], [embed + '&poster=broadside', 480, 640]];
+  const frames = dimensions.map(([id, width, height]) => `<iframe allow="autoplay; payment; picture-in-picture ${id === 'legacy' ? "'none'" : '*'}" width="${width}" height="${height}" src="${app}/embed/${id}"></iframe>`);
   res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Publisher</title>' +
     '<style>body{margin:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px}iframe{border:0}</style>' + frames.join('\n'));
 });
@@ -136,18 +164,25 @@ const library = 'https://js.stripe.com/endive/stripe.js';
 // This double never receives card or contact values. Each provider iframe
 // sends only completeness, just as the merchant-facing Elements events do.
 function stripeFixture(vendor) {
-  window.Stripe = (key, { stripeAccount }) => {
-    if (key !== 'pk_test_fixture' || stripeAccount !== 'acct_' + location.pathname.split('/')[2]) throw Error('Seller mismatch');
+  window.Stripe = (key, { stripeAccount } = {}) => {
+    const filmId = location.pathname.split('/')[2];
+    if (key !== 'pk_test_fixture' || (stripeAccount && stripeAccount !== 'acct_' + filmId)) throw Error('Seller mismatch');
     return {
-      initCheckoutElementsSdk({ clientSecret, elementsOptions }) {
+      initCheckoutElementsSdk({ clientSecret, elementsOptions, defaultValues }) {
         if (!elementsOptions?.appearance) throw Error('Checkout appearance missing');
         const complete = new Map();
         const change = new Set();
-        let total, currency;
-        const session = () => ({ currency, email: null, total: { total }, canConfirm: complete.get('contact') && complete.get('card') || false });
+        let quote, added = 0, included = 0;
+        const money = cents => ({ amount: new Intl.NumberFormat('en-US', { style: 'currency', currency: quote.currency }).format(cents / 100), minorUnitsAmount: cents });
+        function session() {
+          const ready = !quote.taxPolicy || quote.manualTax || complete.get('billing');
+          return { currency: quote.currency, email: null, tax: { status: ready ? 'ready' : 'requires_billing_address' },
+            total: { subtotal: money(quote.amount), taxExclusive: money(added), taxInclusive: money(included), total: money(quote.amount + added) },
+            canConfirm: Boolean(ready && complete.get('contact') && complete.get('card')) };
+        }
         function element(kind) {
           const frame = document.createElement('iframe');
-          frame.title = kind === 'contact' ? 'Test contact details' : 'Test payment details';
+          frame.title = 'Test ' + (kind === 'card' ? 'payment' : kind) + ' details';
           frame.src = vendor + '/' + kind;
           frame.style.cssText = 'border:0;display:block;width:100%;height:' + (kind === 'contact' ? 75 : 175) + 'px';
           const handlers = new Map();
@@ -155,6 +190,11 @@ function stripeFixture(vendor) {
           function receive(e) {
             if (e.source !== frame.contentWindow || e.origin !== vendor || e.data.type !== 'complete') return;
             complete.set(kind, e.data.complete);
+            if (kind === 'billing') {
+              // Synthetic 8% jurisdiction, rounded independently on each line.
+              added = e.data.taxed ? Math.round(quote.filmAmount * .08) : 0;
+              included = e.data.taxed ? Math.round(quote.tipAmount * .08 / 1.08) : 0;
+            }
             notify('change', { complete: e.data.complete });
             change.forEach(callback => callback(session()));
           }
@@ -170,21 +210,31 @@ function stripeFixture(vendor) {
           on(event, callback) { if (event === 'change') change.add(callback); },
           off(event, callback) { if (event === 'change') change.delete(callback); },
           createContactDetailsElement: () => element('contact'),
+          createBillingAddressElement(options) {
+            if (!quote.taxPolicy || quote.manualTax || quote.useViewingAddress || options.autocomplete?.mode !== 'automatic') throw Error('Unexpected billing address configuration');
+            return element('billing');
+          },
+          createShippingAddressElement() {
+            if (!quote.useViewingAddress || defaultValues?.shippingAddress?.address?.postal_code !== '87102') throw Error('Missing viewing address');
+            return element('billing');
+          },
           createPaymentElement(options) {
             if (options.paymentMethodOrder?.[0] !== 'card') throw Error('Card should be the first available method');
             if (options.layout?.defaultCollapsed === true) throw Error('Card fields should be open');
+            const fullBilling = quote.taxPolicy && !quote.manualTax && !quote.useViewingAddress;
+            if (options.fields.billingDetails.address !== (fullBilling ? 'never' : 'if_required')) throw Error('Unexpected billing fields');
             return element('card');
           },
           async loadActions() {
-            const quote = await fixtureOrder(clientSecret, 'read');
-            currency = quote.currency;
-            total = { amount: new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(quote.amount / 100), minorUnitsAmount: quote.amount };
+            quote = await fixtureOrder(clientSecret, 'read');
+            if (quote.manualTax) { added = quote.taxCents - quote.tipTaxCents; included = quote.tipTaxCents; }
+            if (quote.taxPolicy ? stripeAccount !== undefined : stripeAccount !== 'acct_' + filmId) throw Error('Wrong Stripe account');
             return { type: 'success', actions: {
               getSession: session,
               async confirm(options) {
                 if (options?.redirect !== 'if_required') throw Error('Unexpected payment redirect');
                 if (!session().canConfirm) return { type: 'error', error: { message: 'Complete your payment details.' } };
-                return fixtureOrder(clientSecret, 'submit');
+                return fixtureOrder(clientSecret, 'submit', session().total.total.minorUnitsAmount);
               }
             } };
           }
@@ -208,12 +258,14 @@ const mockStripe = '(' + stripeFixture.toString() + ')(' + JSON.stringify(vendor
 function providerForm(kind) {
   const fields = kind === 'contact' ?
     '<label>Email<input type="email" autocomplete="email" required></label>' :
+    kind === 'billing' ? '<label>Street address<input autocomplete="address-line1" required></label>' +
+    '<label>ZIP code<input id="zip" autocomplete="postal-code" pattern="[0-9]{5}" required></label>' :
     '<label>Card number<input autocomplete="cc-number" pattern="[0-9]{16}" required></label>' +
     '<label>Expiry<input autocomplete="cc-exp" pattern="[0-9]{2}/[0-9]{2}" required></label>' +
     '<label>Security code<input autocomplete="cc-csc" pattern="[0-9]{3}" required></label>';
   return '<!doctype html><html lang="en"><meta name="viewport" content="width=device-width">' +
     '<style>*{box-sizing:border-box}body{margin:0;font:16px sans-serif}label,input{display:block;width:100%}input{font:inherit;min-height:32px}</style>' +
-    '<form>' + fields + '</form><script>document.addEventListener("input",()=>parent.postMessage({type:"complete",complete:document.forms[0].checkValidity()},' +
+    '<form>' + fields + '</form><script>document.addEventListener("input",()=>parent.postMessage({type:"complete",taxed:document.querySelector("#zip")?.value==="87102",complete:document.forms[0].checkValidity()},' +
     JSON.stringify(app) + '));</script></html>';
 }
 const legacyForm = `<button disabled>Submit legacy payment</button><script>
@@ -224,12 +276,13 @@ button.onclick = async () => { await completeLegacy(id); parent.postMessage('com
 
 const requests = [];
 async function install(context) {
-  await context.exposeBinding('fixtureOrder', async ({ frame }, id, operation) => {
+  await context.exposeBinding('fixtureOrder', async ({ frame }, id, operation, charged) => {
     assert.equal(new URL(frame.url()).origin, app);
     const order = sessions.get(id);
     assert.equal(new URL(frame.url()).pathname, '/embed/' + order.offer.id);
     if (operation === 'read') {
-      const quote = { amount: order.amount, currency: 'usd', ...mismatchedTotal };
+      const quote = { amount: order.amount, filmAmount: order.filmAmount, tipAmount: order.tipAmount,
+        taxPolicy: order.taxPolicy, currency: 'usd', ...order.quote, ...mismatchedTotal };
       mismatchedTotal = undefined;
       return quote;
     }
@@ -240,6 +293,7 @@ async function install(context) {
       return { type: 'error', error: { message: 'The test card was declined. Try another card.' } };
     }
     order.submissions++;
+    order.charged = charged;
     return { type: 'success', session: { status: 'complete' } };
   });
   await context.exposeBinding('completeLegacy', ({ frame }, id) => {
@@ -253,22 +307,29 @@ async function install(context) {
     requests.push({ url: url.href, referrer: request.headers().referer || '', method: request.method() });
     if (url.origin === app) {
       const payload = request.url() + (request.postData() || '');
-      assert.doesNotMatch(payload, /4242424242424242|5555555555554444|stream-viewer(?:@|%40)example[.]test/);
+      assert.doesNotMatch(payload, /4242424242424242|5555555555554444|stream-viewer(?:@|%40)example[.]test|Mock(?: |\+|%20)Lane/);
     }
     if (url.origin === app || url.origin === host) return route.continue();
     if (url.href === library) return route.fulfill({ contentType: 'text/javascript', body: mockStripe });
-    if (url.origin === vendor && ['/card', '/contact'].includes(url.pathname)) return route.fulfill({ contentType: 'text/html', body: providerForm(url.pathname.slice(1)) });
+    if (url.origin === vendor && ['/card', '/contact', '/billing'].includes(url.pathname)) return route.fulfill({ contentType: 'text/html', body: providerForm(url.pathname.slice(1)) });
     if (url.href === vendor + '/legacy') return route.fulfill({ contentType: 'text/html', body: legacyForm });
     return route.abort();
   });
 }
 
-async function preview(frame, captions = false) {
+async function preview(frame, captions = false, native = false) {
   await frame.waitForFunction(() => document.querySelector('#download')?.target.startsWith('stream-file-'));
   assert.equal(await frame.locator('#purchase').isHidden(), true);
   await frame.locator('video').evaluate(video => { video.muted = true; });
-  await frame.getByRole('button', { name: 'Play 10-second preview' }).click();
-  await frame.locator('video').scrollIntoViewIfNeeded();
+  const video = frame.locator('video');
+  if (native) {
+    assert.ok(await video.evaluate(v => v.controls && v.preload === 'none' && v.src.endsWith('/preview.mp4')));
+    // Space invokes the browser's native Play action regardless of the platform's media-bar layout.
+    await video.press('Space');
+  } else {
+    await frame.getByRole('button', { name: 'Play 10-second preview' }).click();
+  }
+  await video.scrollIntoViewIfNeeded();
   try {
     await frame.waitForFunction(() => document.querySelector('video').currentTime > .1, null, { polling: 100, timeout: 12000 });
   } catch (cause) {
@@ -280,9 +341,34 @@ async function preview(frame, captions = false) {
   }
   if (captions) {
     const menu = frame.getByRole('combobox', { name: 'Subtitles' });
+    await frame.locator('video').evaluate(video => video.pause());
+    const tools = frame.locator('.video-tools');
+    const [overlay, screen] = await Promise.all([tools.boundingBox(), frame.locator('video').boundingBox()]);
+    assert.ok(overlay.x >= screen.x && overlay.y >= screen.y &&
+      overlay.x + overlay.width <= screen.x + screen.width && overlay.y + overlay.height <= screen.y + screen.height);
+    const pip = frame.getByRole('button', { name:'Picture-in-picture' });
+    if (await frame.evaluate(() => document.pictureInPictureEnabled)) {
+      await pip.click();
+      await frame.waitForFunction(() => document.pictureInPictureElement === document.querySelector('video'));
+      assert.equal(await pip.getAttribute('aria-pressed'), 'true');
+      await pip.click();
+      await frame.waitForFunction(() => !document.pictureInPictureElement);
+    }
+    // Exercise pointer selection without leaving an OS-owned picker over the playing video.
+    await menu.focus();
+    await menu.dispatchEvent('pointerdown', { pointerType: 'mouse' });
     await menu.selectOption('s2');
     await frame.waitForFunction(() => [...document.querySelector('video').textTracks]
       .some(track => track.mode === 'showing' && track.cues?.length === 1 && track.cues[0].endTime === 10));
+    const captionOutline = () => menu.evaluate(select => getComputedStyle(select.closest('label')).outlineStyle);
+    assert.equal(await captionOutline(), 'none');
+    await frame.locator('video').evaluate(video => video.play());
+    await frame.waitForFunction(() => getComputedStyle(document.querySelector('.video-tools')).opacity === '0');
+    assert.ok(await menu.evaluate(select => document.activeElement === select));
+    await menu.press('Tab');
+    await frame.page().keyboard.press('Shift+Tab');
+    assert.equal(await captionOutline(), 'solid');
+    await frame.waitForFunction(() => getComputedStyle(document.querySelector('.video-tools')).opacity === '1');
     await frame.locator('video').evaluate(video => { video.pause(); video.currentTime = 4; });
     await menu.selectOption('s3');
     await frame.waitForFunction(() => {
@@ -297,6 +383,7 @@ async function preview(frame, captions = false) {
     await menu.selectOption('s2');
     await frame.locator('video').evaluate(video => video.play());
   }
+  if (frame.url().endsWith('/legacy')) assert.equal(await frame.locator('#picture-in-picture').isHidden(), true);
   const length = await frame.locator('video').evaluate(video => { video.currentTime = 9.7; return video.duration; });
   assert.ok(Math.abs(length - 10) < .1);
   await frame.locator('#rent').waitFor();
@@ -321,6 +408,7 @@ async function checkoutFits(frame, [width, height]) {
     const action = button.getBoundingClientRect();
     const lastField = node.querySelector('#payment-element iframe').getBoundingClientRect();
     const selectors = ['#checkout-heading', '#close-checkout', '#confirm-payment', '#contact-element iframe', '#payment-element iframe'];
+    if (!node.querySelector('#billing-location').hidden) selectors.push('#billing-address-element iframe');
     return {
       overflow: Math.max(document.documentElement.scrollWidth - innerWidth, document.documentElement.scrollHeight - innerHeight),
       hasNames: selectors.slice(0, 3).every(selector => node.querySelector(selector)?.innerText.trim()),
@@ -355,11 +443,43 @@ async function fillCard(frame) {
 }
 
 async function payByCard(frame, order, { retry = false, sizes = [] } = {}) {
-  const amount = '$' + (order.amount / 100).toFixed(2);
-  const submit = frame.getByRole('button', { name: 'Pay ' + amount, exact: true });
+  const amount = cents => '$' + (cents / 100).toFixed(2);
+  const submit = frame.locator('#confirm-payment');
   await submit.waitFor();
   for (const size of sizes) await checkoutFits(frame, size);
   const { email, number } = await fillCard(frame);
+  let expectedCharge = order.amount;
+  if (order.taxPolicy) {
+    await frame.getByText('Enter your billing address to calculate tax.').waitFor();
+    assert.ok(await submit.isDisabled());
+    await frame.locator('#card-form').evaluate(form => form.requestSubmit());
+    assert.equal(order.attempts, 0, 'A missing tax location must block confirmation.');
+    const location = frame.frameLocator('iframe[title="Test billing details"]');
+    const street = location.getByLabel('Street address');
+    const zip = location.getByLabel('ZIP code');
+    assert.equal(await street.getAttribute('autocomplete'), 'address-line1');
+    await street.fill('10 Mock Lane');
+    await zip.fill('97201');
+    await frame.getByText('Film tax $0.00', { exact: true }).waitFor();
+    await frame.getByRole('button', { name: 'Pay ' + amount(order.amount), exact: true }).waitFor();
+    await zip.fill('');
+    await frame.getByText('Enter your billing address to calculate tax.').waitFor();
+    assert.ok(await submit.isDisabled());
+    await zip.fill('87102');
+    const added = Math.round(order.filmAmount * .08);
+    const included = Math.round(order.tipAmount * .08 / 1.08);
+    expectedCharge += added;
+    const taxLine = 'Film tax ' + amount(added) + (included > 0 ? ' · Tax included in tip ' + amount(included) : '');
+    await frame.getByText(taxLine, { exact: true }).waitFor();
+    await frame.getByText('Total ' + amount(expectedCharge), { exact: true }).waitFor();
+    assert.equal(await number.inputValue(), '4242424242424242', 'Address changes preserve card entry.');
+    if (order.tipAmount === 0) {
+      await zip.fill('97201');
+      await frame.getByText('Film tax $0.00', { exact: true }).waitFor();
+      expectedCharge = order.amount;
+    }
+  }
+  await frame.getByRole('button', { name: 'Pay ' + amount(expectedCharge), exact: true }).waitFor();
   if (retry) {
     // Model a publisher resizing its iframe while the keyboard is up and CVC is focused.
     const cvc = frame.frameLocator('iframe[title="Test payment details"]').getByLabel('Security code');
@@ -400,6 +520,7 @@ async function payByCard(frame, order, { retry = false, sizes = [] } = {}) {
   await waitFor(() => order.pendingChecks > 0, 'A submitted payment must be checked with Stream.');
   assert.equal(order.attempts, before + 1, 'Concurrent submits must confirm once.');
   assert.equal(order.submissions, 1);
+  assert.equal(order.charged, expectedCharge);
   assert.equal(await frame.locator('#ownership').isHidden(), true);
   assert.ok(await frame.locator('video').evaluate(video => video.duration <= 10.1));
   await confirm(order.id);
@@ -490,6 +611,7 @@ try {
   interruptNext = true;
   await renter.locator('#rent').click();
   await renter.getByText('Checkout could not open.', { exact: false }).waitFor();
+  assert.ok(await renter.locator('#rent').evaluate(button => document.activeElement === button));
   await buyer.locator('#rent').click();
   await buyer.frameLocator('iframe[title="Test contact details"]').getByLabel('Email').waitFor();
   await buyer.getByRole('button', { name: 'Back to film' }).click();
@@ -523,7 +645,30 @@ try {
   await complete(renter, 'rent', { retry: true, sizes: [[320, 200], [375, 211], [390, 300], [900, 660], [390, 300]], beforeEntry(order) { assert.equal(order.amount, 149); } });
   await renter.locator('video').evaluate(video => { video.currentTime = 120; });
   await renter.waitForFunction(() => document.querySelector('video').currentTime > 120.25, null, { polling: 100 });
+  await renter.waitForFunction(() => document.querySelector('video').currentTime > 121.5);
+  await renter.locator('video').evaluate(video => video.pause());
+  await waitFor(() => views.some(v => v.id === 'first' && v.kind === 'paid' && v.seconds >= 1), 'Real rental playback reports time on pause');
+  const paidView = views.filter(v => v.id === 'first' && v.kind === 'paid');
+  assert.equal(new Set(paidView.map(v => v.eventId)).size, 1);
+  assert.ok(paidView.every(v => v.seconds < 120), 'Seeking past two minutes adds no watch time');
+  assert.ok(views.filter(v => v.kind === 'preview').every(v => v.seconds === undefined));
+  await renter.locator('video').evaluate(video => video.play());
   const subtitleMenu = renter.getByRole('combobox', { name: 'Subtitles' });
+  const tv = renter.locator('#airplay');
+  await subtitleMenu.focus();
+  await subtitleMenu.press('Tab');
+  assert.ok(await tv.evaluate(button => {
+    const style = getComputedStyle(button);
+    return document.activeElement === button && style.outlineStyle === 'solid' &&
+      parseFloat(style.outlineOffset) <= -parseFloat(style.outlineWidth);
+  }));
+  // A mouse-opened system picker can return focus to the same button on Escape.
+  await tv.dispatchEvent('pointerdown', { pointerType:'mouse' });
+  await tv.press('Escape');
+  assert.equal(await tv.evaluate(button => getComputedStyle(button).outlineStyle), 'none');
+  await tv.press('Shift+Tab');
+  await subtitleMenu.press('Tab');
+  assert.equal(await tv.evaluate(button => getComputedStyle(button).outlineStyle), 'solid');
   await subtitleMenu.selectOption('s2');
   await renter.waitForFunction(() => [...document.querySelector('video').textTracks].some(track => track.activeCues?.[0]?.text === 'Paid caption'));
   await subtitleMenu.selectOption('s3');
@@ -542,9 +687,21 @@ try {
   await buyer.getByText('Checkout could not open.', { exact: false }).waitFor();
   await buyer.getByRole('slider').fill('10');
   assert.match(await buyer.locator('#buy').textContent(), /3\.29/);
+  // A different film price must not pass as a location-based change in tax.
+  mismatchedTotal = { amount: 330 };
+  await buyer.locator('#buy').click();
+  await fillCard(buyer);
+  const changedLocation = buyer.frameLocator('iframe[title="Test billing details"]');
+  await changedLocation.getByLabel('Street address').fill('10 Mock Lane');
+  await changedLocation.getByLabel('ZIP code').fill('87102');
+  await buyer.getByRole('alert').filter({ hasText: 'price has changed' }).waitFor();
+  assert.ok(await buyer.locator('#confirm-payment').isDisabled());
+  await buyer.locator('#card-form').evaluate(form => form.requestSubmit());
+  assert.equal([...orders.values()].findLast(order => order.offer.id === 'second').attempts, 0);
+  await buyer.getByRole('button', { name: 'Back to film' }).click();
   await complete(buyer, 'buy', { sizes: [[375, 211]], async beforeEntry(order) {
     assert.deepEqual([order.filmAmount, order.tipAmount, order.amount], [299, 30, 329]);
-    assert.equal(await buyer.locator('#order-tip').textContent(), 'Film $2.99 + Dust Wave tip $0.30');
+    assert.equal(await buyer.locator('#order-tip').textContent(), 'Film $2.99 + Stream tip $0.30 (tax included)');
   } });
   await buyer.getByRole('combobox', { name: 'Subtitles' }).selectOption('s2');
   await buyer.waitForFunction(() => [...document.querySelector('video').textTracks].some(track => track.mode === 'showing' && track.cues?.length === 2));
@@ -603,14 +760,92 @@ try {
   await privatePage.goto(host);
   const privateFrame = await (await privatePage.locator('iframe').first().elementHandle()).contentFrame();
   await preview(privateFrame);
+  await privateFrame.getByRole('slider').fill('0');
   await complete(privateFrame, 'buy', { blockAutoplay: true });
   await privateFrame.getByRole('button', { name: 'Download film' }).waitFor();
 
+  checkout.manualNmEnabled = true;
+  offers.get('second').previewSeconds = 0;
+  const nm = await context.newPage();
+  await nm.setViewportSize({ width:320, height:240 });
+  await nm.goto(app + '/embed/second');
+  await nm.locator('#rent').waitFor();
+  assert.ok(await nm.locator('#start-video').isHidden() && await nm.locator('#play').isHidden());
+  assert.ok(await nm.locator('video').evaluate(v => !v.controls && !v.hasAttribute('src')));
+  await nm.locator('#rent').click();
+  await nm.locator('#view-in-nm').click();
+  await nm.locator('#viewing-street').fill('1 Civic Plaza NW');
+  await nm.locator('#viewing-city').fill('Albuquerque');
+  await nm.locator('#viewing-postal').fill('87102');
+  assert.ok(await nm.locator('#continue-to-payment').evaluate(button => {
+    const rect = button.getBoundingClientRect();
+    return rect.height >= 44 && rect.bottom <= innerHeight && rect.top >= 0 && document.documentElement.scrollWidth === innerWidth;
+  }));
+  await nm.setViewportSize({ width:375, height:680 });
+  await nm.locator('#continue-to-payment').click();
+  await nm.getByRole('button', { name:'Pay $1.17', exact:true }).waitFor();
+  await nm.getByText('Film tax $0.08 · Tax included in tip $0.01').waitFor();
+  assert.ok(await nm.locator('#billing-location').isHidden());
+  assert.ok(!await nm.evaluate(() => JSON.stringify(sessionStorage).includes('Civic Plaza')));
+  const manual = [...orders.values()].at(-1);
+  await nm.locator('#close-checkout').click();
+  await nm.locator('#rent').click();
+  await nm.getByRole('button', { name:'Pay $1.17', exact:true }).waitFor();
+  assert.equal([...orders.values()].at(-1),manual);
+  await nm.locator('#change-location').click();
+  await nm.locator('#view-in-nm').click();
+  await nm.locator('#viewing-street').fill('Unresolved street');
+  await nm.locator('#continue-to-payment').click();
+  await nm.getByRole('heading', { name:'Viewing address' }).waitFor();
+  await nm.getByText('Confirm your viewing address to calculate tax.').waitFor();
+  assert.equal(manual.status,'expired');
+  await nm.locator('#change-location').click();
+  await nm.locator('#view-elsewhere').click();
+  await nm.getByRole('heading', { name:'Billing address' }).waitFor();
+  await nm.close();
+
+  checkout.manualNmEnabled = false;
+  // Fixed publisher slots exercise both layouts without moving a live payment iframe under the pointer.
+  const layouts = await context.newPage();
+  await layouts.goto(host + '/program-layout');
+  const layoutFrames = await Promise.all((await layouts.locator('iframe').elementHandles()).map(element => element.contentFrame()));
+  assert.equal(layoutFrames.length, 2);
+  await checkProgramLayout(layoutFrames);
+  await layouts.close();
+  // The native WebKit toolbar keeps its PiP button and reserves space for volume.
+  const safari = await context.newPage();
+  await safari.addInitScript(() => { HTMLVideoElement.prototype.webkitShowPlaybackTargetPicker = () => {}; });
+  await safari.goto(app + '/embed/first');
+  await safari.locator('video').evaluate(video => { video.muted = true; });
+  await safari.locator('#play').click();
+  const cc = safari.getByRole('combobox', { name:'Subtitles' });
+  await cc.waitFor();
+  await safari.locator('video').evaluate(video => video.pause());
+  for (const [width, height] of [[320, 200], [750, 600]]) {
+    await safari.setViewportSize({ width, height });
+    const video = await safari.locator('video').boundingBox();
+    const captions = await cc.boundingBox();
+    assert.ok(await safari.locator('#picture-in-picture').isHidden());
+    assert.ok(captions.x >= video.x && captions.y >= video.y && captions.height >= 44);
+    assert.ok(captions.x + captions.width <= video.x + video.width - 55);
+    assert.ok(captions.y + captions.height <= video.y + video.height);
+  }
+  await safari.close();
+  const programPage = await context.newPage();
+  await programPage.goto(host);
+  const programFrame = programPage.frame({url:url=>url.pathname === '/embed/' + program.offer.id});
+  const adjacent = programPage.frame({url:app + '/embed/first'});
+  await checkProgramPlayer({ frame:programFrame, neighbor:adjacent, app, fixture:program, preview, complete, context, requests });
+  const programViews = views.filter(v => v.id === program.offer.id && v.kind === 'paid');
+  assert.ok(programViews.some(v => v.seconds >= 1));
+  assert.equal(new Set(programViews.map(v => v.memberId)).size, program.offer.lineup.length);
+  assert.ok(programViews.every(v => v.memberId && Number.isInteger(v.seconds)));
+  await programPage.close();
   for (const [token, order] of orders) {
     assert.ok(!requests.some(({ url, referrer }) => [url, referrer].some(address =>
       address.includes(token) || (order.receipt && address.includes(order.receipt)))), 'A private credential appeared in a URL or referrer');
   }
-  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: visible Pay, reachable fields, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, download and recovery.');
+  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: location-based tax, inclusive and zero tips, visible Pay, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, program order, previous/next, caption carryover, ZIP, download and recovery.');
 } finally {
   await browser.close();
   await Promise.all([player, publisher].map(server => new Promise(resolve => server.close(resolve))));

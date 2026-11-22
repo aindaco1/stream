@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { BLOCK_SIZE } from './source.js';
+import { mediaTransport } from './media-sandbox.js';
 
 const execute = promisify(execFile);
 const rendering = { slots: 2, active: 0, queue: [] };
@@ -22,7 +23,7 @@ async function limited(pool, work) {
 }
 
 // FFmpeg sees one seekable loopback resource. Only our source adapter knows the R2 host and credentials.
-export async function mediaProcess(source, head, format, { probe = false, before = [], after, stdin, maxOutput, maxRead, timeout = 90000 }) {
+export async function mediaProcess(source, head, format, { probe = false, before = [], after, stdin, maxOutput, maxRead, timeout = 90000, onFailure, checkSandbox = false }) {
   // A feature-length subtitle scan cannot occupy the workers needed for playback.
   return limited(timeout > 90000 ? extraction : rendering, async () => {
     const path = '/' + randomUUID();
@@ -51,8 +52,11 @@ export async function mediaProcess(source, head, format, { probe = false, before
           // a metadata probe or abandoned seek never requests an entire feature from R2.
           for (let offset = start; offset < end;) {
             signal.throwIfAborted();
-            const next = Math.min(end, offset + (offset === start ? BLOCK_SIZE : 2 * 1024 * 1024));
-            if (total + next - offset > maxRead) throw new Error('Source read budget exceeded.');
+            // Probe/seek requests may quit as soon as the header arrives. An encoder
+            // reading frames benefits from one continuous, still bounded transfer.
+            const rangeSize = probe ? (offset === start ? BLOCK_SIZE : 2 * 1024 * 1024) : 4 * 1024 * 1024;
+            const next = Math.min(end, offset + rangeSize, offset + maxRead - total);
+            if (next <= offset) throw new Error('Source read budget exceeded.');
             total += next - offset;
             for await (const data of source.stream(head, offset, next, signal)) yield data;
             offset = next;
@@ -74,9 +78,10 @@ export async function mediaProcess(source, head, format, { probe = false, before
     });
     server.maxConnections = 4;
     server.requestTimeout = timeout;
+    let transport;
     try {
-      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-      const proxy = 'http://127.0.0.1:' + server.address().port;
+      transport = await mediaTransport(server, probe ? 'ffprobe' : 'ffmpeg', checkSandbox);
+      const { proxy } = transport;
       // Format selection comes from local magic bytes. Disable external QuickTime references and every
       // input protocol except the HTTP transport needed to read our own private socket.
       const input = ['-protocol_whitelist', 'http,tcp', '-http_proxy', proxy, '-format_whitelist', 'mov,matroska,webm', '-f', format,
@@ -84,20 +89,22 @@ export async function mediaProcess(source, head, format, { probe = false, before
         '-probesize', '2097152', '-analyzeduration', '2000000', '-max_streams', '64', ...before, '-i', url];
       const args = ['-hide_banner', '-loglevel', 'error', '-max_alloc', '134217728',
         ...(probe ? [] : ['-nostdin', '-filter_threads', '1', '-filter_complex_threads', '1']), ...input, ...after];
-      const running = execute(probe ? 'ffprobe' : 'ffmpeg', args, {
+      const running = execute(transport.executable, [...transport.prefix, ...args], {
         env: { PATH: process.env.PATH, LC_ALL: 'C', http_proxy: proxy }, encoding: 'buffer', timeout, maxBuffer: maxOutput, killSignal: 'SIGKILL'
       });
       running.child.stdin.on('error', () => {}); // A completed bounded interval can close the subtitle pipe early.
       running.child.stdin.end(stdin);
       const { stdout } = await running;
       return stdout;
-    } catch {
+    } catch (error) {
+      onFailure?.(error);
       throw new Error('The private media could not be processed within its format or resource limits.');
     } finally {
       shutdown.abort();
       const closed = new Promise(resolve => server.close(resolve));
       server.closeAllConnections();
       await closed;
+      await transport?.cleanup?.();
     }
   });
 }

@@ -1,3 +1,4 @@
+import { stripeMode, stripeSecretMode, sessionMode } from './stripe-mode.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { sha256Hex } from '@dustwave/worker-core/crypto';
 import { readBoundedJson } from '@dustwave/worker-core/response-body';
@@ -18,10 +19,10 @@ export async function platformAccount(key, fetchImpl) {
     redirect: 'error', signal: AbortSignal.timeout(15000) });
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error('Stripe could not identify the platform sandbox.');
+    throw new Error('Stripe could not identify the platform.');
   }
   const account = await readBoundedJson(response, 256 * 1024);
-  if (account?.object !== 'account' || !accountIdPattern.test(account.id) || account.livemode === true) {
+  if (account?.object !== 'account' || !accountIdPattern.test(account.id) || (account.livemode != null && account.livemode !== (stripeSecretMode(key) === 'live'))) {
     throw new Error('Unexpected platform account.');
   }
   return account.id;
@@ -29,31 +30,39 @@ export async function platformAccount(key, fetchImpl) {
 
 export function connectedClient(key, account, platform, fetchImpl) {
   if (!accountIdPattern.test(account) || account === platform) throw new Error('A distinct connected account is required.');
+  return paymentClient(key, account, fetchImpl);
+}
+
+export function paymentClient(key, account, fetchImpl) {
+  if (!stripeSecretMode(key)) throw Error('Invalid Stripe secret key.');
   return createStripeClient(key, { fetchImplementation: (href, init) => {
     const url = new URL(href);
-    const endpoint = (init.method === 'POST' && (['/v1/payment_intents', '/v1/checkout/sessions'].includes(url.pathname) ||
-      /^\/v1\/checkout\/sessions\/cs_test_[a-zA-Z0-9]+\/expire$/.test(url.pathname))) ||
-      (init.method === 'GET' && /^\/v1\/(?:payment_intents\/pi_[a-zA-Z0-9]+|checkout\/sessions\/cs_test_[a-zA-Z0-9]+)$/.test(url.pathname));
+    const session = /^\/v1\/checkout\/sessions\/([^/]+)(\/expire)?$/.exec(url.pathname);
+    const sessionEndpoint = session && sessionMode(session[1]) === stripeSecretMode(key) &&
+      init.method === (session[2] ? 'POST' : 'GET');
+    const endpoint = (init.method === 'POST' && ['/v1/payment_intents', '/v1/checkout/sessions'].includes(url.pathname)) ||
+      (init.method === 'GET' && /^\/v1\/payment_intents\/pi_[a-zA-Z0-9]+$/.test(url.pathname)) || sessionEndpoint;
     if (url.origin !== API || !endpoint) throw new Error('Unexpected payment endpoint.');
     const headers = new Headers(init.headers);
-    headers.set('Stripe-Account', account);
+    if (account) headers.set('Stripe-Account', account);
     return fetchImpl(url.href, { ...init, headers, redirect: 'error', signal: AbortSignal.timeout(15000) });
   } });
 }
 
-export async function verifyReadySeller({ store, env, fetchImpl, owner, account }) {
+export async function verifyReadySeller({ store, env, fetchImpl, owner, account, requireTransfers = false }) {
+  const mode = stripeMode(env);
   const maker = store.maker(owner);
-  const state = maker && stripeSetupStateForMode(maker.stripe, 'test');
-  if (state?.creatorId !== owner || state.accountId !== account || !store.ownsTestAccount(owner, account)) {
-    throw new Error('This filmmaker needs a verified sandbox connection.');
+  const state = maker && stripeSetupStateForMode(maker.stripe, mode);
+  if (store.paymentMode !== mode || state?.creatorId !== owner || state.accountId !== account || !store.ownsAccount(owner, account)) {
+    throw new Error('This filmmaker needs a verified Stripe connection.');
   }
   // Refresh a private snapshot. Never overwrite setup changes from another process.
-  const connect = createStripeSetup({ env, origin: 'http://127.0.0.1', fetchImpl });
+  const connect = createStripeSetup({ env, origin: env.STREAM_PUBLIC_ORIGIN || 'http://127.0.0.1', fetchImpl, requireTransfers });
   const refreshed = await connect.refresh({
-    creatorId: owner, state, save: () => {}, claimAccount: id => store.ownsTestAccount(owner, id)
+    creatorId: owner, state, save: () => {}, claimAccount: id => store.ownsAccount(owner, id)
   });
   if (refreshed.status !== 'ready' || !state.chargesEnabled || !state.payoutsEnabled) {
-    throw new Error('The connected sandbox account must be ready for both charges and payouts.');
+    throw new Error('The connected account must be ready for both charges and payouts.');
   }
 }
 

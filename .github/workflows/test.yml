@@ -25,6 +25,7 @@ jobs:
           fi
       - run: npm ci --ignore-scripts
       - run: npm test
+      - run: npm run check:edge
       - name: Rehearse filmmaker setup in the runner's Chrome
         env:
           STREAM_BROWSER_CHANNEL: chrome

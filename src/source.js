@@ -3,6 +3,11 @@ import { AwsClient } from 'aws4fetch';
 
 export const BLOCK_SIZE = 128 * 1024;
 export const MAX_FILE_BYTES = 10_000_000_000;
+// Only a missing object or a different immutable revision invalidates a sold original.
+// Timeouts, permission errors and malformed upstream responses can be retried.
+export class PrivateOriginalUnavailable extends Error {
+  constructor() { super('Film unavailable.'); }
+}
 const videoTypes = new Map([['mp4', 'video/mp4'], ['mov', 'video/quicktime'], ['mkv', 'video/x-matroska']]);
 export function videoContentType(extension) {
   return videoTypes.get(extension) ?? 'application/octet-stream';
@@ -79,10 +84,15 @@ export function createR2Source(settings, fetcher = fetch) {
   async function rangeResponse(head, start, end, signal) {
     const response = await request('GET', { Range: `bytes=${start}-${end - 1}`, 'If-Match': head.revision }, signal);
     const expected = `bytes ${start}-${end - 1}/${head.size}`;
-    if (response.status !== 206 || response.headers.get('etag') !== head.revision ||
+    const etag = response.headers.get('etag');
+    if (response.status !== 206 || etag !== head.revision ||
         response.headers.get('content-range') !== expected ||
         Number(response.headers.get('content-length')) !== end - start || !response.body) {
       await response.body?.cancel();
+      if (response.status === 404 || response.status === 412 ||
+          (response.status === 206 && /^"[^"\s]+"$/.test(etag || '') && etag !== head.revision)) {
+        throw new PrivateOriginalUnavailable();
+      }
       throw new Error('Source revision or range is unavailable.');
     }
     return response;
@@ -90,6 +100,7 @@ export function createR2Source(settings, fetcher = fetch) {
   return {
     async head() {
       const response = await request('HEAD');
+      if (response.status === 404) throw new PrivateOriginalUnavailable();
       const revision = response.headers.get('etag');
       if (response.status !== 200 || !/^"[^"\s]+"$/.test(revision || '')) {
         throw new Error('Private source is unavailable.');

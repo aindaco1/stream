@@ -1,5 +1,4 @@
-// Stripe owns the email and card fields. The player only handles the purchase
-// choice, displayed total, confirmation status and film access.
+// Billing, contact and card data stay inside Stripe's Elements.
 function appearance(container) {
   const style = getComputedStyle(container);
   const color = name => style.getPropertyValue('--' + name).trim();
@@ -21,31 +20,37 @@ function appearance(container) {
   };
 }
 
-export function createCardForm(stripe, order, onSubmit, complete) {
+export function createCardForm(stripe, order, onSubmit, complete, viewingAddress) {
   const form = document.querySelector('#card-form');
   const button = document.querySelector('#confirm-payment');
   const errorBox = form.querySelector('#payment-error');
   const price = document.querySelector('#order-price');
+  const tax = document.querySelector('#order-tax');
+  const billing = document.querySelector('#billing-location');
+  const marketplace = order.taxPolicy === 'marketplace-v1';
+  const manual = marketplace && order.manualTax === true;
+  const automatic = marketplace && !manual;
+  const useViewingAddress = automatic && order.useViewingAddress === true;
+  const format = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
   const checkout = stripe.initCheckoutElementsSdk({
     clientSecret: order.clientSecret,
-    elementsOptions: { appearance: appearance(form), loader: 'auto' }
+    elementsOptions: { appearance: appearance(form), loader: 'auto' },
+    ...(useViewingAddress && viewingAddress && { defaultValues: { shippingAddress: { address: {
+      country: viewingAddress.country, state: viewingAddress.state, city: viewingAddress.city,
+      line1: viewingAddress.line1, postal_code: viewingAddress.postalCode
+    } } } })
   });
   let contact;
+  let address;
   let payment;
   let actions;
   let destroyed = false;
   let submitting = false;
   let waiting = false;
   let matches = false;
+  let displayedAmount;
   const narrow = window.matchMedia('(max-width: 26rem)');
   const resize = () => checkout.changeAppearance(appearance(form));
-  const viewport = window.visualViewport;
-  function resizeToKeyboard() {
-    // Some mobile browsers shrink only the visual viewport for the keyboard.
-    if (viewport && viewport.scale === 1 && viewport.height < window.innerHeight) {
-      document.body.style.setProperty('--checkout-viewport', Math.floor(viewport.height) + 'px');
-    } else document.body.style.removeProperty('--checkout-viewport');
-  }
 
   function feedback(message) {
     errorBox.textContent = message;
@@ -54,16 +59,28 @@ export function createCardForm(stripe, order, onSubmit, complete) {
 
   function display(session) {
     if (destroyed) return;
-    const total = session.total?.total;
-    // Stripe requires displaying its localized total before confirming. Compare
-    // minor units with the immutable offer so a changed price requires review.
-    const amount = total?.amount || '';
-    matches = session.currency === order.currency && total?.minorUnitsAmount === order.amount && Boolean(amount);
-    price.textContent = amount;
-    button.textContent = submitting ? 'Processing…' : waiting ? 'Confirming payment…' : 'Pay ' + amount;
+    const { total, taxExclusive, taxInclusive } = session.total || {};
+    const ready = !automatic || session.tax?.status === 'ready';
+    const added = manual ? order.taxCents - order.tipTaxCents : automatic ? taxExclusive?.minorUnitsAmount : 0;
+    const included = manual ? order.tipTaxCents : automatic ? taxInclusive?.minorUnitsAmount : 0;
+    // The held film and tip amounts already include any tax on the tip.
+    matches = ready && session.currency === order.currency && Boolean(total?.amount) &&
+      Number.isSafeInteger(added) && added >= 0 && Number.isSafeInteger(included) && included >= 0 &&
+      (!marketplace || included <= order.tipAmount) && total.minorUnitsAmount === order.amount + added &&
+      (!manual || (order.chargedTotalCents === total.minorUnitsAmount &&
+        (taxExclusive == null || added === taxExclusive.minorUnitsAmount) &&
+        (taxInclusive == null || included === taxInclusive.minorUnitsAmount)));
+    displayedAmount = matches ? total.minorUnitsAmount : undefined;
+    if (marketplace) {
+      tax.textContent = !ready ? (useViewingAddress ? 'Confirm your viewing address to calculate tax.' : 'Enter your billing address to calculate tax.') : matches
+        ? 'Film tax ' + format.format(added / 100) + (included > 0 ? ' · Tax included in tip ' + format.format(included / 100) : '') : '';
+    }
+    const amount = matches ? total.amount : '';
+    price.textContent = amount && marketplace ? 'Total ' + amount : amount;
+    button.textContent = submitting ? 'Processing…' : waiting ? 'Confirming payment…' : amount ? 'Pay ' + amount : 'Pay';
     button.disabled = submitting || waiting || !matches || !session.canConfirm;
     const changedPrice = 'The price has changed. Go back to the film and review the offer.';
-    if (!matches) feedback(changedPrice);
+    if (ready && !matches) feedback(changedPrice);
     else if (errorBox.textContent === changedPrice) feedback('');
   }
 
@@ -75,8 +92,9 @@ export function createCardForm(stripe, order, onSubmit, complete) {
     event.preventDefault();
     if (destroyed || submitting || waiting || !actions) return;
     const session = actions.getSession();
+    const previousAmount = displayedAmount;
     display(session);
-    if (!matches || !session.canConfirm) return;
+    if (!matches || !session.canConfirm || displayedAmount !== previousAmount) return;
     submitting = true;
     feedback('');
     display(session);
@@ -117,11 +135,18 @@ export function createCardForm(stripe, order, onSubmit, complete) {
         contact.on('loaderror', loadError);
         contact.mount('#contact-element');
       }
+      if (automatic) {
+        billing.hidden = false;
+        document.querySelector('#billing-label').textContent = useViewingAddress ? 'Viewing address' : 'Billing address';
+        address = useViewingAddress ? checkout.createShippingAddressElement() : checkout.createBillingAddressElement({ autocomplete: { mode: 'automatic' } });
+        address.on('loaderror', loadError);
+        address.mount('#billing-address-element');
+      }
       payment = checkout.createPaymentElement({
         paymentMethodOrder: ['card'],
         wallets: { link: 'never' },
         layout: 'tabs',
-        fields: { billingDetails: { email: 'never', address: 'if_required' } }
+        fields: { billingDetails: { email: 'never', address: automatic && !useViewingAddress ? 'never' : 'if_required' } }
       });
       payment.on('loaderror', loadError);
       payment.mount('#payment-element');
@@ -129,17 +154,15 @@ export function createCardForm(stripe, order, onSubmit, complete) {
       display(actions.getSession());
       form.addEventListener('submit', submit);
       narrow.addEventListener('change', resize);
-      viewport?.addEventListener('resize', resizeToKeyboard);
-      resizeToKeyboard();
     },
     destroy() {
       destroyed = true;
       form.removeEventListener('submit', submit);
       narrow.removeEventListener('change', resize);
-      viewport?.removeEventListener('resize', resizeToKeyboard);
-      document.body.style.removeProperty('--checkout-viewport');
       contact?.destroy();
+      address?.destroy();
       payment?.destroy();
+      billing.hidden = true;
       form.hidden = true;
       button.disabled = true;
       feedback('');

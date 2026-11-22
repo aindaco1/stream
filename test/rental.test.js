@@ -29,6 +29,7 @@ test('two independent embeds can redeem the same rental with distinct playback k
   const key = await authority.keyForGrant(a.grant, film);
   assert.equal(key.length, 16);
   assert.deepEqual(key, await authority.keyForGrant(a.grant, film));
+  assert.notDeepEqual(await authority.keyForGrant(a.grant, film, 'opening'), await authority.keyForGrant(a.grant, film, 'closing'));
   assert.notDeepEqual(key, await authority.keyForGrant(b.grant, film));
   assert.deepEqual(await authority.verifyGrant(a.grant, film), {
     ...film, expiresAt: purchasedAt + 600, rentalExpiresAt: rentalEnd
@@ -153,4 +154,15 @@ test('the order, amount, offer type and capture must match before either entitle
   rent.metadata.amount = '99';
   await assert.rejects(authority.issueReceipt(rent, film, { amount: 299 }));
   await assert.rejects(authority.issuePurchaseReceipt(purchase(), film, { ...order, amount: 99 }));
+});
+
+test('a sandbox receipt and grant cannot authorize live playback even with the same configured root secret', async () => {
+  const secret = randomBytes(32), now = () => purchasedAt * 1000;
+  const sandbox = createRentalAuthority(secret,{now});
+  const live = createRentalAuthority(secret,{now,live:true});
+  const receipt = await sandbox.issueReceipt(purchase(),film);
+  const {grant} = await sandbox.exchange(receipt,film);
+  await assert.rejects(live.exchange(receipt,film));
+  await assert.rejects(live.verifyGrant(grant,film));
+  await assert.rejects(live.issueReceipt(purchase(),film));
 });

@@ -61,7 +61,7 @@ function fixture(options = {}) {
   const calls = [];
   const owners = new Map();
   const provider = {
-    snapshot: { card: 'pending', payouts: 'pending', due: null },
+    snapshot: { card: 'pending', payouts: 'pending', due: null, country: 'us' },
     failCreateOnce: false, failOAuthOnce: false, denied: false, liveOAuth: false,
     nextOAuthId: oauthId, redirectHost: 'accounts.stripe.com'
   };
@@ -96,6 +96,10 @@ function fixture(options = {}) {
           account: body.account, object: 'v2.core.account_link', livemode: false,
           url: 'https://' + provider.redirectHost + '/r/private-account-link'
         });
+      case '/v2/core/accounts/' + oauthId:
+        if (init.method === 'POST' && body.configuration.recipient) provider.snapshot.receives=true;
+        return Response.json({id:oauthId,object:'v2.core.account',livemode:false,configuration:{
+          recipient:provider.snapshot.receives ? {capabilities:{stripe_balance:{stripe_transfers:{requested:true,status:'active'}}}} : null}});
       case '/v2/core/accounts/' + id: {
         if (provider.denied) return new Response(null, { status: 403 });
         const { card, payouts, due, entries, cardDetails, payoutDetails } = provider.snapshot;
@@ -115,7 +119,7 @@ function fixture(options = {}) {
         });
       case '/v1/accounts/' + oauthId:
         if (provider.denied) return new Response(null, { status: 403 });
-        return Response.json({ id: oauthId, object: 'account', type: 'standard', charges_enabled: true, payouts_enabled: true });
+        return Response.json({ id: oauthId, object: 'account', country: provider.snapshot.country, type: 'standard', charges_enabled: true, payouts_enabled: true });
       default: throw new Error('Unexpected Stripe request.');
     }
   }
@@ -344,6 +348,48 @@ test('Stripe country-specific card restrictions leave a retryable workspace', as
   assert.notEqual(f.calls[0].idempotency, f.calls[1].idempotency);
 });
 
+test('hosted and existing accounts must have a Stripe-confirmed payout country', async () => {
+  for (const channel of ['hosted', 'oauth']) {
+    const f = fixture(), ctx = f.context();
+    Object.assign(f.provider.snapshot, { country: 'MX', card: 'active', payouts: 'active' });
+    if (channel === 'oauth') {
+      const url = new URL((await f.adapter.start(ctx, 'existing')).redirect);
+      await f.adapter.callback(ctx, 'oauth', new URLSearchParams({ code: 'ac_test', state: url.searchParams.get('state') }));
+    } else {
+      await assert.rejects(f.adapter.start(ctx, 'new', 'MX'), /available countries/);
+      await f.adapter.start(ctx, 'new', 'CA');
+      await f.adapter.refresh(ctx);
+      assert.ok(f.calls.some(call => Array.from(call.query.values()).includes('identity')));
+    }
+    assert.equal(ctx.state.status, 'restricted');
+    assert.match(ctx.state.reason, /business country/);
+    assert.deepEqual(await f.adapter.start(ctx, 'resume'), { status: 'restricted' });
+    f.provider.snapshot.country = null;
+    assert.deepEqual(await f.adapter.refresh(ctx), { status: 'action_required' });
+    f.provider.snapshot.country = 'ca';
+    assert.deepEqual(await f.adapter.refresh(ctx), { status: 'ready' });
+    assert.equal(ctx.state.reason, undefined);
+  }
+});
+
+test('live marketplace setup requests the transfer capability before onboarding', async () => {
+  const requests = [];
+  const setup = createStripeSetup({
+    origin: 'https://stream.example.test',
+    env: { STRIPE_CONNECT_LIVE: '1', STRIPE_CONNECT_SECRET_KEY: 'sk_live_fixture', STREAM_STRIPE_TAX_MODE: 'marketplace' },
+    fetchImpl: async (url, init) => {
+      const body = JSON.parse(init.body);
+      requests.push(body);
+      return Response.json(url.endsWith('/account_links')
+        ? {object:'v2.core.account_link', account:id, livemode:true, url:'https://accounts.stripe.com/fixture'}
+        : {object:'v2.core.account', id, livemode:true});
+    }
+  });
+  await setup.start(fixture().context(), 'new', 'FR');
+  assert.equal(requests[0].identity.country,'fr');
+  assert.equal(requests[0].configuration.recipient.capabilities.stripe_balance.stripe_transfers.requested,true);
+});
+
 
 test('mixed required capabilities surface the next action before a pending review', async () => {
   const f = fixture(), ctx = f.context();
@@ -360,7 +406,7 @@ test('mixed required capabilities surface the next action before a pending revie
       entries: [{ awaiting_action_from: 'user', minimum_deadline: { status: 'past_due' } }] }, 'action_required'],
     [{ card: 'active', payouts: 'active' }, 'ready']
   ]) {
-    f.provider.snapshot = snapshot;
+    f.provider.snapshot = { country:'us', ...snapshot };
     assert.deepEqual(await f.adapter.refresh(ctx), { status: expected });
     if (reason) assert.match(ctx.state.reason, reason);
     else assert.equal(ctx.state.reason, undefined);
@@ -396,4 +442,18 @@ test('post-submit Stripe review overrides a stale past-due capability instructio
     f.provider.snapshot = { ...submitted, ...update };
     assert.equal((await f.adapter.refresh(ctx)).status, status);
   }
+});
+
+test('marketplace filmmakers can enable transfers during new setup and on a previously connected account',async () => {
+  const envWithTax={...env,STREAM_STRIPE_TAX_MODE:'marketplace'};
+  const fresh=fixture({env:envWithTax});
+  await fresh.adapter.start(fresh.context(),'new','US');
+  assert.equal(fresh.calls.find(call=>call.path==='/v2/core/accounts').body.configuration.recipient.capabilities.stripe_balance.stripe_transfers.requested,true);
+  const f=fixture({env:envWithTax}), ctx=f.context();
+  const auth=new URL((await f.adapter.start(ctx,'existing')).redirect);
+  assert.deepEqual(await f.adapter.callback(ctx,'oauth',new URLSearchParams({code:'ac_test',state:auth.searchParams.get('state')})),{status:'action_required'});
+  assert.equal(ctx.state.needsTransfers,true);
+  assert.deepEqual(await f.adapter.start(ctx,'resume'),{status:'ready'});
+  assert.equal(ctx.state.needsTransfers,false);
+  assert.equal(f.calls.filter(call=>call.body?.configuration?.recipient).length,1);
 });

@@ -2,16 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  {{siteIcons}}
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{description}}">
   <title>{{title}} · Stream</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css">{{programStyles}}<link rel="stylesheet" href="/poster.css">
   <script src="/app.js" type="module"></script>
 </head>
-<body data-checkout="{{checkout}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
+<body data-payment-mode="{{paymentMode}}" data-poster="{{style}}" data-program="{{program}}" data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-sales-territory="{{salesTerritory}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
   <main aria-labelledby="film-title">
-    <video controls playsinline preload="none"{{poster}} aria-label="{{title}}"></video>
+    {{masthead}}
+    <div class="video-stage">
+      <video controls playsinline preload="none"{{poster}} aria-label="{{title}}"></video>
+      <button type="button" id="start-video" aria-label="Play in player" hidden><span aria-hidden="true"></span></button>
+      <div class="video-tools" role="group" aria-label="Video options">
+        <button id="previous-title" class="video-tool" type="button" aria-label="Previous title" title="Previous title" hidden><span class="skip-title-icon previous" aria-hidden="true"></span></button>
+        <button id="next-title" class="video-tool" type="button" aria-label="Next title" title="Next title" hidden><span class="skip-title-icon" aria-hidden="true"></span></button>
+        <label id="subtitle-control" class="video-tool" title="Subtitles" hidden>
+          <span class="caption-icon" aria-hidden="true">CC</span>
+          <select id="subtitles" aria-label="Subtitles"><option value="">Off</option></select>
+        </label>
+        <button id="airplay" class="video-tool" type="button" aria-label="AirPlay" aria-pressed="false" title="AirPlay" hidden><span class="airplay-icon" aria-hidden="true"></span></button>
+        <button id="picture-in-picture" class="video-tool" type="button" aria-label="Picture-in-picture" aria-pressed="false" title="Picture-in-picture" hidden><span class="pip-icon" aria-hidden="true"></span></button>
+      </div>
+    </div>
     <div class="details">
-      <div><h1 id="film-title">{{title}}</h1></div>
+      <div class="title-block">{{detailsTitle}}<p id="program-now" role="status" hidden></p></div>
+      {{filmInfo}}
       <button type="button" id="play">Play {{preview}}-second preview</button>
     </div>
     <section id="purchase" aria-label="Film offers" hidden>
@@ -25,27 +42,51 @@
       <div class="actions">
         <button type="button" id="rent" hidden>Rent</button>
         <button type="button" id="buy" hidden>Buy</button>
+        <button type="button" id="refresh-program" hidden>Refresh program</button>
         <button type="button" id="check-payment" class="secondary" hidden>Check payment</button>
       </div>
     </section>
-    <label id="subtitle-control" hidden>Subtitles <select id="subtitles"><option value="">Off</option></select></label>
     <section id="payment" aria-labelledby="checkout-heading" hidden>
       <div id="checkout-scroll">
         <header class="payment-header">
-          <div class="payment-nav"><h2 id="checkout-heading" tabindex="-1">{{title}}</h2>
+          <div class="payment-nav"><h1 id="checkout-heading" tabindex="-1">{{title}}</h1>
             <button type="button" id="close-checkout">Back to film</button></div>
           <div class="order-line"><p id="order-terms"></p><strong id="order-price"></strong></div>
           <p id="order-tip" hidden></p>
+          <p id="order-tax" aria-live="polite" aria-atomic="true"></p>
+          <button id="change-location" class="text-action" type="button" hidden>Change viewing location</button>
         </header>
         <div id="payment-feedback"></div>
+        <form id="viewing-location" hidden>
+          <fieldset>
+            <legend>Where will you watch?</legend>
+            <div class="actions">
+              <button type="button" id="view-in-nm" aria-expanded="false" aria-controls="nm-location-fields">New Mexico</button>
+              <button type="button" id="view-elsewhere">Somewhere else</button>
+            </div>
+          </fieldset>
+          <div id="nm-location-fields" hidden>
+            <p>Enter your viewing address to calculate New Mexico tax.</p>
+            <label>Street address<input id="viewing-street" autocomplete="section-viewing address-line1" maxlength="200" required></label>
+            <div class="viewing-city-zip">
+              <label>City<input id="viewing-city" autocomplete="section-viewing address-level2" maxlength="100" required></label>
+              <label>ZIP code<input id="viewing-postal" autocomplete="section-viewing postal-code" inputmode="numeric" pattern="[0-9]{5}(-[0-9]{4})?" maxlength="10" required></label>
+            </div>
+          </div>
+        </form>
         <div id="stripe-checkout"></div>
         <form id="card-form" hidden>
           <div id="contact-element"></div>
+          <section id="billing-location" aria-labelledby="billing-label" hidden>
+            <h2 id="billing-label">Billing address</h2>
+            <div id="billing-address-element"></div>
+          </section>
           <div id="payment-element"></div>
           <p id="payment-error" role="alert" tabindex="-1" hidden></p>
         </form>
       </div>
       <div class="payment-action">
+        <button type="submit" form="viewing-location" id="continue-to-payment" hidden>Continue to payment</button>
         <button type="submit" form="card-form" id="confirm-payment" disabled>Pay</button>
         <p class="payment-credit">Stream · All sales are final · Payments by Stripe</p>
       </div>
@@ -53,9 +94,14 @@
     <section id="ownership" aria-label="Your purchase" hidden>
       <form id="download" method="post"><input type="hidden" name="receipt"><button>Download film</button></form>
     </section>
+    <section id="program-lineup" aria-labelledby="lineup-heading" hidden>
+      <h2 id="lineup-heading">In this program</h2>
+      <ol class="program-list" role="list"></ol>
+    </section>
     <section id="access-tools" aria-label="Your access" hidden>
       <p id="rental-end"></p>
       <details><summary id="save-label">Save purchase link</summary>
+        <p id="tv-help" hidden>For an AirPlay TV, open your private rental link in Safari and choose AirPlay while the film is playing.</p>
         <p>Keep this link private. Anyone who has it can use your access.</p>
         <label for="access-link">Private purchase link</label>
         <div class="actions"><input id="access-link" type="text" readonly autocomplete="off" spellcheck="false">
@@ -65,7 +111,6 @@
     <div id="email-return" hidden><button id="redeem-link" type="button">Restore and watch</button></div>
     <p id="status" role="status" aria-live="polite"></p>
     <p id="subtitle-status" role="status"></p>
-    {{filmInfo}}
     <details id="restore-tools" hidden><summary>Restore access</summary>
       <form id="restore-form"><label>Email used at checkout
         <input id="restore-email" type="email" name="email" autocomplete="email" required maxlength="254"></label>

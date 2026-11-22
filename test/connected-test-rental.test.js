@@ -42,7 +42,7 @@ async function fixture(t) {
     }
     if (url.pathname === '/v1/accounts/' + behavior.recipient) {
       assert.equal(method, 'GET');
-      return Response.json({ id: behavior.recipient, object: 'account', type: 'standard', charges_enabled: true, payouts_enabled: behavior.payouts });
+      return Response.json({ id: behavior.recipient, object: 'account', type: 'standard', country: 'US', charges_enabled: true, payouts_enabled: behavior.payouts });
     }
     assert.equal(recipient, behavior.recipient);
     if (method === 'POST') {

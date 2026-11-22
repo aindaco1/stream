@@ -1,9 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
+import { stripeMode } from './stripe-mode.js';
 import { parseEnv } from 'node:util';
 
 export function operatorDirectory(env = process.env) {
+  if (stripeMode(env) === 'live' && (!env.STREAM_STATE_DIR || !isAbsolute(env.STREAM_STATE_DIR))) {
+    throw new Error('Live Stream requires an absolute STREAM_STATE_DIR on persistent storage.');
+  }
   const base = process.platform === 'darwin' ? 'Library/Application Support/Dust Wave Stream Prototype' :
     '.local/state/dust-wave-stream-prototype';
   return env.STREAM_STATE_DIR || join(homedir(), base);

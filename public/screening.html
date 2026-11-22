@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  {{siteIcons}}
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{screeningIntro}}">
   <title>Screening room · Stream</title>
   <link rel="stylesheet" href="/site-frame.css">
   <link rel="stylesheet" href="/screening.css">
@@ -11,7 +13,7 @@
   <header><strong>Stream</strong>{{faqLink}}</header>
   <main>
     <h1>Screening room</h1>
-    <p>Watch a 10-second preview. Rent or buy in the player using a Stripe test card.</p>
+    <p>{{screeningIntro}}</p>
     <section aria-label="Films">{{embeds}}</section>
   </main>
   {{footer}}

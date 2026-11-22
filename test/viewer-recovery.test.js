@@ -62,7 +62,7 @@ test('recovery emails contain a single-use fragment and only go to an eligible t
   store.rememberViewerEmail('one',buyer);
   const calls = [];
   const ready = Promise.withResolvers();
-  const recovery = createViewerRecovery({ store, env:{ RESEND_API_KEY:'fixture', STREAM_RECOVERY_FROM:'Stream <stream@example.test>',
+  const recovery = createViewerRecovery({ store, env:{ RESEND_API_KEY:'fixture', STREAM_RECOVERY_FROM:'Dust Wave Shop <stream@example.test>',
     STREAM_RECOVERY_TEST_TO:buyer }, fetchImpl:async (url, init) => {
     calls.push({url,payload:JSON.parse(init.body)});
     ready.resolve();
@@ -72,6 +72,7 @@ test('recovery emails contain a single-use fragment and only go to an eligible t
   await ready.promise;
   assert.equal(calls.length,1);
   assert.deepEqual(calls[0].payload.to,[buyer]);
+  assert.equal(calls[0].payload.from,'Stream <stream@example.test>');
   assert.equal(calls[0].payload.headers['Auto-Submitted'],'auto-generated');
   const link = new URL(calls[0].payload.text.match(/https:\S+/)[0]);
   assert.equal(link.pathname,'/embed/film-a');

@@ -9,6 +9,59 @@
 body, p, h1 { margin: 0; }
 main { max-width: 60rem; margin-inline: auto; }
 video { display: block; background: #080808; width: 100%; aspect-ratio: 16 / 9; }
+.video-stage { position: relative; min-height: 0; min-width: 0; background: #080808; }
+/* A paid stream needs a grant before native controls have a source to play. */
+#start-video {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; border: 0;
+  padding: 0; display: grid; place-items: center; background: transparent; color: white;
+}
+#start-video span {
+  display: grid; place-items: center; width: 3.75rem; height: 3.75rem;
+  border: 1px solid #888; border-radius: 50%; background: rgb(0 0 0 / .75);
+}
+#start-video span::after {
+  content: ''; margin-inline-start: .22rem; border-block: .6rem solid transparent; border-inline-start: 1rem solid currentColor;
+}
+#start-video:focus-visible { outline-offset: -3px; }
+.video-tools {
+  position: absolute; inset: .4rem .4rem auto auto; display: flex; gap: .125rem;
+  transition: opacity .15s ease-out;
+}
+.safari-controls .video-tools { inset: 6px 200px auto auto; }
+.safari-controls.compact-volume .video-tools { inset-inline-end: 60px; }
+.safari-controls.wrapped-tools .video-tools { inset: 55px auto auto 6px; }
+.video-stage.tools-idle .video-tools:not(:has(:is(:focus-visible:not([data-pointer-focus]), select:open))) { opacity: 0; pointer-events: none; }
+.video-tool {
+  position: relative; display: grid; place-items: center; width: 44px; height: 44px;
+  padding: 0; border: 0; border-radius: .35rem; background: rgb(0 0 0 / .72); color: #fff;
+}
+.video-tool:hover, .video-tool:has(:focus-visible:not([data-pointer-focus])) { background: #222; }
+.video-tool:focus-visible:not([data-pointer-focus]),
+.video-tool:has(select:focus-visible:not([data-pointer-focus])) { outline: 2px solid currentColor; outline-offset: -4px; }
+.video-tool[data-pointer-focus]:focus { outline: none; }
+.caption-icon {
+  font: 700 .69rem/1 Arial, sans-serif; letter-spacing: .03em; padding: .11rem .13rem;
+  border: 1.5px solid currentColor; border-radius: .15rem;
+}
+#subtitles { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 1rem; cursor: pointer; }
+#subtitle-control:has(option:not([value=""]):checked) .caption-icon,
+#picture-in-picture[aria-pressed="true"] .pip-icon { background: white; color: #151515; }
+.airplay-icon {
+  position: relative; width: 1.3rem; height: .9rem; border: 1.5px solid currentColor; border-radius: .12rem;
+}
+.airplay-icon::after {
+  content: ''; position: absolute; left: 50%; bottom: -.24rem; transform: translateX(-50%);
+  border-inline: .35rem solid transparent; border-bottom: .4rem solid currentColor;
+  filter: drop-shadow(0 -1px 0 #111);
+}
+#airplay[aria-pressed="true"] { background: #f2f2f2; color: #151515; }
+.pip-icon {
+  position: relative; width: 1.3rem; height: .95rem; border: 1.5px solid currentColor; border-radius: .14rem;
+}
+.pip-icon::after {
+  content: ''; position: absolute; inset: auto .1rem .1rem auto; width: .55rem; height: .35rem; background: currentColor;
+}
+@media (prefers-reduced-motion: reduce) { .video-tools { transition: none; } }
 h1 { font-size: clamp(1.1rem, 3vw, 1.5rem); line-height: 1.25; font-weight: 600; overflow-wrap: anywhere; }
 p { color: #c5c5c5; font-size: .875rem; }
 a, summary { color: #eee; text-underline-offset: .2em; }
@@ -23,17 +76,17 @@ button:disabled { opacity: .65; cursor: wait; }
 .details { justify-content: space-between; }
 
 body[data-checkout]:not(.paying) main { display: grid; gap: var(--section-gap); padding-block-end: var(--section-gap); }
-body[data-checkout]:not(.paying) main > :not(video) { min-width: 0; margin-inline: var(--gutter); }
+body[data-checkout]:not(.paying) :is(main, .program-screening) > :not(.video-stage, .program-screening) { min-width: 0; margin-inline: var(--gutter); }
 #purchase, #restore-form { display: grid; gap: .75rem; }
 #status:empty, #rental-end:empty { display: none; }
 #subtitle-status:empty { display: none; }
-#subtitle-control { display: inline-flex; align-items: center; gap: .4rem; font-size: .875rem; }
-#subtitles { max-width: 12rem; min-height: 2.75rem; font: inherit; }
 #tip-choice { display: grid; justify-content: start; grid-template-columns: max-content minmax(3rem, 10rem) 3ch; align-items: center; gap: 0 .625rem; font-size: .875rem; }
 #tip-percent { width: 100%; margin: 0; min-height: 2.75rem; accent-color: #f2f2f2; }
 #tip-value { text-align: end; font-variant-numeric: tabular-nums; }
 #tip-note { grid-column: 1 / -1; }
-#order-tip { color: var(--pay-muted); font-size: .875rem; }
+#order-tip, #order-tax { color: var(--pay-muted); font-size: .875rem; }
+#order-tax:empty { display: none; }
+#billing-label { margin: 0 0 .5rem; font-size: 1rem; color: var(--pay-ink); }
 body.paying :is(#tip-choice, #subtitle-control, #subtitle-status) { display: none; }
 #stripe-checkout { min-width: 0; }
 summary { cursor: pointer; min-height: 2.75rem; padding-block: .625rem; }
@@ -69,9 +122,9 @@ body.paying :is(#access-tools, #restore-tools) { display: none; }
   #purchase { row-gap: .375rem; }
   #purchase #terms { order: 1; }
   #tip-note { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  main:has(#purchase:not([hidden])) video.preview-ended { display: none; }
+  main:has(#purchase:not([hidden])) .video-stage:has(video.preview-ended) { display: none; }
   main:has(#purchase:not([hidden])) .details > div { flex: 1; min-width: 0; }
-  main:has(#purchase:not([hidden])) h1 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  main:has(#purchase:not([hidden])) #film-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
 
 /* The film stays dark. Checkout uses the paper, type and primary action from
@@ -86,7 +139,7 @@ body.paying main {
   display: flex; flex-direction: column; width: min(100%, 32rem); height: auto;
   padding: clamp(.75rem, 3vw, 1.5rem);
 }
-body.paying :is(.details, #ownership, #purchase .actions > :is(#buy, #rent), #terms, video) { display: none; }
+body.paying :is(.details, #ownership, #purchase .actions > :is(#buy, #rent), #terms, .video-stage) { display: none; }
 body.paying #payment { order: -1; min-width: 0; }
 .payment-header { padding-bottom: .75rem; border-bottom: 1px solid var(--pay-line); margin-bottom: 1rem; }
 .payment-nav, .order-line { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
@@ -95,37 +148,54 @@ body.paying #payment { order: -1; min-width: 0; }
   color: var(--pay-text); background: transparent; text-decoration: underline; text-underline-offset: .18em;
   min-height: 44px; flex: none; font-size: .875rem; padding: .4rem 0 .4rem .6rem;
 }
-#payment h2 {
+#checkout-heading {
   color: var(--pay-ink); font-size: clamp(1.25rem, 5vw, 1.65rem); letter-spacing: -.035em;
   line-height: 1.15; margin: .2rem 0 .45rem; overflow-wrap: anywhere;
 }
 .order-line p { color: var(--pay-muted); margin: 0; font-size: .925rem; }
 #order-price { color: var(--pay-ink); white-space: nowrap; font-size: 1rem; font-variant-numeric: tabular-nums; }
 #card-form { display: grid; gap: 1rem; min-width: 0; }
+#viewing-location fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+#viewing-location legend { font-weight: 600; padding: 0; margin-bottom: .625rem; }
+#viewing-location .actions { gap: .5rem; }
+#viewing-location .actions button {
+  color: var(--pay-ink); background: var(--pay-surface); border: 1px solid var(--pay-field);
+}
+#view-in-nm[aria-expanded="true"] { box-shadow: inset 0 0 0 1px currentColor; }
+#nm-location-fields { display: grid; gap: .625rem; margin-top: 1rem; }
+#nm-location-fields p { color: var(--pay-muted); }
+#viewing-location label { display: grid; gap: .2rem; font-size: .875rem; font-weight: 600; min-width: 0; }
+#viewing-location input {
+  min-width: 0; width: 100%; min-height: 44px; padding: .5rem .65rem; font: inherit; font-weight: normal;
+  font-size: 1rem; color: var(--pay-ink); background: var(--pay-surface); border: 1px solid var(--pay-field); border-radius: 6px;
+}
+.viewing-city-zip { display: grid; grid-template-columns: minmax(0, 1fr) minmax(6rem, .55fr); gap: .625rem; }
+.text-action { background: transparent; color: var(--pay-text); text-decoration: underline; padding: .375rem 0; font-size: .875rem; }
 #card-form > div { min-width: 0; }
 .payment-credit { color: var(--pay-muted); margin: 0; font-size: .8125rem; text-align: center; }
 #contact-element:empty, #payment-element:empty { display: none; }
 .payment-action { display: none; }
 /* The card fields and feedback scroll together. Native form ownership keeps
    the submit button usable by keyboard outside the scrolling region. */
-body.paying main:has(#card-form:not([hidden])) {
+body.paying main:has(:is(#card-form, #viewing-location):not([hidden])) {
   display: flex; max-height: calc(var(--checkout-viewport, 100dvh) - var(--checkout-margin, 0px));
 }
-#payment:has(#card-form:not([hidden])) { display: flex; flex-direction: column; min-height: 0; }
-#payment:has(#card-form:not([hidden])) #checkout-scroll {
+#payment:has(:is(#card-form, #viewing-location):not([hidden])) { display: flex; flex-direction: column; min-height: 0; }
+#payment:has(:is(#card-form, #viewing-location):not([hidden])) #checkout-scroll {
   min-height: 0; overflow-y: auto; overscroll-behavior-y: contain;
   padding: 3px; scroll-padding-block: 3px;
 }
-#payment:has(#card-form:not([hidden])) .payment-action {
+#payment:has(#card-form:not([hidden]), #nm-location-fields:not([hidden])) .payment-action {
   display: grid; flex: none; gap: .5rem; padding: .75rem 3px 0;
 }
 body.paying #purchase:has(#check-payment[hidden]) { display: none; }
 #confirm-payment, body.paying #check-payment { min-height: 44px; font-size: 1rem; }
-#confirm-payment {
+#confirm-payment, #continue-to-payment {
   width: 100%; padding: .75rem 1rem; background: var(--pay-ink); color: #fff;
   border-radius: 6px; line-height: 1.3;
 }
 #confirm-payment:disabled { opacity: 1; color: #fff; background: #666; cursor: default; }
+#payment:has(#viewing-location:not([hidden])) #confirm-payment { display: none; }
 #payment-error {
   color: var(--pay-error); font-weight: 600; font-size: .95rem; line-height: 1.4;
   border-left: 3px solid currentColor; padding-left: .65rem; margin: 0;
@@ -149,19 +219,60 @@ body.paying #status { color: var(--pay-muted); padding: 0 0 .75rem; margin: 0; }
   .payment-header { margin-bottom: .75rem; padding-bottom: .5rem; }
   #card-form { gap: .75rem; }
 }
-.film-info { margin-block: 0; border-block-start: 1px solid #393939; }
-.film-info > div { display: grid; grid-template-columns: minmax(5rem, 8rem) minmax(0, 1fr); gap: .75rem; padding-block: .55rem; }
-.film-info > div + div { border-block-start: 1px solid #303030; }
-.film-info dt { color: #aaa; font-size: .75rem; font-weight: 600; line-height: 1.5; }
-.film-info dd { margin: 0; max-width: 66ch; font-size: .875rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 26rem) {
-  .film-info > div { grid-template-columns: minmax(0, 1fr); gap: .125rem; }
+.film-info {
+  display: grid; align-content: start; align-items: start; gap: .625rem 1.5rem;
+  border-block-start: 1px solid #494949; padding-block-start: .75rem;
+}
+.film-info p { white-space: pre-line; overflow-wrap: anywhere; text-wrap: pretty; }
+.film-synopsis { max-width: 65ch; line-height: 1.45; color: #e6e6e6; }
+.film-message { max-width: 48ch; font: italic 1.0625rem/1.35 Georgia, 'Times New Roman', serif; color: #d2d2d2; }
+.film-credits {
+  grid-column: 1 / -1; justify-self: center; max-width: 82ch; color: #b8b8b8;
+  font: 600 .8125rem/1.25 'Avenir Next Condensed', 'Arial Narrow', 'Roboto Condensed', sans-serif;
+  text-transform: uppercase; letter-spacing: .055em; text-align: center; text-wrap: balance;
+}
+.film-info .film-credits { white-space: normal; }
+.credit-role { font-size: .85em; font-weight: normal; }
+@media (min-width: 34rem) {
+  .film-info:has(.film-synopsis):has(.film-message) { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .film-synopsis + .film-message { padding-inline-start: .875rem; border-inline-start: 1px solid #666; }
 }
 #restore-tools { border-block-start: 1px solid #393939; }
 #restore-tools summary { width: fit-content; min-height: 2.75rem; align-content: center; font-size: .8125rem; color: #bdbdbd; }
+#restore-tools[open] { padding-block-end: .5rem; }
 #restore-form { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; max-width: 32rem; }
 #restore-form label { flex: 1 1 12rem; }
 #restore-form button { font-size: .875rem; }
 #restore-email { width: 100%; }
 #restore-feedback:not(:empty) { margin-top: .5rem; font-size: .8125rem; }
 body.paying .film-info { display: none; }
+
+/* The program keeps the familiar player and a compact screening order. */
+.program-screening { display: contents; }
+#program-summary { margin-top: .25rem; font-variant-numeric: tabular-nums; }
+#program-now { margin-top: .375rem; color: #fafafa; }
+#program-lineup { border-top: 1px solid #484848; padding-top: .875rem; }
+#program-lineup h2 { margin: 0 0 .375rem; font-size: 1rem; font-weight: 600; }
+#program-lineup { --ink: #f4f4f4; --muted: #bdbdbd; --line: #414141; }
+.program-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .875rem; }
+.program-watch, .program-file { min-height: 2.75rem; padding: .25rem 0; background: transparent; color: #ddd; font-size: .875rem; }
+.program-file { font-weight: normal; text-decoration: underline; text-underline-offset: .2em; }
+.skip-title-icon { display: inline-flex; align-items: center; gap: 2px; }
+.skip-title-icon::before { content: ''; border-block: .34rem solid transparent; border-inline-start: .52rem solid currentColor; }
+.skip-title-icon::after { content: ''; width: 2px; height: .7rem; background: currentColor; }
+.skip-title-icon.previous { transform: rotate(180deg); }
+.video-tool:disabled { opacity: .45; cursor: default; }
+body.paying #program-lineup { display: none; }
+@media (max-height: 400px) {
+  body.is-program:not(.paying) main { height: auto; grid-template-rows: auto; }
+  body.is-program:not(.paying) video { height: auto; aspect-ratio: 16/9; max-height: 65dvh; }
+  body.is-program .details p:not([hidden]) { display: block; }
+}
+@media (min-width: 52rem) {
+  body.is-program:not(.paying) main { grid-template-columns: minmax(0, 1.55fr) minmax(17rem, 1fr); }
+  body.is-program:not(.paying) main > * { grid-column: 1; }
+  body.is-program:not(.paying) .program-screening { display: grid; min-width: 0; gap: var(--section-gap); align-self: start; }
+  body.is-program:not(.paying) main > #program-lineup {
+    grid-column: 2; grid-row: 1; align-self: start; margin: 0 var(--gutter) 0 0; border-top: 0;
+  }
+}

@@ -1,0 +1,92 @@
+/* Poster typography surrounds the native video stage. Checkout has its own layout. */
+body[data-poster]:not(.paying) {
+  --paper: #151513; --ink: #f6f2e8; --muted: #c8c5ba; --rule: #57564f;
+  --serif: Georgia, "Times New Roman", serif;
+  --sans: Arial, Helvetica, sans-serif;
+  --display: Impact, Haettenschweiler, "Arial Black", "Helvetica Neue", Arial, sans-serif;
+  --gutter: clamp(1rem, 4.6vw, 1.75rem);
+  margin: 0; min-height: 100dvh; color: var(--ink); background: var(--paper);
+}
+body[data-poster=broadside]:not(.paying) {
+  --paper: #faf9f4; --ink: #171713; --muted: #52524a; --rule: #a6a59b;
+  color-scheme: light;
+}
+body[data-poster]:not(.paying) main {
+  width: min(100%, 40rem); height: auto; margin: 0 auto;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: none; align-content: start;
+}
+body[data-poster]:not(.paying) .program-screening { display: contents; }
+body[data-poster]:not(.paying) main > #program-lineup { grid-column: 1; grid-row: auto; margin-inline: var(--gutter); }
+body[data-poster]:not(.paying) .poster-head { padding-top: .85rem; }
+.poster-imprint {
+  display: flex; justify-content: space-between; align-items: baseline; gap: .4rem 1rem; flex-wrap: wrap;
+  text-transform: uppercase; font: 700 .75rem/1.35 var(--sans); letter-spacing: .065em;
+}
+.poster-imprint #program-summary { margin: 0; font: inherit; letter-spacing: inherit; color: inherit; }
+.poster-imprint > :last-child { margin-inline-start: auto; }
+body[data-poster]:not(.paying) .details {
+  display: grid; gap: .875rem; justify-content: stretch; justify-items: start;
+}
+body[data-poster] .title-block { min-width: 0; width: 100%; }
+body[data-poster] .title-block:not(:has(h1, #program-now:not([hidden]))) { display: none; }
+body[data-poster] #film-title { color: var(--ink); white-space: normal; overflow: visible; text-wrap: balance; }
+body[data-poster=marquee] #film-title {
+  font: bold clamp(2.1rem, 10vw, 4.65rem)/.98 var(--serif); letter-spacing: -.045em;
+}
+body[data-poster=marquee]:not(.paying) .details { text-align: center; justify-items: center; }
+body[data-poster=broadside] #film-title {
+  border-top: 4px solid currentColor; margin-top: .45rem; padding-block-start: .45rem;
+  font: 900 clamp(2.2rem, 13vw, 6rem)/.94 var(--display); letter-spacing: -.04em; text-transform: uppercase;
+}
+body[data-poster] .video-stage { color-scheme: dark; }
+body[data-poster=broadside]:not(.paying) .video-stage { margin-inline: var(--gutter); }
+body[data-poster] .details .film-info {
+  width: 100%; grid-template-columns: minmax(0,1fr); gap: .625rem; padding: 0; border: 0;
+}
+body[data-poster] .details .film-info p { display: block; }
+body[data-poster=marquee] .details .film-info { justify-items: center; }
+body[data-poster] .details .film-synopsis { max-width: 43ch; font: 1.05rem/1.45 var(--serif); color: var(--ink); }
+body[data-poster=broadside] .details .film-synopsis { font: 700 1.16rem/1.25 var(--sans); letter-spacing: -.025em; }
+body[data-poster] .details .film-message { padding: 0; border: 0; font: italic .98rem/1.4 var(--serif); color: var(--muted); }
+/* A billing block uses the text width of the poster. Each role travels with
+   its names when space permits; unusually long credits can wrap inside. */
+body[data-poster] .film-info .film-credits {
+  width: 100%; min-width: 0; max-width: none; justify-self: stretch; padding-top: .65rem;
+  border-top: 1px solid var(--rule); color: var(--ink); white-space: normal;
+  text-align: center; text-wrap: balance; text-transform: uppercase;
+  font: 700 .95rem/1.4 "Avenir Next Condensed", "Arial Narrow", Arial, sans-serif; letter-spacing: .025em;
+}
+body[data-poster] .credit { display: inline-block; vertical-align: baseline; max-width: 100%; margin-inline: .16em; overflow-wrap: anywhere; }
+body[data-poster] .credit-role { color: var(--muted); font-size: .8em; font-weight: 500; letter-spacing: .055em; }
+body[data-poster=broadside] .film-info .film-credits {
+  border-top: 3px solid var(--ink); text-align: start; text-wrap: wrap;
+  font: 800 .875rem/1.55 var(--sans); letter-spacing: .015em;
+}
+body[data-poster=broadside] .credit { margin-inline: 0 .45em; }
+body[data-poster=broadside] .credit-role { font-size: .875em; text-transform: none; letter-spacing: normal; }
+body[data-poster] .program-entry:has(.film-credits) .film-info { display: contents; }
+body[data-poster] .program-entry .film-info > p { grid-column: 1 / -1; }
+@container (min-width: 25rem) {
+  body[data-poster] .program-entry:has(.program-still) .film-info > p:not(.film-credits) { grid-column: 1; }
+}
+body[data-poster]:not(.paying) :is(#play, #rent, #buy, #download button, #restore-form button, #redeem-link, #copy-link, #refresh-program, #check-payment) {
+  border: 1px solid var(--ink); border-radius: 2px; color: var(--paper); background: var(--ink);
+}
+body[data-poster]:not(.paying) #rent:not([hidden]) + #buy { color: var(--ink); background: transparent; }
+body[data-poster]:not(.paying) :is(#terms, #tip-note, #rental-end, #access-tools p, #restore-feedback, #status, #subtitle-status) { color: var(--muted); }
+body[data-poster]:not(.paying) :is(#program-now, summary, #restore-tools summary, .program-watch, .program-file) { color: var(--ink); }
+body[data-poster]:not(.paying) #tip-percent { accent-color: var(--ink); }
+body[data-poster]:not(.paying) #restore-tools { border-color: var(--rule); }
+body[data-poster]:not(.paying) :where(button:not(.video-tool, #start-video), summary, input):focus-visible { outline-color: var(--ink); }
+body[data-poster]:not(.paying) #program-lineup { --ink: inherit; --muted: inherit; --line: var(--rule); border-top: 1px solid var(--rule); }
+body[data-poster=marquee] .program-row-title { font-family: var(--serif); }
+body[data-poster] .member-byline { color: var(--muted); font: .78rem/1.4 var(--sans); }
+body[data-poster=marquee] .member-byline { text-transform: uppercase; letter-spacing: .055em; }
+body[data-poster=broadside]:not(.paying) #program-lineup { border-width: 3px; }
+body[data-poster=broadside] .program-list { counter-reset: screening; }
+body[data-poster=broadside] .program-list > li {
+  counter-increment: screening; display: grid; grid-template-columns: minmax(2ch, auto) minmax(0, 1fr); gap: .25rem .8rem;
+}
+body[data-poster=broadside] .program-list > li::before { content: counter(screening, decimal-leading-zero); font: 900 1.7rem/1 var(--display); }
+body[data-poster=broadside] .program-actions { grid-column: 2; }
+body.paying .poster-head { display: none; }

@@ -1,15 +1,22 @@
+import { stripeMode, stripeSecretMode, publishableKeyMode, sessionMode } from './stripe-mode.js';
 import { sha256Hex } from '@dustwave/worker-core/crypto';
 import { verifyStripeSignature } from '@dustwave/worker-core/stripe';
-import { connectedClient, platformAccount, verifyReadySeller } from './connected-test-rental.js';
+import { connectedClient, paymentClient, platformAccount, verifyReadySeller } from './connected-test-rental.js';
 import { rentalScope } from './rental.js';
+import { programPresentation } from './program-delivery.js';
 import { isPrice } from './prices.js';
 import { adjustmentEvents, adjustmentReader, adjustmentReference } from './payment-adjustments.js';
 import { orderTotal, processingFee, tipFor } from './checkout-tips.js';
 
+import { MARKETPLACE_POLICY, isMarketplace, marketplaceEnabled, checkoutItems, manualCheckoutItems, matchesMarketplaceSession, verifiedTax,
+  settleFilmmaker, transferGroup, checkoutCountries, liveSalesTerritory } from './marketplace-checkout.js';
+import { resolveNewMexicoQuote, newMexicoTotals } from './new-mexico-grt.js';
+
 const LEGACY_FLOW = 'stream-viewer-rental';
 const FLOW = 'stream-viewer-checkout';
+const sessionEvents = ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed'];
+export const viewerWebhookEvents = ['charge.updated', ...sessionEvents, ...adjustmentEvents];
 const CHECKOUT_API = { stripeVersion: '2026-10-28.endive' };
-const SESSION = /^cs_test_[a-zA-Z0-9]+$/;
 const INTENT = /^pi_[a-zA-Z0-9]+$/;
 
 function expiresAt(order) {
@@ -53,42 +60,46 @@ function sameFilm(order, offer) {
 }
 
 function metadata(order) {
-  const markers = { order: order.orderId, product: 'stream-rental-prototype',
+  const markers = { order: order.orderId, product: order.salesTerritory ? 'stream' : 'stream-rental-prototype',
     scope: rentalScope({ film: order.scope, revision: order.revision }) };
   return order.uiMode === 'hosted' ? { ...markers, flow: LEGACY_FLOW } :
     { ...markers, flow: FLOW, kind: order.kind, amount: String(orderTotal(order)),
+      ...(isMarketplace(order) && { tax_policy:order.taxPolicy, filmmaker:order.account }),
+      ...(order.nmQuote && { grt_policy:'nm-manual-v1', grt_location:JSON.parse(order.nmQuote).code }),
       ...(order.tipAmount > 0 && { film_amount:String(order.amount), tip_percent:String(order.tipPercent), tip_amount:String(order.tipAmount) }) };
 }
 
 function sameMetadata(data, order) {
+  if (!isMarketplace(order) && data?.tax_policy != null) return false;
+  if (!order.nmQuote && (data?.grt_policy != null || data?.grt_location != null)) return false;
   if (!order.tipAmount && (data?.tip_percent !== undefined || data?.tip_amount !== undefined || data?.film_amount !== undefined)) return false;
   if (order.uiMode === 'hosted' && (order.kind !== 'rent' || order.amount !== 99 || data?.kind || data?.amount)) return false;
   return Object.entries(metadata(order)).every(([k, v]) => data?.[k] === v);
 }
 
-function checkSession(session, order) {
-  if (session?.object !== 'checkout.session' || !SESSION.test(session.id) || (order.sessionId && session.id !== order.sessionId) ||
-      session.livemode !== false || session.mode !== 'payment' || session.currency !== 'usd' ||
+function checkSession(session, order, live) {
+  if (session?.object !== 'checkout.session' || sessionMode(session.id) !== (live ? 'live' : 'test') || (order.sessionId && session.id !== order.sessionId) ||
+      session.livemode !== live || session.mode !== 'payment' || session.currency !== 'usd' ||
       (order.uiMode !== 'hosted' && session.ui_mode !== order.uiMode) ||
-      session.amount_subtotal !== orderTotal(order) || session.amount_total !== orderTotal(order) || session.client_reference_id !== order.orderId ||
+      (isMarketplace(order) ? !matchesMarketplaceSession(session,order) :
+        session.amount_subtotal !== orderTotal(order) || session.amount_total !== orderTotal(order)) || session.client_reference_id !== order.orderId ||
       !sameMetadata(session.metadata, order)) throw mismatch();
 }
 
-function checkIntent(intent, order, intentId) {
-  if (intent?.object !== 'payment_intent' || intent.id !== intentId || intent.livemode !== false ||
-      intent.currency !== 'usd' || intent.amount !== orderTotal(order) || !sameMetadata(intent.metadata, order) ||
-      intent.transfer_data || (intent.application_fee_amount ?? 0) !== order.tipAmount || intent.on_behalf_of) throw mismatch();
+function checkIntent(intent, order, intentId, total, applicationFee, live) {
+  if (intent?.object !== 'payment_intent' || intent.id !== intentId || intent.livemode !== live ||
+      intent.currency !== 'usd' || intent.amount !== total || !sameMetadata(intent.metadata, order) ||
+      (isMarketplace(order) && intent.transfer_group !== transferGroup(order)) || intent.transfer_data || (intent.application_fee_amount ?? 0) !== applicationFee || intent.on_behalf_of) throw mismatch();
 }
 
-function checkCharge(intent, order) {
+function checkCharge(intent, order, total, applicationFee, live) {
   const charge = intent.latest_charge;
-  const total = orderTotal(order);
   if (intent.status !== 'succeeded' || intent.amount_received !== total ||
       charge?.object !== 'charge' || !/^ch_[a-zA-Z0-9]+$/.test(charge.id) || charge.payment_intent !== intent.id ||
-      charge.livemode !== false || charge.paid !== true || charge.captured !== true || charge.status !== 'succeeded' ||
+      charge.livemode !== live || charge.paid !== true || charge.captured !== true || charge.status !== 'succeeded' ||
       charge.amount !== total || charge.amount_captured !== total || charge.currency !== 'usd' || charge.transfer_data ||
-      (charge.application_fee_amount ?? 0) !== order.tipAmount || charge.on_behalf_of ||
-      (charge.application_fee != null && (!order.tipAmount || !/^fee_[a-zA-Z0-9]+$/.test(charge.application_fee))) ||
+      (charge.application_fee_amount ?? 0) !== applicationFee || charge.on_behalf_of ||
+      (charge.application_fee != null && (!applicationFee || !/^fee_[a-zA-Z0-9]+$/.test(charge.application_fee))) ||
       !Number.isSafeInteger(charge.amount_refunded) || charge.amount_refunded < 0 || typeof charge.refunded !== 'boolean' ||
       typeof charge.disputed !== 'boolean' || !Number.isSafeInteger(charge.created) || charge.created <= 0 ||
       charge.created > Math.floor(Date.now() / 1000)) throw mismatch();
@@ -107,26 +118,35 @@ function landingOrigin(value, expected) {
 export function createViewerCheckout({ store, env = process.env, fetchImpl = fetch, webhookSecret = env.STRIPE_CONNECT_WEBHOOK_SECRET }) {
   const key = env.STRIPE_CONNECT_SECRET_KEY || '';
   const publishableKey = env.STRIPE_CONNECT_PUBLISHABLE_KEY || '';
-  const serverConfigured = /^(sk|rk)_test_[a-zA-Z0-9]+$/.test(key) && env.STRIPE_CONNECT_LIVE !== '1';
-  const configured = serverConfigured && /^pk_test_[a-zA-Z0-9]+$/.test(publishableKey);
+  const mode = stripeMode(env);
+  const live = mode === 'live';
+  const marketplace = marketplaceEnabled(env);
+  const serverConfigured = store.paymentMode === mode && stripeSecretMode(key) === mode;
+  const liveWebhooks = webhookSecret?.startsWith('whsec_') && env.STRIPE_PLATFORM_WEBHOOK_SECRET?.startsWith('whsec_') &&
+    env.STRIPE_PLATFORM_WEBHOOK_SECRET !== webhookSecret;
+  const configured = serverConfigured && publishableKeyMode(publishableKey) === mode && (!live || (marketplace && liveWebhooks));
+  const salesTerritory = live ? liveSalesTerritory(env.STREAM_SALES_TERRITORIES) : '';
+  const includesNewMexico = !live || ['worldwide','US-NM'].includes(salesTerritory) || salesTerritory.split(',').includes('US');
+  const manualNmEnabled = marketplace && includesNewMexico && env.STREAM_NM_MANUAL_TAX !== '0';
+  if (live && salesTerritory === 'US-NM' && !manualNmEnabled) throw Error('US-NM checkout requires manual New Mexico tax.');
   let platform;
   const creating = new Map();
   const checking = new Map();
   const withdrawing = new Map();
   const checkingPlatform = () => {
-    if (!serverConfigured) throw new ViewerCheckoutError('Sandbox checkout is unavailable.', 503);
+    if (!serverConfigured) throw new ViewerCheckoutError('Checkout is unavailable.', 503);
     platform ??= platformAccount(key, fetchImpl).catch(error => { platform = undefined; throw error; });
     return platform;
   };
   async function client(order) {
     const id = await checkingPlatform();
     if (id !== order.platform) throw mismatch();
-    return connectedClient(key, order.account, id, fetchImpl);
+    return isMarketplace(order) ? paymentClient(key, null, fetchImpl) : connectedClient(key, order.account, id, fetchImpl);
   }
 
   function existingOrderMatches(order, offer) {
     return sameFilm(order, offer) && (order.account === offer.account ||
-      (offer.account === null && store.ownsTestAccount(order.owner, order.account)));
+      (offer.account === null && store.ownsAccount(order.owner, order.account)));
   }
 
   function shared(map, id, action) {
@@ -141,12 +161,12 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
       order = store.viewerOrderById(order.orderId);
       if (order?.withdrawalState !== 'requested' || !order.sessionId) return;
       if (!order.paidAt) {
-        if (!store.ownsTestAccount(order.owner,order.account) || !SESSION.test(order.sessionId)) throw mismatch();
+        if (!store.ownsAccount(order.owner,order.account) || sessionMode(order.sessionId) !== mode) throw mismatch();
         const stripe = await client(order);
         const options = order.uiMode === 'hosted' ? undefined : CHECKOUT_API;
         const read = () => stripe.checkout.sessions.retrieve(order.sessionId, options);
         let session = await read();
-        checkSession(session, order);
+        checkSession(session, order, live);
         if (session.status === 'open' && session.payment_status === 'unpaid') {
           try {
             session = await stripe.checkout.sessions.expire(session.id,options);
@@ -155,7 +175,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
             // can win the race. Only Stripe's current status decides the result.
             session = await read();
           }
-          checkSession(session,order);
+          checkSession(session,order,live);
         }
         if (session.status === 'expired') store.expireViewerOrder(order.orderId);
         else if (session.status === 'complete') await reconcile(order,session);
@@ -167,13 +187,14 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
 
   async function closeWithdrawnSessions(owner,filmId) {
     const orders = store.requestedWithdrawals(owner,filmId);
+    let interrupted = false;
     for (let i=0; i<orders.length; i+=4) {
       await Promise.all(orders.slice(i,i+4).map(async order => {
         try { await closeWithdrawnSession(order); }
-        catch { store.retryWithdrawal(order.orderId); }
+        catch { interrupted = true; store.retryWithdrawal(order.orderId); }
       }));
     }
-    return owner ? store.pendingWithdrawals(owner,filmId) : undefined;
+    return owner ? store.pendingWithdrawals(owner,filmId) : !interrupted;
   }
 
   async function openSession(order) {
@@ -200,29 +221,31 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     } else {
       if (order.uiMode === 'hosted') throw new ViewerCheckoutError('Start a new checkout for this film.', 410);
       if (order.uiMode !== 'embedded_page' && order.uiMode !== 'elements') throw mismatch();
-      await verifyReadySeller({ store, env, fetchImpl, owner: order.owner, account: order.account });
+      await verifyReadySeller({ store, env, fetchImpl, owner: order.owner, account: order.account, requireTransfers:isMarketplace(order) });
       if (store.viewerOrderById(order.orderId).withdrawalState) throw expired();
       const markers = metadata(order);
       // Retried creates must send the parameters from the order's original UI.
       const redirect = order.uiMode === 'elements' ?
         { return_url: order.origin + '/embed/' + encodeURIComponent(order.filmId) + '?order=' + order.orderId } :
         { redirect_on_completion: 'never' };
-      const lineItems = [{ quantity: 1, price_data: { currency: 'usd', unit_amount: order.amount,
-        product_data: { name: order.title, description: order.kind === 'rent' ?
-          order.rentalHours + '-hour streaming rental, starting at purchase.' : 'One-time purchase with original file download.' } } }];
-      if (order.tipAmount) lineItems.push({ quantity:1, price_data:{currency:'usd',unit_amount:order.tipAmount,
-        product_data:{name:'Optional tip to Dust Wave'}} });
+      const marketplace = isMarketplace(order);
+      const countries = checkoutCountries(order);
+      const items = order.nmQuote ? await manualCheckoutItems(key,order,store,fetchImpl) : checkoutItems(order);
       session = await stripe.checkout.sessions.create({
         mode: 'payment', ui_mode: order.uiMode, ...redirect, adaptive_pricing: { enabled: false },
         ...(order.cardOnly ? { allowed_payment_method_types: ['card'] } : {}),
+        ...(marketplace && (order.nmQuote
+          ? { automatic_tax:{enabled:false}, expires_at:Math.floor(order.createdAt / 1000) + 24 * 3600 - 60 }
+          : { automatic_tax:{enabled:true, liability:{type:'self'}},
+              ...(countries ? { shipping_address_collection:{allowed_countries:countries} } : { billing_address_collection:'required' }) })),
         client_reference_id: order.orderId, metadata: markers, payment_intent_data: {
-          metadata: markers, ...(order.tipAmount > 0 && { application_fee_amount:order.tipAmount })
-        }, line_items:lineItems
+          metadata: markers, ...(marketplace ? { transfer_group:transferGroup(order) } : order.tipAmount > 0 && { application_fee_amount:order.tipAmount })
+        }, line_items:items
       }, { ...options, idempotencyKey: 'stream-viewer-' + order.orderId });
-      checkSession(session, order);
+      checkSession(session, order, live);
       store.bindViewerSession(order.orderId, session.id);
     }
-    checkSession(session, order);
+    checkSession(session, order, live);
     if (session.status === 'open' && store.viewerOrderById(order.orderId).withdrawalState) {
       // A different process may have unpublished this film while create/get
       // was outstanding. Never return a withdrawn Session's client secret.
@@ -245,31 +268,52 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     if (order.cardOnly && (!Array.isArray(allowedMethods) || allowedMethods.length !== 1 || allowedMethods[0] !== 'card')) throw mismatch();
     if (session.status !== 'open' || typeof session.client_secret !== 'string' ||
         !session.client_secret.startsWith(session.id + '_secret_') || session.client_secret.length > 1024) throw mismatch();
-    return { clientSecret: session.client_secret, publishableKey, account: order.account,
+    return { clientSecret: session.client_secret, publishableKey, account: isMarketplace(order) ? null : order.account,
+      ...(isMarketplace(order) && {taxPolicy:order.taxPolicy}),
+      ...(order.nmQuote && {manualTax:true,...newMexicoTotals(order,JSON.parse(order.nmQuote))}),
+      ...(isMarketplace(order) && checkoutCountries(order) && {useViewingAddress:true}),
       uiMode: order.uiMode, orderId: order.orderId, title: order.title, kind: order.kind, amount: orderTotal(order),
       filmAmount:order.amount, tipPercent:order.tipPercent, tipAmount:order.tipAmount, currency: session.currency,
       ...(order.kind === 'rent' && {rentalHours:order.rentalHours}) };
   }
 
-  async function start({ offer, token, origin, kind = 'rent', tipPercent = 0 }) {
-    if (!configured) throw new ViewerCheckoutError('Sandbox checkout is unavailable.', 503);
+  async function start({ offer, token, origin, kind = 'rent', tipPercent = 0, viewingAddress }) {
+    if (!configured) throw new ViewerCheckoutError('Checkout is unavailable.', 503);
     if (!offer.account) throw mismatch();
     if (kind !== 'rent' && kind !== 'buy') throw new ViewerCheckoutError('Choose a rental or a purchase.');
     const digest = await viewerHash(token);
     const base = landingOrigin(origin, env.STREAM_PUBLIC_ORIGIN);
+    if (live && (!base.startsWith('https://') || base !== env.STREAM_PUBLIC_ORIGIN)) throw mismatch();
     const previous = store.viewerOrderForToken(digest);
+    if (live && !previous?.paidAt && salesTerritory === 'closed') throw new ViewerCheckoutError('Viewer payments have not opened yet.', 403);
+    if (live && viewingAddress && !includesNewMexico) throw new ViewerCheckoutError('This viewing location is outside the pilot.', 403);
+    if (live && previous && !previous.paidAt && previous.salesTerritory !== salesTerritory) {
+      store.withdrawViewerOrder(previous.orderId);
+      await closeWithdrawnSession(previous);
+      throw new ViewerCheckoutError('The available viewing locations changed. Start a new checkout.', 410);
+    }
     const amount = previous?.amount ?? offer.prices?.[kind];
     if (!isPrice(amount)) throw new ViewerCheckoutError('This option is unavailable for this film.', 409);
     if (tipFor(amount,tipPercent) === null) throw new ViewerCheckoutError('Choose an available tip amount.');
+    const viewingAddressTag = viewingAddress ? store.viewingAddressTag(viewingAddress) : null;
+    const nmQuote = !previous && manualNmEnabled && viewingAddress
+      ? await resolveNewMexicoQuote(viewingAddress,{fetchImpl}) : null;
+    if (!previous && salesTerritory === 'US-NM' && !nmQuote) {
+      throw new ViewerCheckoutError('This pilot is available in New Mexico. Enter a New Mexico viewing address whose tax district we can verify.', 422);
+    }
     const id = await checkingPlatform();
     if (offer.account === id) throw mismatch();
-    const order = previous ?? store.reserveViewerOrder({ ...offer, tokenHash: digest, platform: id, origin: base, kind, amount, tipPercent });
+    const order = previous ?? store.reserveViewerOrder({ ...offer, tokenHash: digest, platform: id, origin: base, kind, amount, tipPercent,
+      taxPolicy: marketplace ? MARKETPLACE_POLICY : 'none', nmQuote, viewingAddressTag, salesTerritory:live ? salesTerritory : null });
+    if (viewingAddressTag && order.viewingAddressTag !== viewingAddressTag) {
+      throw new ViewerCheckoutError('Start a new checkout to change your viewing location.',409);
+    }
     if (!sameFilm(order, offer) || order.kind !== kind || order.tipPercent !== tipPercent || order.platform !== id || order.origin !== base) throw mismatch();
     if (order.account !== offer.account) {
       // openSession can only reconcile a paid/withdrawn order here. Never
       // disclose an old open form or create a charge on a former recipient.
-      if (!(order.withdrawalState || order.status === 'paid') || !store.ownsTestAccount(order.owner, order.account) ||
-          !store.ownsTestAccount(offer.owner, offer.account)) throw mismatch();
+      if (!(order.withdrawalState || order.status === 'paid') || !store.ownsAccount(order.owner, order.account) ||
+          !store.ownsAccount(offer.owner, offer.account)) throw mismatch();
     }
     return shared(creating, order.orderId, () => openSession(order));
   }
@@ -278,7 +322,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const stripe = await client(order);
     const options = order.uiMode === 'hosted' ? undefined : CHECKOUT_API;
     const session = retrievedSession ?? await stripe.checkout.sessions.retrieve(order.sessionId, options);
-    checkSession(session, order);
+    checkSession(session, order, live);
     if (session.status === 'expired') {
       store.expireViewerOrder(order.orderId);
       return { status: 'expired' };
@@ -286,7 +330,9 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     if (session.status === 'open' && session.payment_status === 'unpaid') return { status: 'pending' };
     if (session.status !== 'complete' || !['unpaid','paid'].includes(session.payment_status) || !INTENT.test(session.payment_intent)) throw mismatch();
     const intent = await stripe.paymentIntents.retrieve(session.payment_intent, { expand: ['latest_charge.balance_transaction'] }, options);
-    checkIntent(intent, order, session.payment_intent);
+    const marketplace = isMarketplace(order);
+    const applicationFee = marketplace ? 0 : order.tipAmount;
+    checkIntent(intent, order, session.payment_intent, session.amount_total, applicationFee, live);
     if (session.payment_status === 'unpaid') {
       if (['canceled','requires_payment_method'].includes(intent.status)) {
         store.expireViewerOrder(order.orderId);
@@ -294,10 +340,11 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
       }
       return { status: 'pending' };
     }
-    const charge = checkCharge(intent, order);
+    const charge = checkCharge(intent, order, session.amount_total, applicationFee, live);
+    const totals = marketplace ? await verifiedTax(key,order,session,fetchImpl,store) : {};
     if ((adjustment && (charge.id !== adjustment.chargeId || (adjustment.intentId && intent.id !== adjustment.intentId))) ||
         (order.intentId && order.intentId !== intent.id) || (order.chargeId && order.chargeId !== charge.id)) throw mismatch();
-    const paymentState = await adjustmentReader(key,order.account,fetchImpl).state(order,charge,adjustment);
+    const paymentState = await adjustmentReader(key,marketplace ? null : order.account,fetchImpl).state(order,charge,adjustment);
     const now = Math.floor(Date.now() / 1000);
     const useConfirmation = order.uiMode !== 'hosted' && order.kind === 'rent' && charge.payment_method_details?.type !== 'card';
     // A bank debit can create its Charge days before it succeeds. Stripe's
@@ -307,8 +354,15 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const confirmed = datedEvent ? paidEvent.created : now;
     const paidAt = order.paidAt ?? (useConfirmation ? confirmed : charge.created);
     if (paidAt < charge.created || paidAt > now || (!useConfirmation && paidAt !== charge.created)) throw mismatch();
-    const saved = store.reconcileViewerPayment(order,{intentId:intent.id,paidAt,stripeFeeCents:processingFee(order,charge),...paymentState});
+    const stripeFeeCents = processingFee(order,charge,session.amount_total,applicationFee);
+    const saved = store.reconcileViewerPayment(order,{intentId:intent.id,paidAt,stripeFeeCents,
+      chargeBalanceId: stripeFeeCents === null ? null : charge.balance_transaction.id, ...totals,...paymentState});
     if (!saved) return;
+    if (marketplace && !saved.transferId && !saved.revocationReason && !saved.refundedAmount) {
+      try { await settleFilmmaker(key,saved,store,fetchImpl); }
+      catch { console.error('Filmmaker transfer is awaiting reconciliation.'); }
+      if (!store.viewerOrderById(saved.orderId).transferId) store.retryViewerTransfer(saved.orderId);
+    }
     const status = localStatus(saved);
     if (status === 'paid') store.rememberViewerEmail(order.orderId, session.customer_details?.email || charge.billing_details?.email);
     return status === 'paid' ? {status,intent,paidAt:saved.paidAt,paymentState} : {status};
@@ -329,8 +383,14 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return adjustment ? fresh() : shared(checking,order.orderId,fresh);
   }
 
-  async function status({ offer, token }) {
+  function orderedOffer(offer, order, resolveEdition) {
+    if (offer.type !== 'program' || !resolveEdition || !order || order.filmId !== offer.id || order.owner !== offer.owner) return offer;
+    return resolveEdition(order.revision) || offer;
+  }
+
+  async function status({ offer, token, resolveEdition }) {
     const order = store.viewerOrderForAccess(await viewerHash(token));
+    offer = orderedOffer(offer, order, resolveEdition);
     if (!order || !existingOrderMatches(order, offer)) return { status: 'pending' };
     // Older versions marked partial refunds expired without recording a reason.
     // Recheck a settled, still-current order under the current refund policy.
@@ -341,15 +401,17 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     const result = await reconcile(order);
     if (result.status !== 'paid') return result;
     const film = { film: offer.scope, revision: offer.revision };
-    const options = { amount:orderTotal(order), orderId:order.orderId, paymentState:result.paymentState };
+    const options = { amount:result.intent.amount, agreedSubtotal:orderTotal(order), orderId:order.orderId, paymentState:result.paymentState };
     const receipt = order.kind === 'buy' ? await offer.authority.issuePurchaseReceipt(result.intent,film,options) :
       await offer.authority.issueReceipt(result.intent,film,{...options,paidAt:result.paidAt,rentalHours:order.rentalHours});
     return { status:'paid',kind:order.kind,receipt,title:order.title,position:order.position || 0,
+      ...(offer.type === 'program' && {program:programPresentation(offer),revision:offer.revision,memberId:order.positionMember || offer.lineup[0].id}),
       expiresAt:expiresAt({...order,paidAt:result.paidAt}),...(order.kind === 'rent' && {rentalHours:order.rentalHours}) };
   }
 
   function accessAllowed({offer,orderId,kind,rentalExpiresAt}) {
-    if (!orderId) return kind === 'rent' && Number.isSafeInteger(rentalExpiresAt) && rentalExpiresAt > Date.now()/1000 &&
+    if (!serverConfigured) return false;
+    if (!orderId) return !live && kind === 'rent' && Number.isSafeInteger(rentalExpiresAt) && rentalExpiresAt > Date.now()/1000 &&
       store.accessForLegacyRental(offer,rentalExpiresAt);
     const order = store.viewerAccessById(orderId);
     return Boolean(order && existingOrderMatches(order,offer) && order.kind === kind && order.intentId && localStatus(order) === 'paid');
@@ -364,11 +426,16 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return (await reconcile(order)).status === 'paid';
   }
 
-  async function position({offer,token,seconds}) {
+  async function position({offer,token,seconds,memberId}) {
     const order = store.viewerOrderForAccess(await viewerHash(token));
     if (!order || !Number.isSafeInteger(seconds) || seconds < 0 ||
         !accessAllowed({offer,orderId:order.orderId,kind:order.kind})) throw new ViewerCheckoutError('Playback unavailable.',403);
-    store.setViewerPosition(order.orderId, seconds >= offer.duration ? 0 : seconds);
+    if (offer.type === 'program') {
+      const member = offer.lineup.find(item => item.id === memberId);
+      if (!member || !store.setProgramPosition(order.orderId, memberId, seconds >= member.duration ? 0 : seconds)) {
+        throw new ViewerCheckoutError('Title unavailable.',403);
+      }
+    } else store.setViewerPosition(order.orderId, seconds >= offer.duration ? 0 : seconds);
     return {saved:true};
   }
 
@@ -379,8 +446,9 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return (await reconcile(order)).status === 'paid';
   }
 
-  async function abandon({ offer, token }) {
+  async function abandon({ offer, token, resolveEdition }) {
     const order = store.viewerOrderForToken(await viewerHash(token));
+    offer = orderedOffer(offer, order, resolveEdition);
     if (!order || !existingOrderMatches(order,offer)) return {status:'pending'};
     store.withdrawViewerOrder(order.orderId);
     await closeWithdrawnSession(order);
@@ -389,44 +457,79 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     return {status:fresh.status === 'expired' || (!fresh.sessionId && fresh.withdrawalState) ? 'expired' : 'pending'};
   }
 
-  async function adjustmentWebhook(event) {
+  async function adjustmentWebhook(event, platformEvent, eventAccount) {
     const hint = adjustmentReference(event);
-    if (!hint || !store.hasViewerSellerAccount(event.account) || store.paymentEventSeen(event.account,event.id)) return;
-    let order = store.viewerOrderByPayment(event.account,hint.intentId,hint.chargeId);
+    if (!hint || (!platformEvent && !store.hasViewerSellerAccount(eventAccount)) || store.paymentEventSeen(eventAccount,event.id)) return;
+    let order = platformEvent ? store.viewerOrderByPlatformPayment(eventAccount,hint.intentId,hint.chargeId) :
+      store.viewerOrderByPayment(eventAccount,hint.intentId,hint.chargeId);
     if (!order) {
       // A refund can arrive before the paid Session event has bound the intent.
       const platformId = await checkingPlatform();
-      if (platformId === event.account) return;
-      const intentId = hint.intentId ?? await adjustmentReader(key,event.account,fetchImpl).chargeIntent(hint.chargeId);
+      if (!platformEvent && platformId === eventAccount) return;
+      const account = platformEvent ? null : eventAccount;
+      const intentId = hint.intentId ?? await adjustmentReader(key,account,fetchImpl).chargeIntent(hint.chargeId);
       if (!INTENT.test(intentId)) return;
-      const intent = await connectedClient(key,event.account,platformId,fetchImpl).paymentIntents.retrieve(intentId,{expand:['latest_charge']},CHECKOUT_API);
-      if (![FLOW,LEGACY_FLOW].includes(intent.metadata?.flow) || intent.latest_charge?.id !== hint.chargeId) return;
+      const stripe = platformEvent ? paymentClient(key,null,fetchImpl) : connectedClient(key,account,platformId,fetchImpl);
+      const intent = await stripe.paymentIntents.retrieve(intentId,{expand:['latest_charge']},CHECKOUT_API);
+      if (intent.livemode !== live || ![FLOW,LEGACY_FLOW].includes(intent.metadata?.flow) || intent.latest_charge?.id !== hint.chargeId) return;
       order = store.viewerOrderById(intent.metadata.order);
-      if (!order || order.account !== event.account || !sameMetadata(intent.metadata,order)) return;
+      if (!order || !sameMetadata(intent.metadata,order)) return;
     }
+    if (isMarketplace(order) !== platformEvent || (platformEvent ? order.platform : order.account) !== eventAccount) return;
     if (!order.sessionId) throw new ViewerCheckoutError('Session registration is still pending.',503);
     const result = await reconcile(order,undefined,undefined,hint);
     if (result.status === 'pending') throw new ViewerCheckoutError('Payment confirmation is pending.',503);
-    store.notePaymentEvent(event.account,event.id,order.orderId);
+    store.notePaymentEvent(eventAccount,event.id,order.orderId);
   }
 
-  async function webhook(rawBody, signature) {
-    if (!serverConfigured || !webhookSecret) throw new ViewerCheckoutError('Sandbox webhook is unavailable.', 503);
+  async function refreshProcessingFee(order) {
+    const stripe = await client(order);
+    const intent = await stripe.paymentIntents.retrieve(order.intentId, {expand:['latest_charge.balance_transaction']},
+      order.uiMode === 'hosted' ? undefined : CHECKOUT_API);
+    const total = order.chargedTotalCents ?? (isMarketplace(order) ? null : orderTotal(order));
+    const applicationFee = isMarketplace(order) ? 0 : order.tipAmount;
+    checkIntent(intent, order, order.intentId, total, applicationFee, live);
+    const charge = checkCharge(intent, order, total, applicationFee, live);
+    if (order.chargeId && charge.id !== order.chargeId) throw mismatch();
+    const fee = processingFee(order, charge, total, applicationFee);
+    if (fee !== null) store.recordProcessingFee(order, charge.id, charge.balance_transaction.id, fee);
+  }
+
+  async function retryProcessingFees() {
+    const orders = store.claimProcessingFeeChecks(await checkingPlatform());
+    const results = await Promise.allSettled(orders.map(refreshProcessingFee));
+    return results.every(result => result.status === 'fulfilled');
+  }
+
+  async function webhook(rawBody, signature, platformEvent = false) {
+    const secret = platformEvent ? env.STRIPE_PLATFORM_WEBHOOK_SECRET : webhookSecret;
+    if (!serverConfigured || !secret || (live && !liveWebhooks)) throw new ViewerCheckoutError('Payment updates are unavailable.', 503);
     if (typeof rawBody !== 'string' && !(rawBody instanceof Uint8Array)) throw new ViewerCheckoutError('Invalid webhook payload.');
     if (Buffer.byteLength(rawBody) > 512 * 1024) throw new ViewerCheckoutError('Webhook payload is too large.', 413);
     const text = typeof rawBody === 'string' ? rawBody : new TextDecoder('utf-8', { fatal: true }).decode(rawBody);
-    const { valid } = await verifyStripeSignature(text, signature, webhookSecret);
+    const { valid } = await verifyStripeSignature(text, signature, secret);
     if (!valid) throw new ViewerCheckoutError('Invalid webhook signature.');
     let event;
     try { event = JSON.parse(text); } catch { throw new ViewerCheckoutError('Invalid webhook payload.'); }
     const object = event?.data?.object;
-    if (event?.object !== 'event' || event.livemode !== false || !/^evt_[a-zA-Z0-9]+$/.test(event.id) ||
-        !/^acct_[a-zA-Z0-9]+$/.test(event.account)) return {received:true};
-    if (adjustmentEvents.has(event.type)) { await adjustmentWebhook(event); return {received:true}; }
-    if (!['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed'].includes(event.type) ||
-        ![FLOW, LEGACY_FLOW].includes(object?.metadata?.flow) || !SESSION.test(object.id)) return { received: true };
+    if (event?.object !== 'event' || event.livemode !== live || (object?.livemode !== undefined && object.livemode !== live) || !/^evt_[a-zA-Z0-9]+$/.test(event.id) ||
+        (platformEvent ? event.account != null : !/^acct_[a-zA-Z0-9]+$/.test(event.account))) return {received:true};
+    const eventAccount = platformEvent ? await checkingPlatform() : event.account;
+    if (event.type === 'charge.updated') {
+      if (object?.object === 'charge' && object.livemode === live && /^ch_[a-zA-Z0-9]+$/.test(object.id) && INTENT.test(object.payment_intent)) {
+        const order = platformEvent ? store.viewerOrderByPlatformPayment(eventAccount,object.payment_intent,object.id) :
+          store.viewerOrderByPayment(eventAccount,object.payment_intent,object.id);
+        if (order?.paidAt && order.stripeFeeCents === null && order.intentId === object.payment_intent && (!order.chargeId || order.chargeId === object.id)) {
+          await refreshProcessingFee(order);
+        }
+      }
+      return {received:true};
+    }
+    if (adjustmentEvents.has(event.type)) { await adjustmentWebhook(event,platformEvent,eventAccount); return {received:true}; }
+    if (!sessionEvents.includes(event.type) ||
+        ![FLOW, LEGACY_FLOW].includes(object?.metadata?.flow) || sessionMode(object.id) !== mode) return { received: true };
     const order = store.viewerOrderById(object.metadata.order);
-    if (!order || event.account !== order.account) return { received: true };
+    if (!order || platformEvent !== isMarketplace(order) || eventAccount !== (platformEvent ? order.platform : order.account)) return { received: true };
     if (!order.sessionId) throw new ViewerCheckoutError('Session registration is still pending.', 503);
     if (order.sessionId !== object.id) throw mismatch();
     const confirmsPayment = event.type !== 'checkout.session.async_payment_failed' && object.status === 'complete' && object.payment_status === 'paid';
@@ -451,18 +554,27 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
     }
   }
 
+  async function retryFilmmakerTransfers() {
+    let interrupted = false;
+    for (const order of store.pendingViewerTransfers()) {
+      try { await reconcile(order); }
+      catch { interrupted = true; store.retryViewerTransfer(order.orderId); }
+    }
+    return !interrupted;
+  }
+
   function guarded(fn) {
     return async (...args) => {
       try { return await fn(...args); }
       catch (error) {
         if (error instanceof ViewerCheckoutError) throw error;
         if (error.code === 'viewer_offer_changed') throw new ViewerCheckoutError('The film offer changed. Reload the player.', 409);
-        if (error.code === 'viewer_rate_limit') throw new ViewerCheckoutError('This film reached its sandbox checkout limit. Try again later.', 429);
+        if (error.code === 'viewer_rate_limit') throw new ViewerCheckoutError('This film reached its checkout limit. Try again later.', 429);
         throw new ViewerCheckoutError('Checkout is temporarily unavailable. Try again.', 503);
       }
     };
   }
 
-  return { configured, indexPreviousOrders, closeWithdrawnSessions, start: guarded(start), abandon: guarded(abandon), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
+  return { configured, platformId:checkingPlatform, salesTerritory, manualNmEnabled, indexPreviousOrders, retryProcessingFees, retryFilmmakerTransfers, closeWithdrawnSessions, start: guarded(start), abandon: guarded(abandon), status: guarded(status), position:guarded(position), verifyPlayback:guarded(verifyPlayback), accessAllowed,
     verifyPurchase: guarded(verifyPurchase), webhook: guarded(webhook) };
 }

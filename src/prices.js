@@ -7,8 +7,21 @@ export function rentalHours(value = 48) {
   return Number.isInteger(value) && value >= 1 && value <= 720 ? value : null;
 }
 
+const MAX_PREVIEW_SECONDS = 180;
+
+export function maxPreviewSeconds(duration) {
+  if (duration === undefined) return MAX_PREVIEW_SECONDS;
+  return Number.isFinite(duration) ? Math.max(0, Math.min(MAX_PREVIEW_SECONDS, Math.floor(duration) - 1)) : 0;
+}
+
 export function previewSeconds(value = 10) {
-  return Number.isInteger(value) && value >= 0 && value <= 30 ? value : null;
+  return Number.isInteger(value) && value >= 0 && value <= maxPreviewSeconds() ? value : null;
+}
+
+// Older offers could leave less than a full second at the end of a fractional runtime.
+export function savedPreviewSeconds(value, duration) {
+  const seconds = previewSeconds(value);
+  return seconds === null ? null : Math.min(seconds, maxPreviewSeconds(duration));
 }
 
 export function filmPrices(value) {

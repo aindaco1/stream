@@ -14,20 +14,27 @@
     "test": "node --test test/*.test.js",
     "inspect": "node --env-file-if-exists=.env scripts/inspect.js",
     "check:browser": "node scripts/check-browser.js",
+    "tax:fees": "node --env-file-if-exists=.env scripts/tax-fees.js",
     "invite": "node --env-file-if-exists=.env scripts/invite.js",
     "check:setup": "node scripts/check-setup-browser.js",
     "viewers": "node --env-file-if-exists=.env src/viewer-server.js",
-    "check:viewer-checkout": "node scripts/check-viewer-checkout.js"
+    "check:viewer-checkout": "node scripts/check-viewer-checkout.js",
+    "check:edge": "node scripts/check-edge-workspace.js"
   },
   "dependencies": {
     "@dustwave/admin-shell": "file:shared/dust-wave-platform/packages/admin-shell",
+    "@dustwave/tax-core": "file:shared/dust-wave-platform/packages/tax-core",
     "@dustwave/worker-core": "file:shared/dust-wave-platform/packages/worker-core",
     "aws4fetch": "1.0.20",
+    "csv-parse": "7.0.3",
     "hls.js": "1.7.4",
     "mediabunny": "1.66.2",
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "yazl": "3.3.1"
   },
   "devDependencies": {
-    "playwright": "1.63.0"
+    "miniflare": "5.20261023.2-beta",
+    "playwright": "1.63.0",
+    "wrangler": "4.155.0"
   }
 }
