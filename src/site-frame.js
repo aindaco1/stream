@@ -1,3 +1,7 @@
+export const siteIcons = `<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">`;
+
 export function faqLink(current = false, href = '/faq') {
   return `<a href="${href}"${current ? ' aria-current="page"' : ''}>FAQ</a>`;
 }

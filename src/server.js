@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
 import { airplayLeases, captionCues, captionMaster, captionSegment, screenerReference } from './airplay.js';
 import { openFilm } from './media.js';
-import { faqLink, siteFooter } from './site-frame.js';
+import { faqLink, siteFooter, siteIcons } from './site-frame.js';
 import { agreementPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
@@ -18,6 +18,9 @@ import { programPresentation, streamProgramArchive } from './program-delivery.js
 import { playbackSettings } from './operator.js';
 import { filmSpec, sourceFromEnv } from './config.js';
 const assets = new Map([
+  ['/favicon.svg', ['../public/favicon.svg', 'image/svg+xml']],
+  ['/favicon.ico', ['../public/favicon.ico', 'image/x-icon']],
+  ['/apple-touch-icon.png', ['../public/apple-touch-icon.png', 'image/png']],
   ['/app.js', ['../public/app.js', 'text/javascript']],
   ['/watch-time.js', ['../public/watch-time.js', 'text/javascript']],
   ['/airplay.js', ['../public/airplay.js', 'text/javascript']],
@@ -131,7 +134,7 @@ function attachmentName(title, extension) {
 }
 
 const checkoutHeaders = {
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
   'X-Frame-Options': 'DENY',
   'X-Robots-Tag': 'noindex'
 };
@@ -185,7 +188,10 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
     return entry.ready;
   }
   const [template, payPage, returnPage, screening] = await Promise.all(
-    ['player', 'checkout', 'return', 'screening'].map(name => readFile(new URL('../public/' + name + '.html', import.meta.url), 'utf8')));
+    ['player', 'checkout', 'return', 'screening'].map(async name => {
+      const html = await readFile(new URL('../public/' + name + '.html', import.meta.url), 'utf8');
+      return html.replace('{{siteIcons}}', siteIcons);
+    }));
   const lookup = (id, entitled = false, revision) => catalog?.get(id, { entitled, ...(revision && {revision}) }) || (openMaker && filmSpec(id));
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, staticAsset(type, await readFile(new URL(file, import.meta.url)))])));

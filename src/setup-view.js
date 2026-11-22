@@ -3,7 +3,7 @@ import { sumFilmStats } from './analytics.js';
 import { savedPreviewSeconds } from './prices.js';
 import { formatDuration, hidden, priceFields, programOfferSummary } from './offer-fields.js';
 import { payoutCountryOptions } from './payout-countries.js';
-import { faqLink, siteFooter } from './site-frame.js';
+import { faqLink, siteFooter, siteIcons } from './site-frame.js';
 import { thumbnailEditor } from './thumbnail-view.js';
 import { renderR2Card, renderR2TokenForm, renderStripeCard } from '@dustwave/admin-shell/provider-setup';
 
@@ -171,6 +171,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="same-origin">
+    ${siteIcons}
     ${publicDescriptions.has(title) ? `<meta name="description" content="${escapeHtml(publicDescriptions.get(title))}">` : ''}
     <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css">
     <link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
