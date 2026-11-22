@@ -53,12 +53,11 @@ export class StreamRuntime extends DurableObject {
     this.stage = 'setting inactivity timeout';
     await container.setInactivityTimeout(idleMs);
     this.stage = 'decoding the startup frame and starting both listeners';
-    let exit;
-    container.monitor().then(() => { exit = 'Container exited before becoming ready.'; },
-      error => { exit = error.message || 'Container exited during startup.'; });
+    // An unresolved monitor can hold this object awake for 15 minutes.
+    // During startup only the listener and the current process state matter.
     const readiness = container.getTcpPort(8791);
     for (let attempt=0; attempt<100; attempt++) {
-      if (exit) throw Error(exit);
+      if (!container.running) throw Error('Container exited before becoming ready.');
       let bootFailure;
       try {
         const response = await readiness.fetch('http://container/ready',{signal:AbortSignal.timeout(1000)});
