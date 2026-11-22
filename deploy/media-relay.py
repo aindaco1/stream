@@ -1,6 +1,9 @@
 """Connect a media job's private loopback to its single mounted input socket."""
 import asyncio
 import contextlib
+import errno
+import os
+import socket
 import ctypes
 import resource
 import sys
@@ -34,6 +37,19 @@ async def relay(reader, writer):
 
 
 async def main():
+    if sys.argv[1:2] == ["--check-sandbox"]:
+        del sys.argv[1]
+        blocked = ("/srv/stream", "/proc", "/root", "/etc/stream")
+        if any(os.path.exists(path) for path in blocked) or not os.path.exists("/input.sock"):
+            raise RuntimeError("Unexpected media filesystem")
+        if any(name.startswith(("STREAM_", "STRIPE_", "RESEND_")) for name in os.environ):
+            raise RuntimeError("Unexpected credentials in media environment")
+        # The private ledger has a fixed route in the application network.
+        # A media process must have only its own loopback network and input socket.
+        with socket.socket() as probe:
+            probe.settimeout(0.5)
+            if probe.connect_ex(("192.0.2.1", 80)) not in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+                raise RuntimeError("Unexpected media network route")
     if sys.argv[1] not in ("ffmpeg", "ffprobe"):
         raise ValueError("Unknown media executable")
     # A codec and its descendants can never gain privileges from set-ID binaries.

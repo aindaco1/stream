@@ -46,7 +46,11 @@
     },
     "StreamRuntime": {
       "type": "durable-object",
-      "storage": "sqlite"
+      "storage": "sqlite",
+      "container": "stream-origin"
+    },
+    "StoreBridge": {
+      "type": "worker"
     }
   },
   "vars": {
@@ -70,5 +74,8 @@
     "crons": [
       "*/15 * * * *"
     ]
+  },
+  "version_metadata": {
+    "binding": "STREAM_RELEASE"
   }
 }

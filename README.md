@@ -1,6 +1,6 @@
 # Stream
 
-An open-source film player for filmmakers who keep their originals in their own storage. Each filmmaker connects a private Cloudflare R2 bucket, chooses the preview length and sets prices for a timed rental, a one-time purchase, or both. Viewers pay and watch in the filmmaker’s embed. A purchase also includes the original file. The setup and viewer services bind to loopback and can sit behind HTTPS. Stream reads the original from the filmmaker’s bucket and creates each playable segment on demand.
+An open-source film player for filmmakers who keep their originals in their own storage. Filmmakers can [join the hosted pilot](https://streamyourfilm.com/). Each filmmaker connects a private Cloudflare R2 bucket, chooses the preview length and sets prices for a timed rental, a one-time purchase, or both. Viewers pay and watch in the filmmaker’s embed. A purchase also includes the original file. Stream reads the original from the filmmaker’s bucket and creates each playable segment on demand.
 
 ## Film programs
 
@@ -10,7 +10,7 @@ Viewers pay once in the embed. **Previous title** and **Next title** move throug
 
 ## Guided filmmaker setup
 
-Start the workspace with `npm start` and open `/`. Filmmakers can sign up with an email address and the [pilot filmmaker agreement](src/filmmaker-agreement.js). They confirm their email and acceptance before Stream creates a workspace. The stored receipt records the agreement edition, email and confirmation time. Returning filmmakers choose **Sign in** on the same page. Both forms use Turnstile. Email links work once for 15 minutes. A filmmaker session lasts 14 days.
+Open the [filmmaker workspace](https://streamyourfilm.com/). For local development, run `npm start` and open `/`. Filmmakers can sign up with an email address and the [pilot filmmaker agreement](src/filmmaker-agreement.js). They confirm their email and acceptance before Stream creates a workspace. The stored receipt records the agreement edition, email and confirmation time. Returning filmmakers choose **Sign in** on the same page. Both forms use Turnstile. Email links work once for 15 minutes. A filmmaker session lasts 14 days.
 
 For an existing named workspace without an email, the operator can attach an address using its exact name. Super admins must be enrolled by the operator and sign in at `/setup/admin/sign-in` for a separate 12-hour session.
 
@@ -49,7 +49,7 @@ The read-only report at `/setup/admin` shows platform totals and a directory of 
 
 ### Operator configuration
 
-The setup and viewer services run on loopback and share the same private SQLite database. For a hosted pilot, terminate TLS ahead of the server, forward the original Host, and set `STREAM_PUBLIC_ORIGIN` to the exact HTTPS origin in both the service and invite CLI. Keep query strings, invitation links, form bodies and credentials out of proxy logs. Do not forward payment callbacks to the demo rental CLI.
+In local development the setup and viewer services run on loopback and share a private SQLite database. The hosted pilot uses the [Cloudflare deployment](docs/origin-cloudflare.md). To expose a local rehearsal over HTTPS, terminate TLS ahead of the server, forward the original Host, and set `STREAM_PUBLIC_ORIGIN` to the exact HTTPS origin in both the service and invite CLI. Keep query strings, invitation links, form bodies and credentials out of proxy logs. Do not forward payment callbacks to the demo rental CLI.
 
 | Setting | Purpose |
 | --- | --- |
@@ -62,9 +62,9 @@ The setup and viewer services run on loopback and share the same private SQLite 
 | `STRIPE_CONNECT_CLIENT_ID` | Optional, mode-matching Standard OAuth client ID. Enable eligible existing-account connections in the Connect platform and register the exact `/setup/stripe/oauth` redirect on your origin. |
 | `STRIPE_CONNECT_LIVE` | Test mode is the default. Live onboarding requires an explicit value of `1`, a matching live platform key and an HTTPS origin. Test and live connections are stored independently. |
 
-Configure the platform for Accounts v2 merchant onboarding with a full Stripe Dashboard, direct charges and Stripe-managed fees and losses. The marketplace sandbox also requests the recipient capability to receive transfers. Set Connect branding, enable networked onboarding to reuse eligible details, and configure collection of external payout details. The card stays available for explanation when the operator has not configured Connect. Storage and private previews work independently. [Stripe-hosted onboarding](https://docs.stripe.com/connect/hosted-onboarding?accounts-namespace=v2) · [Networked onboarding](https://docs.stripe.com/connect/networked-onboarding) · [Existing Standard accounts](https://docs.stripe.com/connect/oauth-standard-accounts)
+Configure the platform for Accounts v2 merchant onboarding with a full Stripe Dashboard, direct charges and Stripe-managed fees and losses. Marketplace checkout also requests the recipient capability to receive transfers. Set Connect branding, enable networked onboarding to reuse eligible details, and configure collection of external payout details. The card stays available for explanation when the operator has not configured Connect. Storage and private previews work independently. [Stripe-hosted onboarding](https://docs.stripe.com/connect/hosted-onboarding?accounts-namespace=v2) · [Networked onboarding](https://docs.stripe.com/connect/networked-onboarding) · [Existing Standard accounts](https://docs.stripe.com/connect/oauth-standard-accounts)
 
-Stream uses the U.S. platform’s self-serve Connect countries for filmmaker payouts. Settings and the FAQ show the [same country list used by onboarding](src/payout-countries.js). Stripe must confirm the account’s business country and enable its capabilities before publication and each new checkout. A filmmaker’s payout is their own sales proceeds after fees. They keep their film rights. Viewer checkout runs in USD and the pilot uses test money. [Stripe cross-border payouts](https://docs.stripe.com/connect/connect-cross-border-payouts)
+Stream uses the U.S. platform’s self-serve Connect countries for filmmaker payouts. Settings and the FAQ show the [same country list used by onboarding](src/payout-countries.js). Stripe must confirm the account’s business country and enable its capabilities before publication and each new checkout. A filmmaker’s payout is their own sales proceeds after fees. They keep their film rights. Viewer checkout runs in USD. The hosted pilot processes live payments and local rehearsals use Stripe’s sandbox. [Stripe cross-border payouts](https://docs.stripe.com/connect/connect-cross-border-payouts)
 
 To start Stripe setup over, open **Settings → Payments**. Select **Reset Stripe connection**, review the named seller and mode, and confirm. New sales on published films resume when a connected account is ready. Unfinished checkouts on the old account are closed. Settled orders keep their original seller, payment history and viewer access. Reset changes Stream’s active connection. The filmmaker can manage provider authorizations separately in Stripe.
 
@@ -101,7 +101,7 @@ The platform charges the viewer and transfers the film price less card processin
 
 For new automatic-tax marketplace orders the viewer gets access when payment is verified. The transfer worker waits for the card fee and the actual Tax Basic fee. The film’s share is the fee times the film line’s tax-inclusive total divided by the full charge, rounded to the nearest cent. The remainder belongs to the tip. Eligible New Mexico orders using manual rates bypass Tax Basic. For every automatic-tax order, even when the viewer owes no tax, reconcile the Stripe fee. Orders already opened before this change keep their original payout terms.
 
-Use the viewer process’s `STREAM_STATE_DIR` and the Stripe platform account ID. In Stripe, export the **itemized Fees report** by incurred date, including product, feature name, amount, currency, incurred-by ID and balance transaction ID. Use the account’s report or an organization report with account IDs. The pilot only processes test payments. Use synthetic report rows to rehearse this step in the sandbox.
+Use the viewer process’s `STREAM_STATE_DIR` and the Stripe platform account ID. In Stripe, export the **itemized Fees report** by incurred date, including product, feature name, amount, currency, incurred-by ID and balance transaction ID. Use the account’s report or an organization report with account IDs. Use synthetic report rows for local rehearsals. The hosted pilot retrieves live fee reports from Stripe and exposes unresolved fees in the operator dashboard.
 
 ```sh
 npm run tax:fees -- pending acct_PLATFORM
@@ -252,7 +252,7 @@ Scan the QR image at the path the command prints. In ordinary iPhone Safari, tap
 
 ## Hosted pilot
 
-The production filmmaker workspace uses **streamyourfilm.com**. Published film and program embeds use **watch.streamyourfilm.com**. Both hostnames belong to the same Cloudflare Worker. A SQLite-backed Durable Object stores live accounts, payment records and filmmaker agreement receipts. The media service runs in a separate Cloudflare Container and reads originals from each filmmaker’s R2 bucket. The workspace can accept signups while playback and sales are being prepared. [Public workspace](https://streamyourfilm.com/) · [Deployment and recovery](docs/origin-cloudflare.md)
+The production filmmaker workspace uses **streamyourfilm.com**. Published film and program embeds use **watch.streamyourfilm.com**. Both hostnames belong to the same Cloudflare Worker. A SQLite-backed Durable Object stores live accounts, payment records and filmmaker agreement receipts. The media service runs in a separate Cloudflare Container and reads originals from each filmmaker’s R2 bucket. Filmmakers sign up on the main domain and connect a private bucket and a live Stripe account before publishing a paid film. [Public workspace](https://streamyourfilm.com/) · [Deployment and recovery](docs/origin-cloudflare.md)
 
 The local rehearsal uses its own Stripe sandbox, database, agreements and playback keys. Use that environment for test cards, declined payments and rental expiry. Before opening live checkout, verify the production Stripe account, both signed webhook destinations, tax settings and a filmmaker’s payout eligibility. Run the read-only provider check and follow the first real payment from the buyer’s receipt to the filmmaker’s transfer and bank payout. [Live payment operations](docs/stripe-pilot-operations.md) · [New Mexico reporting](docs/new-mexico-grt.md) · [U.S. registration checklist](docs/us-registration.md)
 

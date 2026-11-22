@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const relay = fileURLToPath(new URL('../deploy/media-relay.py', import.meta.url));
 
-export async function mediaTransport(server, tool) {
+export async function mediaTransport(server, tool, checkSandbox = false) {
   const isolated = process.env.STREAM_MEDIA_SANDBOX;
   if (!isolated && process.env.STRIPE_CONNECT_LIVE !== '1') {
     await listen(0, '127.0.0.1');
@@ -22,7 +22,8 @@ export async function mediaTransport(server, tool) {
   } catch (error) { await cleanup(); throw error; }
   // This job gets a separate network and PID namespace, read-only OS libraries
   // and one input socket. The host's state, other jobs and credentials are absent.
-  return { executable: '/usr/bin/bwrap', proxy: 'http://127.0.0.1:17823', cleanup, prefix: [
+  return { executable: '/usr/bin/setpriv', proxy: 'http://127.0.0.1:17823', cleanup, prefix: [
+    '--no-new-privs', '--inh-caps=-all', '--ambient-caps=-all', '--bounding-set=-all', '--', '/usr/bin/bwrap',
     '--unshare-all', '--unshare-user', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
     '--clearenv', '--setenv', 'LC_ALL', 'C', '--setenv', 'PATH', '/usr/bin',
     '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib',
@@ -31,7 +32,7 @@ export async function mediaTransport(server, tool) {
     '--ro-bind-try', '/etc/ld.so.cache', '/etc/ld.so.cache',
     '--ro-bind-try', '/etc/alternatives', '/etc/alternatives', '--ro-bind-try', '/etc/fonts', '/etc/fonts',
     '--ro-bind', socket, '/input.sock', '--ro-bind', relay, '/relay.py',
-    '--', '/usr/bin/python3', '-I', '/relay.py', tool
+    '--', '/usr/bin/python3', '-I', '/relay.py', ...(checkSandbox ? ['--check-sandbox'] : []), tool
   ] };
 
   function listen(...address) {

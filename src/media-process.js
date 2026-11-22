@@ -23,7 +23,7 @@ async function limited(pool, work) {
 }
 
 // FFmpeg sees one seekable loopback resource. Only our source adapter knows the R2 host and credentials.
-export async function mediaProcess(source, head, format, { probe = false, before = [], after, stdin, maxOutput, maxRead, timeout = 90000 }) {
+export async function mediaProcess(source, head, format, { probe = false, before = [], after, stdin, maxOutput, maxRead, timeout = 90000, onFailure, checkSandbox = false }) {
   // A feature-length subtitle scan cannot occupy the workers needed for playback.
   return limited(timeout > 90000 ? extraction : rendering, async () => {
     const path = '/' + randomUUID();
@@ -80,7 +80,7 @@ export async function mediaProcess(source, head, format, { probe = false, before
     server.requestTimeout = timeout;
     let transport;
     try {
-      transport = await mediaTransport(server, probe ? 'ffprobe' : 'ffmpeg');
+      transport = await mediaTransport(server, probe ? 'ffprobe' : 'ffmpeg', checkSandbox);
       const { proxy } = transport;
       // Format selection comes from local magic bytes. Disable external QuickTime references and every
       // input protocol except the HTTP transport needed to read our own private socket.
@@ -96,7 +96,8 @@ export async function mediaProcess(source, head, format, { probe = false, before
       running.child.stdin.end(stdin);
       const { stdout } = await running;
       return stdout;
-    } catch {
+    } catch (error) {
+      onFailure?.(error);
       throw new Error('The private media could not be processed within its format or resource limits.');
     } finally {
       shutdown.abort();

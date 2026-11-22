@@ -1428,7 +1428,9 @@ test('live checkout stays closed until the territory and both signed event desti
     {STRIPE_PLATFORM_WEBHOOK_SECRET:secret}]) {
     await assert.rejects(start(checkoutWith(change)),{statusCode:503});
   }
-  await assert.rejects(start(checkoutWith({STREAM_SALES_TERRITORIES:''})),{statusCode:403});
+  for (const closed of ['', 'closed']) {
+    await assert.rejects(start(checkoutWith({STREAM_SALES_TERRITORIES:closed})),{statusCode:403});
+  }
   const local = checkoutWith({STREAM_SALES_TERRITORIES:'US-NM'});
   await assert.rejects(start(local),{statusCode:422});
   await assert.rejects(local.start({offer:c.offer,token:c.token,origin:c.origin,viewingAddress:{country:'CA'}}),{statusCode:422});

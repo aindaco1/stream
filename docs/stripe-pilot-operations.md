@@ -31,3 +31,9 @@ For New Mexico filing, choose the reporting month in the live super-admin overvi
 After restarting the sandbox viewer, an unauthenticated Helium session stopped *Shorts test* at exactly 10 seconds and displayed both offers. A separate paid sandbox rental started at the intro in 2.56 seconds. Playback resumed after seeking to 92 seconds in 0.69 seconds and back to 24 seconds in 0.98 seconds. The viewer moved through all five titles, retained English captions on returning to the subtitled title, and fetched 44 paid segments with no recorded player errors, stalls or dropped frames. This used the open-web rehearsal tunnel and an existing Stripe sandbox rental.
 
 The inline checkout browser suite passed five desktop/mobile viewport sizes, including the keyboard-sized embed. Synthetic live-mode tests covered a paid purchase, access, transfer settlement, incorrect object modes, separation of state and signing keys, and signed webhooks. The first genuine live sale and bank payout still require production verification.
+
+## Production verification, November 21, 2026
+
+The deployed viewer and filmmaker workspace passed their readiness checks. The media process decoded its test frame after a cold start and reported the worldwide checkout setting. The restricted Stream key confirmed that the platform can charge and pay out, that New Mexico is its active Stripe Tax registration, and that the itemized fee report is available.
+
+Stripe opened a live inline Checkout Session for a $2 rental and a 20¢ tip with automatic tax enabled. The session expired unpaid. Each public webhook endpoint acknowledged a locally signed configuration check using its own destination secret. Stripe does not send session-expiration events to these destinations. Verify Stripe’s delivery of the first actual payment event, viewer access, the filmmaker transfer and the subsequent bank payout against the real order.

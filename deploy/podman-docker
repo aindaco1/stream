@@ -1,10 +1,46 @@
 #!/usr/bin/env python3
-"""Run Wrangler's Docker commands on Podman, which loads build results locally."""
+"""Run Wrangler's image commands against Podman and report the pushed manifest."""
+import hashlib
+import json
 import os
+from pathlib import Path
+import re
+import subprocess
 import sys
+import tempfile
 
 args = sys.argv[1:]
+root = Path(__file__).resolve().parent.parent
+cache = root / ".local" / "podman-digests"
+
+
+def digest_record(image):
+    return cache / hashlib.sha256(image.encode()).hexdigest()
+
+
 if args[:1] == ["build"]:
-    # Podman's local builder already loads images and emits no BuildKit provenance.
+    # Podman's builder already loads images and emits no BuildKit provenance.
     args = [arg for arg in args if arg not in ("--load", "--provenance=false")]
+
+if len(args) == 2 and args[0] == "push" and args[1].startswith("registry.cloudflare.com/"):
+    image = args[1]
+    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=cache) as temp:
+        receipt = Path(temp) / "receipt"
+        subprocess.run(["podman", "push", "--digestfile", str(receipt), image], check=True)
+        digest = receipt.read_text().strip()
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise SystemExit("Podman did not report a registry manifest digest")
+        # Compression can change the manifest digest between build and push.
+        # Local RepoDigests can list the uncompressed digest first after a pull.
+        os.replace(receipt, digest_record(image))
+    sys.exit(0)
+
+if len(args) == 5 and args[:2] == ["image", "inspect"] and args[3] == "--format" and args[4].replace(" ", "") == "{{json.RepoDigests}}":
+    image = args[2]
+    record = digest_record(image)
+    if image.startswith("registry.cloudflare.com/") and record.is_file():
+        print(json.dumps([image.rsplit(":", 1)[0] + "@" + record.read_text().strip()]))
+        sys.exit(0)
+
 os.execvp("podman", ["podman", *args])

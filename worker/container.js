@@ -26,27 +26,54 @@ export class StoreBridge extends WorkerEntrypoint {
 export class StreamRuntime extends DurableObject {
   async start() {
     const container = this.ctx.container;
+    const release = this.env.STREAM_RELEASE.id;
+    if (container.running && await this.ctx.storage.get('runtime-release') !== release) {
+      this.stage = 'updating the origin';
+      const stopped = container.monitor().catch(() => {});
+      container.signal(15);
+      await Promise.race([stopped,scheduler.wait(5000)]);
+      if (container.running) await container.destroy('Reloading the deployed release');
+    }
     // Installing the intercept before starting the processes also covers a new
     // container after eviction. The reserved address needs no DNS resolution.
-    await container.interceptOutboundHttp('192.0.2.1:80',this.ctx.exports.StoreBridge());
+    this.stage = 'storage intercept';
+    await container.interceptOutboundHttp('192.0.2.1:80',this.ctx.exports.StoreBridge({props:{}}));
     if (!container.running) {
       const allowed = ['STREAM_STORE_TOKEN','STREAM_MAINTENANCE_SECRET','STREAM_RENTAL_SECRET','STREAM_RECOVERY_FROM',
         'RESEND_API_KEY','STREAM_TURNSTILE_SITE_KEY','STREAM_TURNSTILE_SECRET_KEY','STREAM_SALES_TERRITORIES','STREAM_NM_MANUAL_TAX',
         'STRIPE_CONNECT_SECRET_KEY','STRIPE_CONNECT_PUBLISHABLE_KEY','STRIPE_CONNECT_WEBHOOK_SECRET',
         'STRIPE_PLATFORM_WEBHOOK_SECRET','STRIPE_CONNECT_CLIENT_ID'];
       const secrets = Object.fromEntries(allowed.filter(key => this.env[key]).map(key => [key,this.env[key]]));
+      this.stage = 'starting container';
       container.start({ image:container.images.base, instance:{vcpu:1,memoryMib:2048,diskMb:4096},
-        enableInternet:true, env:{ ...secrets,STRIPE_CONNECT_LIVE:'1',STREAM_STRIPE_TAX_MODE:'marketplace',
+        enableInternet:true, env:{ ...secrets,STREAM_RUNTIME_RELEASE:release,STRIPE_CONNECT_LIVE:'1',STREAM_STRIPE_TAX_MODE:'marketplace',
           STREAM_WORKSPACE_ORIGIN:'https://streamyourfilm.com',STREAM_VIEWER_ORIGIN:'https://watch.streamyourfilm.com' } });
+      await this.ctx.storage.put('runtime-release',release);
     }
+    this.stage = 'setting inactivity timeout';
     await container.setInactivityTimeout(idleMs);
+    this.stage = 'decoding the startup frame and starting both listeners';
+    let exit;
+    container.monitor().then(() => { exit = 'Container exited before becoming ready.'; },
+      error => { exit = error.message || 'Container exited during startup.'; });
     const readiness = container.getTcpPort(8791);
     for (let attempt=0; attempt<100; attempt++) {
+      if (exit) throw Error(exit);
+      let bootFailure;
       try {
         const response = await readiness.fetch('http://container/ready',{signal:AbortSignal.timeout(1000)});
-        await response.body?.cancel();
-        if (response.status === 204) { this.healthy = true; return; }
+        if (response.status === 503) bootFailure = (await response.text()).slice(0,360);
+        else await response.body?.cancel();
+        if (response.status === 204) {
+          if (response.headers.get('Stream-Release') !== release) bootFailure = 'Container did not load this release.';
+          else {
+            this.proof = {release,salesTerritory:response.headers.get('Stream-Sales-Territory')};
+            this.healthy = true;
+            return;
+          }
+        }
       } catch { /* The listeners have not started yet. */ }
+      if (bootFailure) throw new Error(bootFailure);
       await scheduler.wait(250);
     }
     throw new Error('Stream has not finished starting.');
@@ -74,8 +101,17 @@ export class StreamRuntime extends DurableObject {
   }
 
   async checkRuntime() {
-    await this.ready();
-    return {workspace:true,viewer:true,isolatedFrame:true};
+    try {
+      await this.ready();
+      return {workspace:true,viewer:true,isolatedFrame:true,...this.proof};
+    } catch (error) {
+      // Available only to the authenticated operator. Never include process environment.
+      let detail = String(error.message ?? 'Unknown failure').slice(0,400);
+      for (const value of Object.values(this.env)) {
+        if (typeof value === 'string' && value.length > 5) detail = detail.replaceAll(value,'[redacted]');
+      }
+      return { failed:true,stage:this.stage ?? 'binding',detail };
+    }
   }
 
   async reconcile() {
@@ -106,7 +142,10 @@ export default {
     }
     try {
       const runtime = env.STREAM_RUNTIME.getByName('pilot-origin');
-      if (probe) return Response.json(await runtime.checkRuntime(),{headers:{'Cache-Control':'private, no-store'}});
+      if (probe) {
+        const result = await runtime.checkRuntime();
+        return Response.json(result,{status:result.failed ? 503 : 200,headers:{'Cache-Control':'private, no-store'}});
+      }
       return await runtime.fetch(request);
     }
     catch { return new Response('Stream is temporarily unavailable. Please try again shortly.',{
