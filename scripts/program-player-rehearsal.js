@@ -158,6 +158,32 @@ export async function checkProgramPlayer({ frame, neighbor, app, fixture, previe
   await displayed(opening);
   await selection('s2');
   await sub.selectOption('');
+  // Exercise the native player's empty-source interval on the headless browser too.
+  // A new source is paused until metadata arrives, regardless of the viewer's choice.
+  for (const playing of [true, false]) {
+    await frame.evaluate(async play => {
+      const video = document.querySelector('video');
+      if (play) await video.play();
+      else video.pause();
+      const captions = document.querySelector('#subtitles');
+      captions.value = 's3';
+      captions.dispatchEvent(new Event('change'));
+      video.load();
+      document.querySelector('#next-title').click();
+    }, playing);
+    await displayed(first);
+    await frame.waitForFunction(play => {
+      const video = document.querySelector('video');
+      return play ? !video.paused && video.currentTime > 0.25 : video.paused && video.currentTime === 0;
+    }, playing);
+    await rows.first().getByRole('button',{name:'Play ' + opening.title,exact:true}).click();
+    await displayed(opening);
+    await sub.selectOption('');
+    await frame.waitForFunction(() => {
+      const video = document.querySelector('video');
+      return !video.paused && video.readyState >= 2 && video.currentTime > 0.25;
+    });
+  }
   // Delay a bookmark on the opening while the viewer moves to the next film and seeks.
   // Releasing it later must not overwrite the new title or position.
   const release = Promise.withResolvers();

@@ -24,6 +24,7 @@ window.addEventListener('hashchange', () => {
 });
 
 let rendition = '', playbackGeneration = 0;
+let pendingAutoplay;
 let stream, renewal, startupTimer, viewId, playGrant, checkout, library;
 const startupLimit = 45000;
 let counted = false, paid = false, purchase = false;
@@ -104,6 +105,7 @@ if (!receipt && document.body.dataset.checkout === 'true') {
 function stopPlayback(keepNativeSource = false) {
   watchTime.stop();
   playbackGeneration++;
+  pendingAutoplay = undefined;
   airPlay.setRentalActive(false);
   clearTimeout(renewal);
   clearTimeout(startupTimer);
@@ -176,6 +178,7 @@ async function startVideo() {
 }
 
 async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
+  pendingAutoplay = autoplay;
   const generation = ++playbackGeneration;
   watchStartup();
   stagePlay.disabled = play.disabled = true;
@@ -210,6 +213,7 @@ async function rental(resumeAt = 0, autoplay = true, nativeAttempt = 0) {
     video.controls = true;
     const ready = (shouldPlay) => {
       if (generation !== playbackGeneration) return;
+      pendingAutoplay = undefined;
       subtitles.resume();
       play.hidden = true;
       play.disabled = false;
@@ -273,10 +277,11 @@ function switchRendition(next) {
   if (next === rendition) return;
   rendition = next;
   const position = video.currentTime;
-  const playing = !video.paused && !video.ended;
+  const playing = pendingAutoplay ?? (!video.paused && !video.ended);
   if (paid && stream) {
     subtitles.suspend();
     if (stream.selectAirPlaySubtitle) {
+      pendingAutoplay = playing;
       watchStartup();
       stream.selectAirPlaySubtitle(next, position, playing);
     } else rental(position, playing);
@@ -305,7 +310,8 @@ function newView() {
 
 function navigate(id, autoplay) {
   if (!receipt || !program) return;
-  const shouldPlay = autoplay ?? (!stream || !video.paused);
+  // Loading a title or caption rendition temporarily pauses the media element.
+  const shouldPlay = autoplay ?? pendingAutoplay ?? (!stream || !video.paused);
   if (paid && stream && id === program.id) {
     if (shouldPlay) startVideo();
     return;
