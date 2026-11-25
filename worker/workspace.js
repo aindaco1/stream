@@ -1,3 +1,4 @@
+import { rangeFor } from '../src/http-range.js';
 import { filmmakerHome } from '../src/filmmaker-home.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { readBoundedText } from '@dustwave/worker-core/response-body';
@@ -15,6 +16,25 @@ const csp =
 const pilotNotice = 'Sign-ups are open. Film uploads and paid screenings are being prepared.';
 const assets =
   /^\/(?:favicon\.ico|favicon\.svg|apple-touch-icon\.png|dust-wave-square\.webp|site-frame\.css|play-excerpt\.js|filmmaker-home\.css|market-street-(?:still\.webp|excerpt\.mp4)|filmmaker(?:-dark)?\.css|appearance\.js|select-focus\.js|setup\/(?:field-help|header-session|navigation|tabs|tabs-browser|analytics-refresh|sign-in|turnstile-size)\.js)$/;
+
+// Some asset bindings return the entire file for a byte-range request. Safari
+// starts video playback with a two-byte probe. Only the fixed home sample needs this fallback.
+async function homeExcerpt(request, assets) {
+  const asset = await assets.fetch(request);
+  const range = request.headers.get('Range');
+  if (request.method !== 'GET' || asset.status !== 200 || !range) return asset;
+  const validator = request.headers.get('If-Range');
+  if (validator && validator !== asset.headers.get('ETag') && validator !== asset.headers.get('Last-Modified')) return asset;
+  const bytes = await asset.arrayBuffer();
+  const bounds = rangeFor(range, bytes.byteLength);
+  if (!bounds) return new Response(null, { status: 416, headers: { 'Content-Range': 'bytes */' + bytes.byteLength } });
+  const [start, end] = bounds;
+  const headers = new Headers(asset.headers);
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Content-Range', `bytes ${start}-${end}/${bytes.byteLength}`);
+  headers.set('Content-Length', String(end - start + 1));
+  return new Response(bytes.slice(start, end + 1), { status: 206, headers });
+}
 
 // Public identity and information share one owner in both deployment stages.
 // Route these before starting a container, including one-time form submissions.
@@ -39,6 +59,7 @@ export async function workspaceResponse(
   if (url.origin !== origin) return new Response('Unknown host.', { status: 404 });
   const { pathname: path } = url;
   const get = ['GET', 'HEAD'].includes(request.method);
+  if (get && path === '/market-street-excerpt.mp4') return homeExcerpt(request, env.ASSETS);
   if (get && assets.test(path)) return env.ASSETS.fetch(request);
   if (get && path === headerSessionPath) {
     return new Response(request.method === 'HEAD' ? null : JSON.stringify(headerSession(store, request.headers.get('cookie'), true)), {

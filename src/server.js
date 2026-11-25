@@ -1,3 +1,4 @@
+import { rangeFor } from './http-range.js';
 import { workspacePage } from './setup-view.js';
 import { staticAsset } from './static-asset.js';
 import { createServer } from 'node:http';
@@ -60,14 +61,6 @@ function reply(req, res, status, type, body, extra = {}) {
   const data = Buffer.isBuffer(body) ? body : Buffer.from(body);
   res.writeHead(status, { ...headers, 'Content-Type': type, ...(status !== 304 && { 'Content-Length': data.length }), ...extra });
   res.end(req.method === 'HEAD' ? undefined : data);
-}
-
-function rangeFor(header, size) {
-  const matches = /^bytes=(\d*)-(\d*)$/.exec(header);
-  if (!matches || (!matches[1] && !matches[2])) return;
-  const start = matches[1] ? Number(matches[1]) : Math.max(0, size - Number(matches[2]));
-  const end = matches[1] && matches[2] ? Math.min(size - 1, Number(matches[2])) : size - 1;
-  if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end && start < size) return [start, end];
 }
 
 function playlist(segments, subtitleId, captions = false) {

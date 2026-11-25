@@ -63,6 +63,13 @@ try {
   assert.match(publicPage, /href="\/admin\/sign-up">Sign up for free/);
   assert.doesNotMatch(publicPage, /name="email"|data-sitekey=/);
   assert.match(landing.headers.get('content-security-policy'), /media-src 'self'/);
+  // The mock asset binding, like production, ignores Range and returns the full file.
+  const excerpt = 'https://streamyourfilm.com/market-street-excerpt.mp4';
+  const probe = await mf.dispatchFetch(excerpt, {headers:{Range:'bytes=0-1'}});
+  assert.equal(probe.status, 206);
+  assert.equal(probe.headers.get('content-range'), 'bytes 0-1/5');
+  assert.equal(await probe.text(), 'as');
+  assert.equal((await mf.dispatchFetch(excerpt, {headers:{Range:'bytes=19-'}})).status, 416);
   const home = await mf.dispatchFetch('https://streamyourfilm.com/setup/home', {redirect:'manual'});
   assert.equal(home.headers.get('location'), '/');
   const res = await mf.dispatchFetch('https://streamyourfilm.com/admin/sign-up');
