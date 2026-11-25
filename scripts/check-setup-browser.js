@@ -75,6 +75,8 @@ const stripe = {
 
 async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   const banner = page.getByRole('banner');
+  const logout = banner.getByRole('button', { name: 'Sign out', exact: true });
+  if (signOutPath) await logout.waitFor();
   assert.deepEqual(await banner.getByRole('link').allTextContents(), guestSignIn ? ['Stream', 'FAQ', 'Sign in'] : ['Stream', 'FAQ']);
   assert.equal(await banner.getByRole('combobox').count(), 0);
   const appearance = page.getByRole('contentinfo').getByRole('combobox', { name: 'Appearance' });
@@ -90,9 +92,8 @@ async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
         Math.abs(item.top + item.height / 2 - control.top - control.height / 2) <= 1 &&
         (i === 0 || items[i - 1].right < item.left));
   }), 'The credit, privacy link and appearance selector fit on one row');
-  const logout = banner.getByRole('button', { name: 'Sign out', exact: true });
+  if (guestSignIn) assert.equal(await banner.getByRole('link', {name:'Sign in'}).getAttribute('href'), '/admin/sign-in');
   if (signOutPath) {
-    await logout.waitFor();
     assert.equal(await logout.evaluate(button => new URL(button.form.action).pathname), signOutPath);
   } else {
     assert.equal(await logout.count(), 0);
@@ -167,6 +168,7 @@ async function checkSignup(page, origin) {
   await frame.getByRole('button', {name:'Back to film'}).click();
   await page.getByRole('contentinfo').getByRole('link', {name:'Privacy policy'}).click();
   await page.getByRole('heading', {name:'Privacy policy',exact:true}).waitFor();
+  await checkSiteFrame(page, null, true);
   await page.goBack();
   await page.getByRole('link', {name:'Sign up for free'}).click();
   await page.waitForURL(origin + '/admin/sign-up');
@@ -177,7 +179,7 @@ async function checkSignup(page, origin) {
   await page.getByRole('link', {name:'filmmaker agreement',exact:true}).click();
   const agreement = await opened;
   await agreement.getByRole('heading', {name:'Your film stays yours'}).waitFor();
-  await checkSiteFrame(agreement);
+  await checkSiteFrame(agreement, null, true);
   await agreement.close();
   assert.equal(await page.getByLabel('Email address').inputValue(),email);
   await checkSiteFrame(page, null, true);
@@ -186,12 +188,20 @@ async function checkSignup(page, origin) {
   await page.getByRole('status').filter({hasText:/Check your inbox/}).waitFor();
   await openEmail('Agree and create account', 'Settings');
   await checkSiteFrame(page, '/setup/sign-out');
-  await page.goto(origin);
-  await page.waitForURL(origin + '/setup/dashboard');
-  for (const path of ['/faq', '/setup/agreement/pilot-v1', '/admin/sign-in']) {
-    await page.goto(origin + path);
-    await checkSiteFrame(page, '/setup/sign-out');
-  }
+  const checkPublicPages = async (signOut, dashboard) => {
+    for (const path of ['/faq', '/privacy', '/setup/agreement/pilot-v1', '/']) {
+      await page.goto(origin + path);
+      await checkSiteFrame(page, signOut);
+    }
+    assert.equal(page.url(), origin + '/');
+    const account = page.getByRole('link', {name:'Go to dashboard'});
+    assert.equal(await account.getAttribute('href'),dashboard);
+    await account.click();
+    await page.waitForURL(origin + dashboard);
+  };
+  await checkPublicPages('/setup/sign-out', '/setup/dashboard');
+  await page.goto(origin + '/privacy');
+  await checkSiteFrame(page, '/setup/sign-out');
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
   await page.goto(origin);
   await page.getByRole('link',{name:'Sign in',exact:true}).click();
@@ -204,12 +214,9 @@ async function checkSignup(page, origin) {
   await page.goto(origin + '/admin/sign-in#' + setup.store.invite('Test operator', 'admin'));
   await page.getByRole('button', { name: 'Continue to Stream' }).click();
   await page.waitForURL(origin + '/setup/admin');
+  await checkPublicPages('/setup/admin/sign-out', '/setup/admin');
   await page.goto(origin);
-  await page.waitForURL(origin + '/setup/admin');
-  for (const path of ['/faq', '/setup/agreement/pilot-v1']) {
-    await page.goto(origin + path);
-    await checkSiteFrame(page, '/setup/admin/sign-out');
-  }
+  await checkSiteFrame(page, '/setup/admin/sign-out');
   await page.getByRole('banner').getByRole('button', { name: 'Sign out' }).click();
   await page.waitForURL(origin + '/admin/sign-in');
   await checkSiteFrame(page);
@@ -998,7 +1005,7 @@ try {
         await page.locator('header').getByRole('link', { name: 'FAQ', exact: true }).click();
         await page.getByRole('heading', { name: 'What does it cost?' }).waitFor();
         await page.locator('#countries + #embed + #payouts:has(+ #costs)').getByRole('heading', {name:'Who owns my film and how do I get paid?'}).waitFor();
-        await checkSiteFrame(page);
+        await checkSiteFrame(page, null, true);
         assert.equal(await page.getByRole('combobox', {name:'Appearance'}).inputValue(), 'dark');
         assert.ok(await page.evaluate(() => Math.abs(document.querySelector('.faq-intro').offsetWidth - document.querySelector('main').clientWidth) <= 1));
         const footer = page.getByRole('contentinfo');

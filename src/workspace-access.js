@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { workspacePage, signOutPath } from './workspace-page.js';
+import { workspacePage, signInPath, signOutPath } from './workspace-page.js';
 import { agreementFor } from './filmmaker-agreement.js';
 import { escapeHtml } from './film-embed.js';
 import { mailbox, sendStreamEmail } from './stream-email.js';
 
-export const signInPath = '/admin/sign-in';
+export { signInPath };
 export const signUpPath = '/admin/sign-up';
 
 const routes = new Map([
@@ -69,7 +69,7 @@ export function accessPage({ signup, siteKey, message, error, mode, pilotNotice 
         <p>Confirm your email and accept the ${agreement} to create your account.</p>` :
         '<p>Your private link is ready. Continue to sign in.</p>'}
       <button type="submit">${signup ? 'Agree and create account' : 'Continue to Stream'}</button></form></section>`,
-    { signIn: true, guestSignIn: signup ? signInPath : null, turnstile: Boolean(siteKey) });
+    { signIn: true, guestSignIn: signup, turnstile: Boolean(siteKey) });
 }
 
 export async function handleAccess({path, method, get, origin, env, store, mode, siteKey, from,

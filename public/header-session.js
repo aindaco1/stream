@@ -3,28 +3,39 @@
 const template = document.querySelector('template[data-header-session]');
 if (template) {
   const guestLink = document.querySelector('[data-guest-sign-in]');
+  const homeAccount = document.querySelector('[data-home-account]');
+  const signupHref = homeAccount?.getAttribute('href');
+  const signupLabel = homeAccount?.textContent;
   let form;
+  let revision = 0;
   async function refresh() {
-    form?.remove();
-    if (guestLink) guestLink.hidden = false;
+    const current = ++revision;
+    let session;
     try {
       const response = await fetch(template.dataset.headerSession, {
         credentials: 'same-origin', mode: 'same-origin', redirect: 'error', cache: 'no-store'
       });
-      if (!response.ok) return;
-      const session = await response.json();
-      if (!session) return;
-      if (template.hasAttribute('data-home')) {
-        location.replace(session.dashboard);
-        return;
+      if (response.ok) session = await response.json();
+    } catch { /* Keep public navigation available if the session check fails. */ }
+    if (current !== revision) return;
+    if (guestLink) guestLink.hidden = Boolean(session);
+    if (homeAccount) {
+      homeAccount.href = session?.dashboard ?? signupHref;
+      homeAccount.textContent = session ? 'Go to dashboard' : signupLabel;
+    }
+    if (session) {
+      if (!form) {
+        form = template.content.firstElementChild.cloneNode(true);
+        template.after(form);
       }
-      if (guestLink) guestLink.hidden = true;
-      form = template.content.firstElementChild.cloneNode(true);
       form.action = session.action;
       form.elements.csrf.value = session.csrf;
-      template.after(form);
-    } catch { /* Public pages stay usable if the session check is unavailable. */ }
+    } else {
+      form?.remove();
+      form = null;
+    }
   }
   refresh();
   window.addEventListener('pageshow', event => { if (event.persisted) refresh(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 }
