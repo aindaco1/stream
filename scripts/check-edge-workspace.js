@@ -117,6 +117,19 @@ try {
   const admin = await post('/admin/sign-in', { code: acode });
   assert.equal(admin.status, 303);
   const acookie = admin.headers.get('set-cookie').split(';')[0];
+  async function checkHeader(cookie, action) {
+    const res = await get('/setup/admin/header-session', cookie);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('cache-control'), /no-store/);
+    const session = await res.json();
+    if (action) {
+      assert.equal(session.action, action);
+      assert.ok(session.csrf);
+    } else assert.equal(session, null);
+  }
+  await checkHeader('', null);
+  await checkHeader(cookie, '/setup/sign-out');
+  await checkHeader(acookie, '/setup/admin/sign-out');
   assert.match(await (await get('/setup/admin', acookie)).text(), /Platform analytics/);
   await mf.dispose();
   mf = new Miniflare({ ...convertV4MiniflareOptions(options), resourcePersistencePath: root });
@@ -127,6 +140,7 @@ try {
   const signedOut = await post('/setup/admin/sign-out', {csrf}, acookie);
   assert.equal(signedOut.headers.get('location'), '/admin/sign-in');
   assert.equal((await get('/setup/admin', acookie)).headers.get('location'), '/admin/sign-in');
+  await checkHeader(acookie, null);
   console.log('Verified one-time signup, role-based sign-in, sign-out and session separation through restart.');
 } finally {
   try {

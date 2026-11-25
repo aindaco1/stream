@@ -73,6 +73,21 @@ const stripe = {
   }
 };
 
+async function checkSiteFrame(page, signOutPath) {
+  const banner = page.getByRole('banner');
+  assert.deepEqual(await banner.getByRole('link').allTextContents(), ['Stream', 'FAQ']);
+  assert.equal(await banner.getByRole('combobox').count(), 0);
+  const appearance = page.getByRole('contentinfo').getByRole('combobox', { name: 'Appearance' });
+  await appearance.waitFor();
+  const logout = banner.getByRole('button', { name: 'Sign out', exact: true });
+  if (signOutPath) {
+    await logout.waitFor();
+    assert.equal(await logout.evaluate(button => new URL(button.form.action).pathname), signOutPath);
+  } else {
+    assert.equal(await logout.count(), 0);
+  }
+}
+
 async function checkSignup(page, origin) {
   const email = 'new-filmmaker@example.test';
   const openEmail = async (button, destination) => {
@@ -92,12 +107,19 @@ async function checkSignup(page, origin) {
   await page.getByRole('link', {name:'filmmaker agreement',exact:true}).click();
   const agreement = await opened;
   await agreement.getByRole('heading', {name:'Your film stays yours'}).waitFor();
+  await checkSiteFrame(agreement);
   await agreement.close();
   assert.equal(await page.getByLabel('Email address').inputValue(),email);
+  await checkSiteFrame(page);
   await agree.check();
   await page.getByRole('button',{name:'Email me a sign-up link'}).click();
   await page.getByRole('status').filter({hasText:/Check your inbox/}).waitFor();
   await openEmail('Agree and create account', 'Settings');
+  await checkSiteFrame(page, '/setup/sign-out');
+  for (const path of ['/faq', '/setup/agreement/pilot-v1', '/admin/sign-in']) {
+    await page.goto(origin + path);
+    await checkSiteFrame(page, '/setup/sign-out');
+  }
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
   await page.goto(origin);
   await page.getByRole('link',{name:'Sign in',exact:true}).click();
@@ -106,6 +128,17 @@ async function checkSignup(page, origin) {
   await page.getByRole('status').filter({hasText:/sign-in link will arrive/}).waitFor();
   await openEmail('Continue to Stream', 'Dashboard');
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
+
+  await page.goto(origin + '/admin/sign-in#' + setup.store.invite('Test operator', 'admin'));
+  await page.getByRole('button', { name: 'Continue to Stream' }).click();
+  await page.waitForURL(origin + '/setup/admin');
+  for (const path of ['/faq', '/setup/agreement/pilot-v1']) {
+    await page.goto(origin + path);
+    await checkSiteFrame(page, '/setup/admin/sign-out');
+  }
+  await page.getByRole('banner').getByRole('button', { name: 'Sign out' }).click();
+  await page.waitForURL(origin + '/admin/sign-in');
+  await checkSiteFrame(page);
 }
 
 async function checkAppearance(page, origin) {
@@ -890,7 +923,7 @@ try {
         await page.locator('header').getByRole('link', { name: 'FAQ', exact: true }).click();
         await page.getByRole('heading', { name: 'What does it cost?' }).waitFor();
         await page.locator('#countries + #embed + #payouts:has(+ #costs)').getByRole('heading', {name:'Who owns my film and how do I get paid?'}).waitFor();
-        assert.ok(await page.locator('header').getByRole('link', {name:'Sign in', exact:true}).isVisible());
+        await checkSiteFrame(page);
         assert.equal(await page.getByRole('combobox', {name:'Appearance'}).inputValue(), 'dark');
         assert.ok(await page.evaluate(() => Math.abs(document.querySelector('.faq-intro').offsetWidth - document.querySelector('main').clientWidth) <= 1));
         const footer = page.getByRole('contentinfo');

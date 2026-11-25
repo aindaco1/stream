@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { workspacePage } from './workspace-page.js';
+import { workspacePage, signOutPath } from './workspace-page.js';
 import { agreementFor } from './filmmaker-agreement.js';
 import { escapeHtml } from './film-embed.js';
 import { mailbox, sendStreamEmail } from './stream-email.js';
@@ -18,6 +18,20 @@ export function accessPath(path) {
 
 export function sessionCookieName(audience, secure) {
   return (secure ? '__Secure-' : '') + (audience === 'admin' ? 'stream_admin' : 'stream_setup');
+}
+
+export function readSessionCookie(cookieHeader, audience, secure) {
+  const prefix = sessionCookieName(audience, secure) + '=';
+  return cookieHeader?.split(/;\s*/).find(cookie => cookie.startsWith(prefix))?.slice(prefix.length);
+}
+
+export function headerSession(store, cookieHeader, secure) {
+  for (const audience of ['admin', 'filmmaker']) {
+    const token = readSessionCookie(cookieHeader, audience, secure);
+    const session = token && store.session(token, audience);
+    if (session) return { action: signOutPath(audience === 'admin'), csrf: session.csrf };
+  }
+  return null;
 }
 
 export function sessionCookie(value, age, audience, secure) {

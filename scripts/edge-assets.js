@@ -15,6 +15,7 @@ const files = {
   'filmmaker.css': 'setup.css',
   'filmmaker-dark.css': 'setup-dark.css',
   'select-focus.js': 'select-focus.js',
+  'setup/header-session.js': 'header-session.js',
   'setup/sign-in.js': 'sign-in.js',
   'setup/field-help.js': 'field-help.js',
   'setup/analytics-refresh.js': 'analytics-refresh.js',
