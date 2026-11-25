@@ -140,7 +140,7 @@ async function checkDemoPosition(page, origin) {
   await page.unroute(embedRequest);
   const loaded = await heading.boundingBox();
   assert.ok(Math.abs(loaded.y - initial.y) <= 1, 'The introduction should stay in place as the poster loads');
-  assert.ok(Math.abs(centerDifference) <= 1, 'Center the introduction beside the opening poster');
+  assert.ok(Math.abs(centerDifference) <= 1, 'Introduction and opening poster centers differ by ' + centerDifference + 'px');
   for (const name of ['See rental and download options', 'Rent · $5.50', 'Back to film', 'Buy · $11.00', 'Back to film']) {
     const button = frame.getByRole('button', {name, exact: true});
     await button.scrollIntoViewIfNeeded();

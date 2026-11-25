@@ -27,7 +27,7 @@
   .home-pitch { min-block-size: var(--poster-space); align-content: center; }
   .home-excerpt { align-self: center; position: sticky; top: var(--page-gutter); }
   .home-excerpt:not([data-interacting]) {
-    display: grid; min-block-size: var(--poster-space); grid-template-rows: 1fr auto 1fr;
+    display: grid; block-size: var(--poster-space); grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   }
   .home-excerpt figcaption { align-self: end; }
   .home-excerpt .excerpt-source { align-self: start; justify-self: start; }
