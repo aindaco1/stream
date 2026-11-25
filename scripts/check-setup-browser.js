@@ -79,6 +79,13 @@ async function checkSiteFrame(page, signOutPath) {
   assert.equal(await banner.getByRole('combobox').count(), 0);
   const appearance = page.getByRole('contentinfo').getByRole('combobox', { name: 'Appearance' });
   await appearance.waitFor();
+  assert.ok(await appearance.evaluate(select => {
+    const control = select.getBoundingClientRect();
+    const footer = select.closest('.site-footer-inner');
+    const logo = footer.querySelector('a').getBoundingClientRect();
+    return Math.abs(control.right - footer.getBoundingClientRect().right) <= 1 &&
+      Math.abs((control.top + control.bottom) - (logo.top + logo.bottom)) <= 2;
+  }), 'Appearance stays on the right of the footer beside the logo');
   const logout = banner.getByRole('button', { name: 'Sign out', exact: true });
   if (signOutPath) {
     await logout.waitFor();
