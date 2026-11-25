@@ -165,13 +165,24 @@ async function checkDemoPosition(page, origin) {
 
 async function checkSignup(page, origin) {
   const email = 'new-filmmaker@example.test';
-  const openEmail = async (button, destination) => {
+  const openEmail = async address => {
     const message = emails.at(-1);
-    assert.deepEqual(message.to, [email]);
-    await page.goto(message.text.match(/http:\S+/)[0]);
-    await page.getByRole('button', {name:button, exact:true}).click();
-    await page.getByRole('heading', {name:destination, exact:true}).waitFor();
-    await page.getByText('Signed in as ' + email).waitFor();
+    assert.deepEqual(message.to, [address]);
+    const link = message.text.match(/http:\S+/)[0];
+    const preview = await page.request.get(link);
+    assert.equal(preview.status(), 200);
+    assert.equal(preview.headers()['set-cookie'], undefined);
+    await page.goto(link, {waitUntil:'commit'});
+    return link;
+  };
+  const signInByEmail = async (address, dashboard) => {
+    await page.goto(origin + '/admin/sign-in');
+    await page.getByLabel('Email address').fill(address);
+    await page.getByRole('button',{name:'Email me a sign-in link'}).click();
+    await page.getByRole('status').filter({hasText:/sign-in link will arrive/}).waitFor();
+    const link = await openEmail(address);
+    await page.waitForURL(origin + dashboard);
+    return link;
   };
   await page.goto(origin);
   await page.getByRole('heading', {name:'Rent your film on your own site.'}).waitFor();
@@ -212,7 +223,10 @@ async function checkSignup(page, origin) {
   await agree.check();
   await page.getByRole('button',{name:'Email me a sign-up link'}).click();
   await page.getByRole('status').filter({hasText:/Check your inbox/}).waitFor();
-  await openEmail('Agree and create account', 'Settings');
+  await openEmail(email);
+  await page.getByRole('button', {name:'Agree and create account', exact:true}).click();
+  await page.getByRole('heading', {name:'Settings', exact:true}).waitFor();
+  await page.getByText('Signed in as ' + email).waitFor();
   await checkSiteFrame(page, '/setup/sign-out');
   const checkPublicPages = async (signOut, dashboard) => {
     for (const path of ['/faq', '/privacy', '/setup/agreement/pilot-v1']) {
@@ -238,17 +252,17 @@ async function checkSignup(page, origin) {
   await page.goto(origin + '/privacy');
   await checkSiteFrame(page, '/setup/sign-out');
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
-  await page.goto(origin);
-  await page.getByRole('link',{name:'Sign in',exact:true}).click();
-  await page.getByLabel('Email address').fill(email);
-  await page.getByRole('button',{name:'Email me a sign-in link'}).click();
-  await page.getByRole('status').filter({hasText:/sign-in link will arrive/}).waitFor();
-  await openEmail('Continue to Stream', 'Dashboard');
+  const usedLink = await signInByEmail(email, '/setup/dashboard');
+  await page.getByText('Signed in as ' + email).waitFor();
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
+  await page.goto(usedLink, {waitUntil:'commit'});
+  await page.getByRole('alert').filter({hasText:'Request a fresh email link'}).waitFor();
+  await page.getByLabel('Email address').waitFor();
 
-  await page.goto(origin + '/admin/sign-in#' + setup.store.invite('Test operator', 'admin'));
-  await page.getByRole('button', { name: 'Continue to Stream' }).click();
-  await page.waitForURL(origin + '/setup/admin');
+  const operator = 'operator@example.test';
+  setup.store.enrollLogin('Test operator', 'admin', operator);
+  await signInByEmail(operator, '/setup/admin');
+  await page.getByRole('heading', {name:'Platform analytics', exact:true}).waitFor();
   await checkPublicPages('/setup/admin/sign-out', '/setup/admin');
   await page.goto(origin);
   await checkSiteFrame(page, '/setup/admin/sign-out');

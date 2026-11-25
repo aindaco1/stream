@@ -63,6 +63,7 @@ export function accessPage({ signup, siteKey, message, error, mode, pilotNotice 
         '<p>Email access is temporarily unavailable. Please try again later.</p>'}
       ${signup ? '' : `<p>New to Stream? <a href="${signUpPath}">Sign up for free</a></p>`}
     </div>
+    ${signup ? '' : '<p role="status" data-email-sign-in hidden>Signing you in…</p>'}
     <form method="post" action="${path}" data-exchange hidden><input type="hidden" name="code">
       ${signup ? `<input type="hidden" name="agreement" value="${agreementVersion}">
         <p>Confirm your email and accept the ${agreement} to create your account.</p>` :
