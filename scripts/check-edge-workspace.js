@@ -122,9 +122,12 @@ try {
   mf = new Miniflare({ ...convertV4MiniflareOptions(options), resourcePersistencePath: root });
   assert.match(await (await get('/setup/settings', cookie)).text(), /maker@example.test/);
   assert.match(await (await get('/setup/admin', acookie)).text(), /Platform analytics/);
-  console.log(
-    'Verified one-time signup, session separation and recovery after restart using simulated provider responses.'
-  );
+  const adminPage = await (await get('/setup/admin', acookie)).text();
+  const csrf = adminPage.match(/name="csrf" value="([^"]+)"/)[1];
+  const signedOut = await post('/setup/admin/sign-out', {csrf}, acookie);
+  assert.equal(signedOut.headers.get('location'), '/admin/sign-in');
+  assert.equal((await get('/setup/admin', acookie)).headers.get('location'), '/admin/sign-in');
+  console.log('Verified one-time signup, role-based sign-in, sign-out and session separation through restart.');
 } finally {
   try {
     await mf?.dispose();

@@ -127,7 +127,7 @@ export async function workspaceResponse(
     }
     if (!session || session.csrf !== form.csrf) return reject(403, 'Open the sign-out form on Stream.');
     store.signOut(id);
-    return redirect('/', { 'Set-Cookie': cookie('', 0) });
+    return redirect(signInPath, { 'Set-Cookie': cookie('', 0) });
   }
   if (['/setup/admin', '/setup/dashboard', '/setup/settings'].includes(path) && get) {
     if (!session) return redirect(signInPath);
