@@ -37,6 +37,12 @@ select[data-pointer-focus]:focus { outline: none; }
   .bar { gap: .375rem; }
   .bar .sign-out { padding-inline: .25rem; }
 }
+@media (max-width: 23rem) {
+  .bar { width: calc(100% - 1.25rem); font-size: .875rem; }
+  .bar .brand { gap: .25rem; font-size: 1.5rem; }
+  .bar .brand img { width: 1.5rem; }
+  .bar .sign-out { font-size: inherit; }
+}
 main { display: grid; gap: 1.5rem; padding-block: clamp(1.5rem, 5vw, 3rem) 4rem; }
 h1, h2, h3, p, form, fieldset, dl, dd, ul, ol { margin: 0; }
 h1, h2, h3, legend { line-height: 1.2; text-wrap: balance; }

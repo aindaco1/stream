@@ -98,6 +98,9 @@ async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   if (guestSignIn) assert.equal(await banner.getByRole('link', {name:'Sign in'}).getAttribute('href'), '/admin/sign-in');
   if (signOutPath) {
     assert.equal(await logout.evaluate(button => new URL(button.form.action).pathname), signOutPath);
+    const brand = await banner.locator('.brand').boundingBox();
+    const button = await logout.boundingBox();
+    assert.ok(Math.abs(brand.y + brand.height / 2 - button.y - button.height / 2) <= 1, 'Account actions fit on the header row');
   } else {
     assert.equal(await logout.count(), 0);
   }
@@ -221,7 +224,9 @@ async function checkSignup(page, origin) {
     await account.click();
     await page.waitForURL(origin + dashboard);
   };
+  await page.setViewportSize({...originalSize, width:320});
   await checkPublicPages('/setup/sign-out', '/setup/dashboard');
+  await page.setViewportSize(originalSize);
   await page.goto(origin + '/privacy');
   await checkSiteFrame(page, '/setup/sign-out');
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
