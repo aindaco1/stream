@@ -1,3 +1,4 @@
+import { privacyPage } from './privacy-policy.js';
 import { filmmakerHome } from './filmmaker-home.js';
 import { headerSessionPath } from './workspace-page.js';
 import { staticAsset } from './static-asset.js';
@@ -202,7 +203,8 @@ export async function createSetup({
     if (get && scripts.has(path)) return scripts.get(path)(req, send, commonHeaders);
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
     const referenceHeaders = { 'Content-Security-Policy': csp + "; connect-src 'self'" };
-    if (get && path === '/') return html(200, filmmakerHome(), referenceHeaders);
+    if (get && path === '/privacy') return html(200, privacyPage(), referenceHeaders);
+    if (get && path === '/') return html(200, filmmakerHome(), { 'Content-Security-Policy': referenceHeaders['Content-Security-Policy'] + "; frame-src 'self'" });
     if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(mode, checkout.salesTerritory), { faq: true, admin }), referenceHeaders);
     const edition = agreementModeForPath(path);
     if (get && edition) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(edition), { reference: true }), referenceHeaders);

@@ -313,6 +313,6 @@ button.info-button:is(:hover, [aria-expanded=true]) { background: var(--subtle);
 .sign-in-panel input[type=email] { width: min(100%, 42rem); }
 .sign-in-panel [hidden] { display: none; }
 .cf-turnstile { min-width: 0; }
-.filmmaker-agreement { display: grid; gap: 1.5rem; max-width: 70ch; }
-.filmmaker-agreement :is(header, section) { display: grid; gap: .375rem; }
+:is(.filmmaker-agreement, .privacy-policy) { display: grid; gap: 1.5rem; max-width: 70ch; }
+:is(.filmmaker-agreement, .privacy-policy) :is(header, section) { display: grid; gap: .375rem; }
 .filmmaker-help > .faq-intro { max-width: none; }

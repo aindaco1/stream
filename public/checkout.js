@@ -1,8 +1,7 @@
-import { calculatePlatformTip } from './platform-tip.js';
+import { currency, displayOfferPrices, rentalLength } from './offer-display.js';
 
 const validToken = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const kinds = ['rent', 'buy'];
-const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 let scriptPromise;
 
 function stripeScript() {
@@ -84,7 +83,6 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
   const program = document.body.classList.contains('is-program');
   const refresh = byId('refresh-program');
   refresh.addEventListener('click', () => location.reload());
-  const rentalLength = value => value + (value === 1 ? ' hour' : ' hours');
   const accessTools = byId('access-tools');
   const restoreTools = byId('restore-tools');
   restoreTools.hidden = document.body.dataset.emailRecovery !== 'true';
@@ -224,18 +222,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     check.hidden = !payment.hidden || !token || token === unlocked?.token;
     panel.hidden = !available.length && check.hidden && refresh.hidden && (!salesClosed || unlocked);
     byId('tip-choice').hidden = !available.length;
-    byId('tip-value').textContent = tip.value + '%';
-    tip.setAttribute('aria-valuetext', tip.value + ' percent');
-    for (const kind of kinds) {
-      const button = byId(kind);
-      button.hidden = !available.includes(kind);
-      if (!button.hidden) {
-        const action = kind === 'buy' ? (program ? 'Buy program' : 'Buy') : (program ? 'Rent program' : 'Rent');
-        const price = Number(document.body.dataset[kind]);
-        button.textContent = action + ' · ' + currency.format((price + calculatePlatformTip(price, Number(tip.value))) / 100);
-        button.disabled = !payment.hidden;
-      }
-    }
+    displayOfferPrices(available, program, !payment.hidden);
     const terms = [];
     if (available.includes('rent')) terms.push('Rent for ' + rentalLength(hours) + ' from payment.');
     if (available.includes('buy')) terms.push(program ? 'Buy to watch and download every title in one ZIP.' : 'Buy to watch and download.');

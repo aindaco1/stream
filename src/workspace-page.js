@@ -8,6 +8,7 @@ const publicDescriptions = new Map([
   ['Sign in', 'Sign in to Stream with a private email link.'],
   ['Screening room', 'Preview films and programs and rent or buy directly in the player.'],
   ['FAQ', 'Learn how to put a film on your website, create a program, connect storage and payments, and understand fees and viewer access.'],
+  ['Privacy policy', 'How Stream uses information when you watch, rent, buy or release a film, and how to reach us about your data.'],
   ['Filmmaker agreement', 'Read the Stream pilot terms for filmmakers, including film ownership, permissions, storage and viewer access.']
 ]);
 
@@ -30,7 +31,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     ${publicDescriptions.has(title) ? `<meta name="description" content="${escapeHtml(publicDescriptions.get(title))}">` : ''}
     <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css">
     <link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
-    ${landing ? '<link rel="stylesheet" href="/filmmaker-home.css"><script type="module" src="/play-excerpt.js"></script>' : ''}
+    ${landing ? '<link rel="stylesheet" href="/filmmaker-home.css">' : ''}
     ${screening ? '<link rel="stylesheet" href="/screening.css">' : ''}
     ${checkSession ? '<script type="module" src="/setup/header-session.js"></script>' : ''}
     ${programPreview ? '<link rel="stylesheet" href="/program-lineup.css">' : ''}

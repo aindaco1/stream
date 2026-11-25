@@ -1,3 +1,4 @@
+import { privacyPage } from './privacy-policy.js';
 import { rangeFor } from './http-range.js';
 import { workspacePage } from './setup-view.js';
 import { staticAsset } from './static-asset.js';
@@ -14,8 +15,8 @@ import { agreementModeForPath, renderFilmmakerAgreement } from './filmmaker-agre
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
 import { accessPath } from './workspace-access.js';
-import { escapeHtml, filmByline, posterChoice, renderFilmInfo, selectedFields } from './film-embed.js';
-import { formatDuration } from './offer-fields.js';
+import { escapeHtml, posterChoice, selectedFields } from './film-embed.js';
+import { exampleHeaders, examplePath, examplePlayer, renderPlayer } from './player-page.js';
 import { programPresentation, streamProgramArchive } from './program-delivery.js';
 import { stripeMode } from './stripe-mode.js';
 import { playbackSettings } from './operator.js';
@@ -40,6 +41,7 @@ const assets = new Map([
   ['/filmmaker.css', ['../public/setup.css', 'text/css']],
   ['/filmmaker-dark.css', ['../public/setup-dark.css', 'text/css']],
   ['/dust-wave-square.webp', ['../public/dust-wave-square.webp', 'image/webp']],
+  ['/offer-display.js', ['../public/offer-display.js', 'text/javascript']],
   ['/play-excerpt.js', ['../public/play-excerpt.js', 'text/javascript']],
   ['/filmmaker-home.css', ['../public/filmmaker-home.css', 'text/css']],
   ['/market-street-still.webp', ['../public/market-street-still.webp', 'image/webp']],
@@ -189,6 +191,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
   const [template, payPage, returnPage, screening] = await Promise.all(
     ['player', 'checkout', 'return', 'screening'].map(async name => {
       const html = await readFile(new URL('../public/' + name + '.html', import.meta.url), 'utf8');
+      if (name === 'player') return html;
       return html.replace('{{siteIcons}}', siteIcons).replaceAll('{{paymentMode}}', mode)
         .replaceAll('{{checkoutLabel}}', mode === 'live' ? 'Checkout' : 'Sandbox checkout')
         .replaceAll('{{screeningIntro}}', mode === 'live' ? 'Choose a film or program to preview, rent or buy in the player.' :
@@ -221,7 +224,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         });
       };
       const read = req.method === 'GET' || req.method === 'HEAD';
-      if (setup && ((path === '/' && read) || path === '/setup' || path.startsWith('/setup/') || accessPath(path))) {
+      if (setup && ((read && (path === '/' || path === '/privacy')) || path === '/setup' || path.startsWith('/setup/') || accessPath(path))) {
         return await setup.handle(req, { path, origin, send, sendMp4 });
       }
       if (setup && read && path === '/faq') {
@@ -230,15 +233,16 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       const hasWorkspace = workspaceOrigin && workspaceOrigin !== origin && (!publicOrigin || workspaceOrigin.startsWith('https://'));
       if (!setup && read && path === '/' && hasWorkspace) return send(303, 'text/plain', '', { Location: workspaceOrigin + '/' });
       const edition = agreementModeForPath(path);
-      if (path === '/faq' || edition) {
+      if (path === '/faq' || path === '/privacy' || edition) {
         if (!read) return fail(405);
         if (hasWorkspace) {
           return send(303, 'text/plain', '', { Location: new URL(path, workspaceOrigin).href });
         }
-        return send(200, 'text/html; charset=utf-8', workspacePage(path === '/faq' ? 'FAQ' : 'Filmmaker agreement', null,
+        return send(200, 'text/html; charset=utf-8', path === '/privacy' ? privacyPage({viewer: true}) : workspacePage(path === '/faq' ? 'FAQ' : 'Filmmaker agreement', null,
           path === '/faq' ? renderFilmmakerFaq(mode, checkout?.salesTerritory) : renderFilmmakerAgreement(edition), { faq: path === '/faq', viewer: true }),
           { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
+      if (setup && read && path === examplePath) return send(200, 'text/html; charset=utf-8', examplePlayer(template), exampleHeaders);
       if (homeExcerpt && read && path === '/market-street-excerpt.mp4') {
         return sendMp4(homeExcerpt, { 'Cache-Control': 'public, max-age=86400' });
       }
@@ -292,34 +296,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const params = new URL(req.url, origin).searchParams;
         const show = params.get('show'), style = posterChoice(params.get('poster'));
         const fields = selectedFields(show || '');
-        const title = escapeHtml(published?.title || 'Private screening');
-        const heading = `<h1 id="film-title">${title}</h1>`;
-        const summary = '<p id="program-summary" hidden></p>';
-        const program = spec.type === 'program';
-        const byline = program ? '' : filmByline(published?.info, fields);
-        const runtime = program ? summary : `<span>${escapeHtml(formatDuration(published?.duration))}</span>`;
-        const description = published?.info?.synopsis && fields.some(field => field.name === 'synopsis')
-          ? published.info.synopsis : published ? `Watch ${published.title} in the filmmaker’s Stream player.` : 'Private screening.';
-        const text = {
-          title, description: escapeHtml(description), style,
-          poster: published?.thumbnail ? ' poster="/film/' + id + '/thumbnail.jpg"' : '',
-          masthead: `<header class="poster-head"><div class="poster-imprint"><span id="poster-byline"${byline ? '' : ' hidden'}>${escapeHtml(byline)}</span>${runtime}</div>${style === 'broadside' ? heading : ''}</header>`,
-          detailsTitle: style === 'marquee' ? heading : '',
-          filmInfo: renderFilmInfo(published?.info, fields)
-        };
-        text.programStyles = spec.type === 'program' ? '<link rel="stylesheet" href="/program-lineup.css">' : '';
-        text.program = spec.type === 'program' ? escapeHtml(JSON.stringify(published ?
-          programPresentation(published, show === null ? undefined : fields) : {title:'Private screening',lineup:[]})) : '';
-        const html = template.replaceAll('{{checkout}}', String(payable))
-          .replaceAll('{{salesTerritory}}', escapeHtml(checkout?.salesTerritory ?? ''))
-          .replaceAll('{{manualNm}}', String(payable && checkout.manualNmEnabled === true))
-          .replaceAll('{{preview}}', String(published ? spec.previewSeconds ?? 10 : 0))
-          .replaceAll('{{emailRecovery}}', String(Boolean(recovery && payable)))
-          .replaceAll('{{published}}', String(Boolean(published)))
-          .replaceAll('{{rent}}', String(published?.prices?.rent ?? ''))
-          .replaceAll('{{rentalHours}}', String(published?.rentalHours ?? 48))
-          .replaceAll('{{buy}}', String(published?.prices?.buy ?? ''))
-          .replace(/\{\{(title|description|style|filmInfo|poster|program|programStyles|masthead|detailsTitle)\}\}/g, (_, key) => text[key]);
+        const program = spec.type === 'program' && (published ? programPresentation(published, show === null ? undefined : fields) : { title: 'Private screening', lineup: [] });
+        const html = renderPlayer(template, { published, style, fields, program, payable, checkout, recovery, mode,
+          posterUrl: published?.thumbnail ? '/film/' + id + '/thumbnail.jpg' : '', previewSeconds: spec.previewSeconds });
         return send(200, 'text/html; charset=utf-8', html, payable ? stripePlayerHeaders : {});
       }
       const versioned = /^\/film\/(p-[a-f0-9-]{36})\/v\/([\w-]{43})(?:\/title\/(f-[a-f0-9-]{36}))?\/(.+)$/.exec(path);
