@@ -118,7 +118,8 @@ async function startCheckout(kind) {
     if (!order.publishableKey?.startsWith('pk_test_') || !order.clientSecret?.startsWith('cs_test_') || order.amount !== total) throw Error();
     const [, { createCardForm }] = await Promise.all([stripeScript(), import('./payment.js')]);
     if (run !== generation) return;
-    feedback.innerHTML = '<p><strong>Try a test payment.</strong> Use only the test card <strong>4242 4242 4242 4242</strong>. Enter <strong>12/34</strong> for expiry, <strong>123</strong> for CVC and <strong>10001</strong> if asked for a ZIP.</p>';
+    feedback.innerHTML = '<p>Use this test card <strong class="test-card-number">4242 4242 4242 4242</strong></p>' +
+      '<p>Expiry <strong>12/34</strong> · CVC <strong>123</strong> · ZIP <strong>10001</strong></p>';
     const stripe = window.Stripe(order.publishableKey);
     card = createCardForm(stripe, { ...order, demo: true }, () => {}, () => finishOrder(kind), undefined,
       () => { feedback.textContent = 'Confirmation was interrupted. Go back to the film and try another test checkout.'; });

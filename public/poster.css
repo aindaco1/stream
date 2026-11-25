@@ -104,5 +104,6 @@ body.paying .poster-head { display: none; }
 
 /* The homepage iframe grows with the card fields, including Stripe validation messages. */
 body[data-payment-mode=example].paying main:has(#card-form:not([hidden])) { max-height: none; }
-body[data-payment-mode=example] #payment-feedback p { margin-bottom: .6rem; }
+body[data-payment-mode=example] #payment-feedback p { color: var(--pay-text); margin-bottom: .5rem; }
+.test-card-number { display: block; width: fit-content; font-size: 1.125rem; font-variant-numeric: tabular-nums; user-select: all; }
 #example-download { color: var(--ink); text-underline-offset: .18em; }
