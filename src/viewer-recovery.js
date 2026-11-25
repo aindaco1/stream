@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { classifyResendFailure } from '@dustwave/worker-core/resend';
-import { mailbox, streamSender, sendStreamEmail } from './stream-email.js';
+import { mailbox, streamSender, sendStreamEmail, streamLinkEmail } from './stream-email.js';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const minute = 60_000;
@@ -74,10 +74,9 @@ export function createViewerRecovery({ store, env = process.env, fetchImpl = fet
       const delivery = store.reserveRecovery(offer, address);
       if (!delivery) return;
       const link = origin + '/embed/' + encodeURIComponent(offer.id) + '#restore=' + delivery.code;
-      const payload = { from, to: [delivery.email],
-        subject: 'Your Stream access link',
-        text: 'You requested access to ' + offer.title + '. Open this private link within 15 minutes to continue watching.\n\n' +
-          link + '\n\nIf you did not request this email, you can ignore it.' };
+      const content = streamLinkEmail({ subject: 'Your Stream access link',
+        message: `Open the player to keep watching “${offer.title}”.`, action: 'Continue watching', link });
+      const payload = { from, to: [delivery.email], ...content };
       // A request gets the same public response for every address. Log delivery
       // failures without an address, film, order, request body or credential.
       const send = async () => {

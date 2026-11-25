@@ -110,7 +110,10 @@ try {
     for (let i = 0; i < 40 && messages.length < number; i++)
       await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(messages.length, number);
-    const link = new URL(messages.at(-1).text.match(/https:\S+/)[0]);
+    const message = messages.at(-1);
+    const link = new URL(message.text.match(/https:\S+/)[0]);
+    assert.deepEqual([...message.html.matchAll(/href="([^"]+)"/g)].map(match => match[1]), [link.href]);
+    assert.ok(message.html.includes('<title>' + message.subject + '</title>'));
     assert.equal(link.origin, origin);
     return new URLSearchParams(link.hash.slice(1)).get('magic-link');
   }
