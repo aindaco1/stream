@@ -1,7 +1,7 @@
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,9 +36,11 @@ const options = {
     throw Error('Unexpected outbound request.');
   },
   name: 'stream-pilot',
-  modules: true,
   modulesRoot: bundle,
-  scriptPath: join(bundle, 'edge.js'),
+  modules: [
+    { type: 'ESModule', path: join(bundle, 'edge.js') },
+    ...(await readdir(bundle)).filter(name => name.endsWith('.html')).map(name => ({ type: 'Text', path: join(bundle, name) }))
+  ],
   compatibilityDate: '2026-10-30',
   compatibilityFlags: ['nodejs_compat'],
   durableObjects: { STREAM_STORE: { className: 'StreamStore', useSQLite: true } },
@@ -79,6 +81,8 @@ try {
   console.log('Worker homepage and SQLite store opened.');
   for (const [name, test] of [
     ['faq', /How do I put a film/],
+    ['privacy', /<h1>Privacy policy<\/h1>/],
+    ['example/market-street', /data-payment-mode="example"/],
     ['setup/agreement/pilot-live-v1', /charged real money/],
     ['admin/sign-in', /Email me a sign-in link/]
   ]) {

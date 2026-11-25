@@ -9,24 +9,11 @@
 .home-pitch p { max-width: 44ch; font-size: clamp(1.0625rem, 1.6vw, 1.25rem); }
 .home-pitch .primary-link { padding-inline: 1.3rem; }
 .home-excerpt { margin: 0; min-width: 0; }
-.film-gate { position: relative; padding: .5rem clamp(1.05rem, 2vw, 1.65rem); background: #161616; border: 1px solid #484848; }
-.film-gate::before, .film-gate::after {
-  content: ''; position: absolute; inset-block: .5rem; width: clamp(5px, .55vw, 8px);
-  background: repeating-linear-gradient(to bottom, transparent 0 10px, #bcbcbc 10px 20px, transparent 20px 32px);
-}
-.film-gate::before { left: .4rem; }
-.film-gate::after { right: .4rem; }
-.home-excerpt video { width: 100%; height: auto; aspect-ratio: 4/3; }
-.excerpt-play {
-  position: absolute; bottom: 1.15rem; left: clamp(1.65rem, 3vw, 2.5rem); gap: .55rem;
-  color: #fff; background: #161616; border-color: #ddd; border-radius: 2rem; padding-inline: 1rem;
-}
-.excerpt-play:hover { background: #333; }
-.excerpt-play[hidden] { display: none; }
-.excerpt-play span { font-size: .8em; }
-.home-excerpt video:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-.home-excerpt figcaption { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .85rem; margin-top: .65rem; color: var(--muted); font-size: .8125rem; }
-.home-excerpt cite { width: 100%; color: var(--ink); font: italic 1.2rem/1.25 Georgia, 'Times New Roman', serif; }
+/* Keep the actual player inside its own frame, as it is on a filmmaker's site. */
+.home-excerpt iframe { display: block; width: 100%; border: 1px solid var(--line); background: #faf9f4; }
+.home-excerpt figcaption { margin-bottom: .65rem; color: var(--muted); font-size: .875rem; }
+.home-excerpt figcaption strong { display: block; color: var(--ink); font-size: 1rem; }
+.excerpt-source { display: inline-block; margin-top: .45rem; font-size: .8125rem; }
 .home-notes { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(2rem, 6vw, 5.5rem); border-top: 1px solid var(--line); padding-top: clamp(1.5rem, 3.5vw, 3rem); }
 .home-notes > div { display: grid; align-content: start; justify-items: start; gap: .7rem; }
 .home-notes h2 { font: 500 clamp(1.5rem, 2.5vw, 2.05rem)/1.1 Georgia, 'Times New Roman', serif; letter-spacing: -.035em; }

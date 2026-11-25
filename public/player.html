@@ -7,13 +7,13 @@
   <meta name="description" content="{{description}}">
   <title>{{title}} · Stream</title>
   <link rel="stylesheet" href="/style.css">{{programStyles}}<link rel="stylesheet" href="/poster.css">
-  <script src="/app.js" type="module"></script>
+  <script src="{{playerScript}}" type="module"></script>
 </head>
 <body data-payment-mode="{{paymentMode}}" data-poster="{{style}}" data-program="{{program}}" data-checkout="{{checkout}}" data-manual-nm="{{manualNm}}" data-sales-territory="{{salesTerritory}}" data-rent="{{rent}}" data-buy="{{buy}}" data-rental-hours="{{rentalHours}}" data-preview="{{preview}}" data-published="{{published}}" data-email-recovery="{{emailRecovery}}">
   <main aria-labelledby="film-title">
     {{masthead}}
     <div class="video-stage">
-      <video controls playsinline preload="none"{{poster}} aria-label="{{title}}"></video>
+      <video controls playsinline preload="none"{{poster}}{{previewSource}} aria-label="{{title}}"></video>
       <button type="button" id="start-video" aria-label="Play in player" hidden><span aria-hidden="true"></span></button>
       <div class="video-tools" role="group" aria-label="Video options">
         <button id="previous-title" class="video-tool" type="button" aria-label="Previous title" title="Previous title" hidden><span class="skip-title-icon previous" aria-hidden="true"></span></button>
@@ -29,7 +29,7 @@
     <div class="details">
       <div class="title-block">{{detailsTitle}}<p id="program-now" role="status" hidden></p></div>
       {{filmInfo}}
-      <button type="button" id="play">Play {{preview}}-second preview</button>
+      <button type="button" id="play">Play {{preview}}-second preview</button>{{exampleOffers}}
     </div>
     <section id="purchase" aria-label="Film offers" hidden>
       <p id="terms"></p>

@@ -82,10 +82,10 @@ async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   assert.ok(await appearance.evaluate(select => {
     const control = select.getBoundingClientRect();
     const footer = select.closest('.site-footer-inner');
-    const logo = footer.querySelector('a').getBoundingClientRect();
+    const privacy = footer.querySelector('a[href="/privacy"]').getBoundingClientRect();
     return Math.abs(control.right - footer.getBoundingClientRect().right) <= 1 &&
-      Math.abs((control.top + control.bottom) - (logo.top + logo.bottom)) <= 2;
-  }), 'Appearance stays on the right of the footer beside the logo');
+      privacy.right < control.left && Math.abs(control.top - privacy.top) <= 1;
+  }), 'Appearance stays on the right of the footer beside the privacy link');
   const logout = banner.getByRole('button', { name: 'Sign out', exact: true });
   if (signOutPath) {
     await logout.waitFor();
@@ -109,10 +109,20 @@ async function checkSignup(page, origin) {
   await page.getByRole('heading', {name:'Rent your film on your own site.'}).waitFor();
   await checkSiteFrame(page, null, true);
   assert.equal(await page.getByLabel('Email address').count(), 0);
-  const sample = page.getByLabel('A Trip Down Market Street', {exact:true});
-  await page.getByRole('button', {name:'Play excerpt'}).click();
-  await page.waitForFunction(() => document.querySelector('video').currentTime > 0);
+  const frame = page.frameLocator('iframe[title="Example Stream player for A Trip Down Market Street"]');
+  const sample = frame.locator('video');
+  await frame.getByRole('button', {name: 'Play 10-second preview'}).click();
+  await sample.evaluate(video => video.readyState >= 2 || new Promise(resolve => video.addEventListener('loadeddata', resolve, {once:true})));
   assert.equal(await sample.evaluate(video => video.duration), 10);
+  await sample.evaluate(video => { video.currentTime = 9.8; });
+  await frame.getByRole('button', {name: 'Rent · $5.50'}).waitFor();
+  await frame.getByRole('slider', {name:'Optional tip'}).fill('0');
+  await frame.getByRole('button', {name:'Buy · $10.00'}).click();
+  await frame.getByText('Example purchase · Watch and download').waitFor();
+  await frame.getByRole('button', {name:'Back to film'}).click();
+  await page.getByRole('contentinfo').getByRole('link', {name:'Privacy policy'}).click();
+  await page.getByRole('heading', {name:'Privacy policy',exact:true}).waitFor();
+  await page.goBack();
   await page.getByRole('link', {name:'Sign up for free'}).click();
   await page.waitForURL(origin + '/admin/sign-up');
   const agree = page.getByRole('checkbox', {name:'I agree to the filmmaker agreement.'});
@@ -946,7 +956,7 @@ try {
         assert.equal(await page.getByRole('combobox', {name:'Appearance'}).inputValue(), 'dark');
         assert.ok(await page.evaluate(() => Math.abs(document.querySelector('.faq-intro').offsetWidth - document.querySelector('main').clientWidth) <= 1));
         const footer = page.getByRole('contentinfo');
-        assert.equal(await footer.getByRole('link').count(), 1);
+        assert.equal(await footer.getByRole('link').count(), 2);
         assert.ok(await footer.getByText(/DUST WAVE/).isVisible());
         await footer.locator('img').evaluate(image => image.decode());
         assert.ok(await page.getByRole('link', { name: 'Cloudflare R2 pricing' }).isVisible());

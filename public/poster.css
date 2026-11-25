@@ -72,6 +72,10 @@ body[data-poster] .program-entry .film-info > p { grid-column: 1 / -1; }
 body[data-poster]:not(.paying) :is(#play, #rent, #buy, #download button, #restore-form button, #redeem-link, #copy-link, #refresh-program, #check-payment) {
   border: 1px solid var(--ink); border-radius: 2px; color: var(--paper); background: var(--ink);
 }
+body[data-payment-mode=example] #example-offers {
+  padding-inline: 0; color: var(--ink); background: transparent;
+  text-decoration: underline; text-underline-offset: .18em; font-weight: normal;
+}
 body[data-poster]:not(.paying) #rent:not([hidden]) + #buy { color: var(--ink); background: transparent; }
 body[data-poster]:not(.paying) :is(#terms, #tip-note, #rental-end, #access-tools p, #restore-feedback, #status, #subtitle-status) { color: var(--muted); }
 body[data-poster]:not(.paying) :is(#program-now, summary, #restore-tools summary, .program-watch, .program-file) { color: var(--ink); }

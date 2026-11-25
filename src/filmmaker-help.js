@@ -110,6 +110,6 @@ export function renderFilmmakerFaq(mode = 'test', territory = '') {
     </section>
     <section id="support"><h2>How do I get help or report a rights issue?</h2>
       <p>Email <a href="mailto:info@dustwave.xyz">Stream support</a>. Include the address of the page with the player and describe what happened. Keep sign-in links, private viewing links and payment details out of the message.</p>
-      <p>Stream keeps your sign-in email, agreement acceptance and workspace settings so you can return to your films. It keeps order and access records to honor purchases and rentals and reconcile payments. Playback events supply dashboard totals such as plays and watch time. Stripe handles card details, Resend delivers private links, and Cloudflare checks the sign-in form. Contact support about access to your information or closing your workspace.</p>
+      <p>Stream keeps your sign-in email, agreement acceptance and workspace settings so you can return to your films. It keeps order and access records to honor purchases and rentals and reconcile payments. Playback events supply dashboard totals such as plays and watch time. Stripe handles card details, Resend delivers private links, and Cloudflare checks the sign-in form. Read the <a href="/privacy">privacy policy</a> for details, including how to request your information or close your account.</p>
     </section>`;
 }

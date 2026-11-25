@@ -1,3 +1,6 @@
+import { privacyPage } from '../src/privacy-policy.js';
+import playerTemplate from '../public/player.html';
+import { examplePath, exampleHeaders, examplePlayer } from '../src/player-page.js';
 import { rangeFor } from '../src/http-range.js';
 import { filmmakerHome } from '../src/filmmaker-home.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
@@ -15,7 +18,7 @@ const csp =
   "default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 const pilotNotice = 'Sign-ups are open. Film uploads and paid screenings are being prepared.';
 const assets =
-  /^\/(?:favicon\.ico|favicon\.svg|apple-touch-icon\.png|dust-wave-square\.webp|site-frame\.css|play-excerpt\.js|filmmaker-home\.css|market-street-(?:still\.webp|excerpt\.mp4)|filmmaker(?:-dark)?\.css|appearance\.js|select-focus\.js|setup\/(?:field-help|header-session|navigation|tabs|tabs-browser|analytics-refresh|sign-in|turnstile-size)\.js)$/;
+  /^\/(?:favicon\.ico|favicon\.svg|apple-touch-icon\.png|dust-wave-square\.webp|site-frame\.css|play-excerpt\.js|offer-display\.js|platform-tip\.js|poster\.css|style\.css|filmmaker-home\.css|market-street-(?:still\.webp|excerpt\.mp4)|filmmaker(?:-dark)?\.css|appearance\.js|select-focus\.js|setup\/(?:field-help|header-session|navigation|tabs|tabs-browser|analytics-refresh|sign-in|turnstile-size)\.js)$/;
 
 // Some asset bindings return the entire file for a byte-range request. Safari
 // starts video playback with a two-byte probe. Only the fixed home sample needs this fallback.
@@ -44,7 +47,7 @@ export function isPublicWorkspaceRequest(request) {
   if (request.method === 'POST') return path === '/setup/sign-out' || path === '/setup/admin/sign-out';
   if (request.method !== 'GET' && request.method !== 'HEAD') return false;
   return assets.test(path) || Boolean(agreementModeForPath(path)) ||
-    ['/', '/setup/home', headerSessionPath, '/faq', '/setup/faq', '/setup/admin/faq'].includes(path);
+    ['/', examplePath, '/privacy', '/setup/home', headerSessionPath, '/faq', '/setup/faq', '/setup/admin/faq'].includes(path);
 }
 
 export async function workspaceResponse(
@@ -87,6 +90,8 @@ export async function workspaceResponse(
         ...extra
       }
     });
+  if (get && path === '/privacy') return response(200, privacyPage());
+  if (get && path === examplePath) return response(200, examplePlayer(playerTemplate), exampleHeaders);
   const redirect = (path, headers) => response(303, '', { Location: path, ...headers });
   const reject = (status, msg) => response(status, msg, { 'Content-Type': 'text/plain; charset=utf-8' });
   const formData = async () => {
@@ -119,7 +124,7 @@ export async function workspaceResponse(
   const showAccess = (status, message, error) =>
     response(status, accessPage({ signup, siteKey, message, error, mode: 'live', pilotNotice:env.STREAM_WORKSPACE_PHASE === 'full' ? '' : pilotNotice }));
   if (get && path === '/') return response(200, filmmakerHome(), {
-    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; frame-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
   });
   if (get && ['/setup/home', '/setup'].includes(path))
     return redirect(session ? '/setup/dashboard' : '/');
