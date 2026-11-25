@@ -2,7 +2,7 @@
   gap: clamp(2.25rem, 5vw, 4.5rem);
   padding-block: clamp(2rem, 5vw, 5rem) clamp(2.75rem, 5vw, 4.5rem);
 }
-.home-lead { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: clamp(2rem, 6vw, 5.5rem); }
+.home-lead { display: grid; grid-template-columns: 1fr 1fr; align-items: start; gap: clamp(2rem, 6vw, 5.5rem); }
 .home-pitch { display: grid; justify-items: start; gap: clamp(1rem, 2vw, 1.65rem); }
 .home-pitch h1 { font: 500 clamp(3.35rem, 5.6vw, 4.9rem)/.97 Georgia, 'Times New Roman', serif; letter-spacing: -.055em; }
 .home-pitch h1 em { display: block; }

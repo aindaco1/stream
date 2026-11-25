@@ -37,7 +37,10 @@ video.addEventListener('ended', () => {
   showOffers();
 });
 seeOffers.hidden = false;
-seeOffers.addEventListener('click', () => { showOffers(); byId('rent').focus(); });
+seeOffers.addEventListener('click', event => {
+  showOffers();
+  byId('rent').focus({ preventScroll: event.detail > 0 });
+});
 byId('tip-percent').addEventListener('input', () => displayOfferPrices(kinds, false, false));
 for (const kind of kinds) byId(kind).addEventListener('click', () => {
   selected = kind;

@@ -95,6 +95,23 @@ async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   }
 }
 
+async function checkDemoPosition(page, origin) {
+  await page.goto(origin);
+  const frame = page.frameLocator('iframe[title^="Example Stream player"]');
+  const heading = page.getByRole('heading', {name: 'Rent your film on your own site.'});
+  for (const name of ['See rental and download options', 'Rent · $5.50', 'Back to film', 'Buy · $11.00', 'Back to film']) {
+    const button = frame.getByRole('button', {name, exact: true});
+    await button.scrollIntoViewIfNeeded();
+    const before = await heading.boundingBox();
+    await button.click();
+    // Allow the embedded document's resize observer and the host layout to settle.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const after = await heading.boundingBox();
+    assert.ok(Math.abs(after.y - before.y) <= 1 && Math.abs(after.x - before.x) <= 1,
+      'Homepage heading moved when clicking ' + name + ': ' + JSON.stringify({before, after}));
+  }
+}
+
 async function checkSignup(page, origin) {
   const email = 'new-filmmaker@example.test';
   const openEmail = async (button, destination) => {
@@ -945,6 +962,7 @@ try {
       });
       page.on('console', event => { if (event.type() === 'error' && event.text().includes('Content Security Policy')) trace.push({ problem: 'Page reported a Content Security Policy error' }); });
       page.setDefaultTimeout(8000);
+      if (report.scenarios.length === 1) await checkDemoPosition(page, origin);
       if (first) {
         await checkSignup(page, origin);
         await checkAppearance(page, origin);
