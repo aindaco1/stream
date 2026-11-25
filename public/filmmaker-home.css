@@ -18,6 +18,15 @@
 .home-notes > div { display: grid; align-content: start; justify-items: start; gap: .7rem; }
 .home-notes h2 { font: 500 clamp(1.5rem, 2.5vw, 2.05rem)/1.1 Georgia, 'Times New Roman', serif; letter-spacing: -.035em; }
 .home-notes p { max-width: 56ch; }
+@media (width > 48rem) {
+  .home-lead { min-block-size: var(--demo-section-height, 0px); }
+  .home-pitch {
+    align-content: center;
+    min-block-size: var(--opening-poster-height, 0px);
+    margin-block: var(--opening-poster-inset, auto) auto;
+  }
+  .home-excerpt { align-self: center; position: sticky; top: var(--page-gutter); }
+}
 @media (max-width: 48rem) {
   .home-lead, .home-notes { grid-template-columns: minmax(0, 1fr); }
   .home-pitch h1 { font-size: clamp(3rem, 9vw, 4.5rem); }

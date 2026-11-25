@@ -67,9 +67,28 @@ byId('close-checkout').addEventListener('click', () => {
 
 // This first-party example can fit its host page as offers appear. Published
 // embeds on other sites keep the filmmaker's chosen dimensions.
-if (window.frameElement) {
+const frame = window.frameElement;
+if (frame) {
   const main = document.querySelector('main');
+  const figure = frame.closest('.home-excerpt');
+  const lead = figure?.closest('.home-lead');
+  let lastWidth;
+  let sectionHeight = 0;
   new ResizeObserver(() => {
-    window.frameElement.height = String(Math.ceil(main.getBoundingClientRect().height) + 2);
+    const height = Math.ceil(main.getBoundingClientRect().height) + 2;
+    frame.height = String(height);
+    if (!lead) return;
+    // Keep document scrolling stable on desktop while the iframe fits each view.
+    const box = figure.getBoundingClientRect();
+    const openingPoster = !stage.hidden && !seeOffers.hidden;
+    sectionHeight = openingPoster || box.width !== lastWidth ? box.height : Math.max(sectionHeight, box.height);
+    lastWidth = box.width;
+    lead.style.setProperty('--demo-section-height', sectionHeight + 'px');
+    // Only the opening poster sets the adjacent introduction's position.
+    if (openingPoster) {
+      const inset = frame.getBoundingClientRect().top - box.top;
+      lead.style.setProperty('--opening-poster-inset', inset + 'px');
+      lead.style.setProperty('--opening-poster-height', height + 'px');
+    }
   }).observe(main);
 }

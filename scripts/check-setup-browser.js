@@ -95,10 +95,29 @@ async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   }
 }
 
+async function checkDemoOrderFits(frame) {
+  const spacing = await frame.locator('#payment').evaluate(async panel => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const { top, bottom } = panel.getBoundingClientRect();
+    return [top, innerHeight - bottom];
+  });
+  assert.ok(spacing.every(pixels => pixels >= -1 && pixels <= 40),
+    'The demo order should fit within the iframe with only its normal padding: ' + spacing);
+}
+
 async function checkDemoPosition(page, origin) {
   await page.goto(origin);
   const frame = page.frameLocator('iframe[title^="Example Stream player"]');
   const heading = page.getByRole('heading', {name: 'Rent your film on your own site.'});
+  await frame.getByRole('button', {name: 'See rental and download options'}).waitFor();
+  const centerDifference = await page.locator('.home-lead').evaluate(async lead => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const poster = lead.querySelector('iframe').getBoundingClientRect();
+    const first = lead.querySelector('h1').getBoundingClientRect();
+    const last = lead.querySelector('.primary-link').getBoundingClientRect();
+    return ((first.top + last.bottom) - (poster.top + poster.bottom)) / 2;
+  });
+  assert.ok(Math.abs(centerDifference) <= 1, 'Center the introduction beside the opening poster');
   for (const name of ['See rental and download options', 'Rent · $5.50', 'Back to film', 'Buy · $11.00', 'Back to film']) {
     const button = frame.getByRole('button', {name, exact: true});
     await button.scrollIntoViewIfNeeded();
@@ -106,6 +125,7 @@ async function checkDemoPosition(page, origin) {
     await button.click();
     // Allow the embedded document's resize observer and the host layout to settle.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    if (name.startsWith('Rent ·') || name.startsWith('Buy ·')) await checkDemoOrderFits(frame);
     const after = await heading.boundingBox();
     assert.ok(Math.abs(after.y - before.y) <= 1 && Math.abs(after.x - before.x) <= 1,
       'Homepage heading moved when clicking ' + name + ': ' + JSON.stringify({before, after}));
@@ -136,6 +156,7 @@ async function checkSignup(page, origin) {
   await frame.getByRole('slider', {name:'Optional tip'}).fill('0');
   await frame.getByRole('button', {name:'Buy · $10.00'}).click();
   await frame.getByText('Example purchase · Watch and download').waitFor();
+  await checkDemoOrderFits(frame);
   await frame.getByRole('button', {name:'Back to film'}).click();
   await page.getByRole('contentinfo').getByRole('link', {name:'Privacy policy'}).click();
   await page.getByRole('heading', {name:'Privacy policy',exact:true}).waitFor();
