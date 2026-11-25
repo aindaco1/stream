@@ -74,7 +74,7 @@ function finishOrder(kind) {
   closePayment();
   unlocked = true;
   offers.hidden = true;
-  video.src = location.pathname + '/film.mp4';
+  video.src = byId('example-download').href;
   video.controls = true;
   stage.hidden = false;
   preview.textContent = 'Watch the full film';

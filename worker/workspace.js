@@ -1,11 +1,11 @@
 import { privacyPage } from '../src/privacy-policy.js';
 import playerTemplate from '../public/player.html';
-import { examplePath, exampleResponse } from '../src/example-checkout.js';
+import { examplePath, exampleCheckout } from '../src/example-checkout.js';
 import { exampleHeaders, examplePlayer } from '../src/player-page.js';
 import { rangeFor } from '../src/http-range.js';
 import { filmmakerSettings, filmmakerDashboard, workspaceCsp, dashboardCsp } from '../src/filmmaker-pages.js';
 import { stripeSetupConfiguration } from '../src/setup-stripe.js';
-import { workspaceAssets } from '../src/workspace-assets.js';
+import { exampleMedia, workspaceAssets } from '../src/workspace-assets.js';
 import { filmmakerHome } from '../src/filmmaker-home.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { readBoundedText } from '@dustwave/worker-core/response-body';
@@ -25,22 +25,45 @@ export const hostedViewerOrigin = 'https://watch.streamyourfilm.com';
 const privatePages = new Set(['/setup/admin', '/setup/dashboard', '/setup/settings']);
 
 // Some asset bindings return the entire file for a byte-range request. Safari
-// starts video playback with a two-byte probe. Only the fixed home sample needs this fallback.
-async function homeExcerpt(request, assets) {
+// starts video playback with a two-byte probe. Stream only the requested bytes of the fixed homepage movies.
+async function homeMovie(request, assets) {
   const asset = await assets.fetch(request);
   const range = request.headers.get('Range');
   if (request.method !== 'GET' || asset.status !== 200 || !range) return asset;
   const validator = request.headers.get('If-Range');
   if (validator && validator !== asset.headers.get('ETag') && validator !== asset.headers.get('Last-Modified')) return asset;
-  const bytes = await asset.arrayBuffer();
-  const bounds = rangeFor(range, bytes.byteLength);
-  if (!bounds) return new Response(null, { status: 416, headers: { 'Content-Range': 'bytes */' + bytes.byteLength } });
+  const size = Number(asset.headers.get('Content-Length'));
+  if (!Number.isSafeInteger(size) || size <= 0) return asset;
+  const bounds = rangeFor(range, size);
+  if (!bounds) {
+    await asset.body.cancel();
+    return new Response(null, { status: 416, headers: { 'Content-Range': 'bytes */' + size } });
+  }
   const [start, end] = bounds;
+  const length = end - start + 1;
   const headers = new Headers(asset.headers);
   headers.set('Accept-Ranges', 'bytes');
-  headers.set('Content-Range', `bytes ${start}-${end}/${bytes.byteLength}`);
-  headers.set('Content-Length', String(end - start + 1));
-  return new Response(bytes.slice(start, end + 1), { status: 206, headers });
+  headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
+  headers.set('Content-Length', String(length));
+  const stream = new FixedLengthStream(length);
+  const source = asset.body.getReader();
+  const target = stream.writable.getWriter();
+  async function copyRange() {
+    try {
+      let position = 0;
+      while (position <= end) {
+        const {value, done} = await source.read();
+        if (done) throw Error('Incomplete movie');
+        const next = position + value.byteLength;
+        if (next > start) await target.write(value.subarray(Math.max(0, start - position), end + 1 - position));
+        position = next;
+      }
+      await target.close();
+    } catch (error) { await target.abort(error); }
+    finally { await source.cancel(); }
+  }
+  void copyRange();
+  return new Response(stream.readable, { status: 206, headers });
 }
 
 // Static files bypass both Durable Objects. Account pages run beside their SQLite data.
@@ -50,13 +73,13 @@ export function routeWorkspace(request, env, { signupOnly = false } = {}) {
   const path = url.pathname;
   const read = request.method === 'GET' || request.method === 'HEAD';
   if (read && Object.hasOwn(workspaceAssets, path)) {
-    return path === '/market-street-excerpt.mp4' ? homeExcerpt(request, env.ASSETS) : env.ASSETS.fetch(request);
+    return Object.hasOwn(exampleMedia, path) ? homeMovie(request, env.ASSETS) : env.ASSETS.fetch(request);
   }
   if (read && path === examplePath) return new Response(request.method === 'HEAD' ? null : examplePlayer(playerTemplate), {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex', ...exampleHeaders }
   });
-  if (path.startsWith(examplePath + '/')) return exampleResponse(request, env);
+  if (path === examplePath + '/checkout') return exampleCheckout(request, env);
   const page = read && (privatePages.has(path) || agreementModeForPath(path) ||
     ['/', '/privacy', '/setup', '/setup/home', headerSessionPath, '/faq', '/setup/faq', '/setup/admin/faq'].includes(path));
   const signOut = request.method === 'POST' && (path === '/setup/sign-out' || path === '/setup/admin/sign-out');

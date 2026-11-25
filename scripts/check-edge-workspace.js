@@ -26,6 +26,11 @@ const options = {
       const body = await req.json();
       return Response.json({ success: body.response === 'valid' });
     }
+    if (req.url === 'https://api.stripe.com/v1/checkout/sessions') {
+      assert.equal(req.headers.get('Authorization'), 'Bearer sk_test_fixture');
+      assert.equal((await req.formData()).get('line_items[0][price_data][unit_amount]'), '550');
+      return Response.json({ livemode: false, id: 'cs_test_demo', client_secret: 'cs_test_demo_secret_example', amount_total: 550 });
+    }
     if (req.url === 'https://api.resend.com/emails') {
       messages.push(await req.json());
       return Response.json({ id: 'test-delivery' });
@@ -38,6 +43,7 @@ const options = {
   durableObjects: { STREAM_STORE: { className: 'StreamStore', useSQLite: true } },
   bindings: {
     STREAM_PUBLIC_ORIGIN: 'https://streamyourfilm.com',
+    STREAM_DEMO_STRIPE_SECRET_KEY: 'sk_test_fixture', STREAM_DEMO_STRIPE_PUBLISHABLE_KEY: 'pk_test_fixture',
     STREAM_VAULT_KEY: randomBytes(32).toString('base64url'),
     STREAM_ADMIN_EMAIL: 'operator@example.test',
     STREAM_RECOVERY_FROM: 'identity@example.test',
@@ -45,7 +51,7 @@ const options = {
     STREAM_TURNSTILE_SECRET_KEY: 'mock-secret',
     STREAM_TURNSTILE_SITE_KEY: 'mock-site'
   },
-  serviceBindings: { ASSETS: () => new Response('asset') }
+  serviceBindings: { ASSETS: () => new Response('asset', { headers: { 'Content-Length': '5' } }) }
 };
 let mf;
 try {
@@ -67,6 +73,15 @@ try {
   assert.equal(probe.headers.get('content-range'), 'bytes 0-1/5');
   assert.equal(await probe.text(), 'as');
   assert.equal((await mf.dispatchFetch(excerpt, {headers:{Range:'bytes=19-'}})).status, 416);
+  const film = 'https://streamyourfilm.com/example/market-street/film.mp4';
+  const tail = await mf.dispatchFetch(film, { headers: { Range: 'bytes=-2' } });
+  assert.equal(tail.status, 206);
+  assert.equal(await tail.text(), 'et');
+  const sandbox = await mf.dispatchFetch('https://streamyourfilm.com/example/market-street/checkout?offer=rent&tip=10', {
+    method: 'POST', headers: { Origin: 'https://streamyourfilm.com' }
+  });
+  assert.equal(sandbox.status, 200);
+  assert.equal((await sandbox.json()).amount, 550);
   const home = await mf.dispatchFetch('https://streamyourfilm.com/setup/home', {redirect:'manual'});
   assert.equal(home.headers.get('location'), '/');
   const res = await mf.dispatchFetch('https://streamyourfilm.com/admin/sign-up');

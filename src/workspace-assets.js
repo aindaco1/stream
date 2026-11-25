@@ -17,7 +17,13 @@ export const workspaceScripts = {
   '/setup/tabs-browser.js': '@dustwave/admin-shell/tabs-browser'
 };
 
+export const exampleMedia = {
+  '/market-street-excerpt.mp4': '../public/market-street-excerpt.mp4',
+  '/example/market-street/film.mp4': '../public/market-street.mp4'
+};
+
 export const workspaceAssets = {
+  ...exampleMedia,
   ...workspaceScripts,
   '/favicon.svg': '../public/favicon.svg',
   '/favicon.ico': '../public/favicon.ico',
@@ -32,7 +38,6 @@ export const workspaceAssets = {
   '/play-excerpt.js': '../public/play-excerpt.js',
   '/filmmaker-home.css': '../public/filmmaker-home.css',
   '/market-street-still.webp': '../public/market-street-still.webp',
-  '/market-street-excerpt.mp4': '../public/market-street-excerpt.mp4',
   '/site-frame.css': '../public/site-frame.css',
   '/filmmaker.css': '../public/setup.css',
   '/filmmaker-dark.css': '../public/setup-dark.css',
