@@ -8,9 +8,11 @@
 .home-pitch h1 em { display: block; }
 .home-pitch p { max-width: 44ch; font-size: clamp(1.0625rem, 1.6vw, 1.25rem); }
 .home-pitch .primary-link { padding-inline: 1.3rem; }
-.home-excerpt { margin: 0; min-width: 0; }
+.home-excerpt { container-type: inline-size; margin: 0; min-width: 0; }
 /* Keep the actual player inside its own frame, as it is on a filmmaker's site. */
 .home-excerpt iframe { display: block; width: 100%; border: 1px solid var(--line); background: #faf9f4; }
+/* Reserve the opening frame before navigation, including the poster text and a widescreen stage. */
+.home-excerpt:not([data-interacting]) iframe { block-size: calc(27rem + 56.25cqi); }
 .home-excerpt figcaption { margin-bottom: .65rem; color: var(--muted); font-size: .875rem; }
 .home-excerpt figcaption strong { display: block; color: var(--ink); font-size: 1rem; }
 .excerpt-source { display: inline-block; margin-top: .45rem; font-size: .8125rem; }
