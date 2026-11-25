@@ -78,17 +78,12 @@ if (frame) {
     const height = Math.ceil(main.getBoundingClientRect().height) + 2;
     frame.height = String(height);
     if (!lead) return;
-    // Keep document scrolling stable on desktop while the iframe fits each view.
-    const box = figure.getBoundingClientRect();
     const openingPoster = !stage.hidden && !seeOffers.hidden;
+    figure.toggleAttribute('data-interacting', !openingPoster);
+    // After interaction, reserve space outside the player while its offers change height.
+    const box = figure.getBoundingClientRect();
     sectionHeight = openingPoster || box.width !== lastWidth ? box.height : Math.max(sectionHeight, box.height);
     lastWidth = box.width;
     lead.style.setProperty('--demo-section-height', sectionHeight + 'px');
-    // Only the opening poster sets the adjacent introduction's position.
-    if (openingPoster) {
-      const inset = frame.getBoundingClientRect().top - box.top;
-      lead.style.setProperty('--opening-poster-inset', inset + 'px');
-      lead.style.setProperty('--opening-poster-height', height + 'px');
-    }
   }).observe(main);
 }

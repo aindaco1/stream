@@ -28,6 +28,7 @@ if (template) {
         form = template.content.firstElementChild.cloneNode(true);
         template.after(form);
       }
+      form.querySelector('[data-dashboard]').href = session.dashboard;
       form.action = session.action;
       form.elements.csrf.value = session.csrf;
     } else {

@@ -16,10 +16,12 @@ export const signInPath = '/admin/sign-in';
 
 // Both existing session cookies reach this path, including on visits from public pages.
 export const headerSessionPath = '/setup/admin/header-session';
+export const dashboardPath = admin => admin ? '/setup/admin' : '/setup/dashboard';
 export const signOutPath = admin => admin ? '/setup/admin/sign-out' : '/setup/sign-out';
 
-function signOutForm(csrf, admin) {
-  return `<form method="post" action="${signOutPath(admin)}">${hidden('csrf', csrf)}
+function accountActions(csrf, admin) {
+  return `<form class="account-actions" method="post" action="${signOutPath(admin)}">
+    <a href="${dashboardPath(admin)}" data-dashboard>Dashboard</a>${hidden('csrf', csrf)}
     <button class="sign-out" type="submit">Sign out</button></form>`;
 }
 
@@ -50,11 +52,11 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     <header class="masthead"><div class="bar">${siteBrand(home)}
       ${faqLink(faq, admin ? '/setup/admin/faq' : csrf ? '/setup/faq' : '/faq')}
       ${guestSignIn && checkSession ? `<a href="${signInPath}" data-guest-sign-in>Sign in</a>` : ''}
-      ${csrf ? signOutForm(csrf, admin) : checkSession ? `<template data-header-session="${headerSessionPath}">${signOutForm('', false)}</template>` : ''}</div></header>
+      ${csrf ? accountActions(csrf, admin) : checkSession ? `<template data-header-session="${headerSessionPath}">${accountActions('', false)}</template>` : ''}</div></header>
       ${csrf && !admin ? `<nav class="workspace-nav" aria-label="Workspace navigation"><div class="tab-bar">
         <a href="/setup/dashboard"${dashboard && !faq ? current : ''}>Dashboard</a>
         <a href="/setup/settings"${dashboard || faq || reference ? '' : current}>Settings</a>
       </div></nav>` : ''}
-    <main class="setup-shell${landing ? ' filmmaker-home' : faq ? ' filmmaker-help' : screening ? ' screening-room' : ''}" id="main" tabindex="-1">${content}</main>
+    <main class="setup-shell${landing ? ' filmmaker-home' : faq ? ' reference-content' : screening ? ' screening-room' : ''}" id="main" tabindex="-1">${content}</main>
     ${siteFooter(home)}</body></html>`;
 }

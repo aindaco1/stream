@@ -77,7 +77,10 @@ async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   const banner = page.getByRole('banner');
   const logout = banner.getByRole('button', { name: 'Sign out', exact: true });
   if (signOutPath) await logout.waitFor();
-  assert.deepEqual(await banner.getByRole('link').allTextContents(), guestSignIn ? ['Stream', 'FAQ', 'Sign in'] : ['Stream', 'FAQ']);
+  const links = ['Stream', 'FAQ'];
+  if (guestSignIn) links.push('Sign in');
+  if (signOutPath) links.push('Dashboard');
+  assert.deepEqual(await banner.getByRole('link').allTextContents(), links);
   assert.equal(await banner.getByRole('combobox').count(), 0);
   const appearance = page.getByRole('contentinfo').getByRole('combobox', { name: 'Appearance' });
   await appearance.waitFor();
@@ -95,6 +98,9 @@ async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   if (guestSignIn) assert.equal(await banner.getByRole('link', {name:'Sign in'}).getAttribute('href'), '/admin/sign-in');
   if (signOutPath) {
     assert.equal(await logout.evaluate(button => new URL(button.form.action).pathname), signOutPath);
+    const brand = await banner.locator('.brand').boundingBox();
+    const button = await logout.boundingBox();
+    assert.ok(Math.abs(brand.y + brand.height / 2 - button.y - button.height / 2) <= 1, 'Account actions fit on the header row');
   } else {
     assert.equal(await logout.count(), 0);
   }
@@ -111,9 +117,18 @@ async function checkDemoOrderFits(frame) {
 }
 
 async function checkDemoPosition(page, origin) {
-  await page.goto(origin);
-  const frame = page.frameLocator('iframe[title^="Example Stream player"]');
+  const embedRequest = '**/example/market-street';
+  const { promise, resolve } = Promise.withResolvers();
+  await page.route(embedRequest, async route => { await promise; await route.continue(); });
   const heading = page.getByRole('heading', {name: 'Rent your film on your own site.'});
+  let initial;
+  try {
+    await page.goto(origin, {waitUntil:'domcontentloaded'});
+    initial = await heading.boundingBox();
+  } finally {
+    resolve();
+  }
+  const frame = page.frameLocator('iframe[title^="Example Stream player"]');
   await frame.getByRole('button', {name: 'See rental and download options'}).waitFor();
   const centerDifference = await page.locator('.home-lead').evaluate(async lead => {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -122,7 +137,10 @@ async function checkDemoPosition(page, origin) {
     const last = lead.querySelector('.primary-link').getBoundingClientRect();
     return ((first.top + last.bottom) - (poster.top + poster.bottom)) / 2;
   });
-  assert.ok(Math.abs(centerDifference) <= 1, 'Center the introduction beside the opening poster');
+  await page.unroute(embedRequest);
+  const loaded = await heading.boundingBox();
+  assert.ok(Math.abs(loaded.y - initial.y) <= 1, 'The introduction should stay in place as the poster loads');
+  assert.ok(Math.abs(centerDifference) <= 1, 'Introduction and opening poster centers differ by ' + centerDifference + 'px');
   for (const name of ['See rental and download options', 'Rent · $5.50', 'Back to film', 'Buy · $11.00', 'Back to film']) {
     const button = frame.getByRole('button', {name, exact: true});
     await button.scrollIntoViewIfNeeded();
@@ -189,17 +207,26 @@ async function checkSignup(page, origin) {
   await openEmail('Agree and create account', 'Settings');
   await checkSiteFrame(page, '/setup/sign-out');
   const checkPublicPages = async (signOut, dashboard) => {
-    for (const path of ['/faq', '/privacy', '/setup/agreement/pilot-v1', '/']) {
+    for (const path of ['/faq', '/privacy', '/setup/agreement/pilot-v1']) {
       await page.goto(origin + path);
       await checkSiteFrame(page, signOut);
+      const link = page.getByRole('banner').getByRole('link', {name:'Dashboard', exact:true});
+      assert.equal(await link.getAttribute('href'), dashboard);
+      await link.click();
+      await page.waitForURL(origin + dashboard);
     }
-    assert.equal(page.url(), origin + '/');
+    await page.goto(origin);
+    await checkSiteFrame(page, signOut);
+    const homeDashboard = page.getByRole('banner').getByRole('link', {name:'Dashboard', exact:true});
+    assert.equal(await homeDashboard.getAttribute('href'),dashboard);
     const account = page.getByRole('link', {name:'Go to dashboard'});
     assert.equal(await account.getAttribute('href'),dashboard);
     await account.click();
     await page.waitForURL(origin + dashboard);
   };
+  await page.setViewportSize({...originalSize, width:320});
   await checkPublicPages('/setup/sign-out', '/setup/dashboard');
+  await page.setViewportSize(originalSize);
   await page.goto(origin + '/privacy');
   await checkSiteFrame(page, '/setup/sign-out');
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
@@ -417,7 +444,7 @@ async function openWorkspace(page, name) {
   const menu = page.locator('.workspace-nav select');
   await menu.waitFor({ state: 'attached' });
   if (await menu.isVisible()) await menu.selectOption({ Dashboard: '/setup/dashboard', Settings: '/setup/settings' }[name]);
-  else await page.getByRole('link', { name, exact: true }).click();
+  else await page.getByRole('navigation', {name:'Workspace navigation'}).getByRole('link', { name, exact: true }).click();
   await page.getByRole('heading', { name, exact: true, level: 1 }).waitFor();
 }
 
