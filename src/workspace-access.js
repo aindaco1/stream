@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { workspacePage, dashboardPath, signInPath, signOutPath } from './workspace-page.js';
 import { agreementFor } from './filmmaker-agreement.js';
 import { escapeHtml } from './film-embed.js';
-import { mailbox, sendStreamEmail } from './stream-email.js';
+import { mailbox, sendStreamEmail, streamLinkEmail } from './stream-email.js';
 
 export { signInPath };
 export const signUpPath = '/admin/sign-up';
@@ -91,10 +91,10 @@ export async function handleAccess({path, method, get, origin, env, store, mode,
     if (delivery) {
       const home = env.STREAM_PUBLIC_ORIGIN || origin;
       const link = home + (delivery.signup ? signUpPath : signInPath) + '#magic-link=' + delivery.code;
-      const payload = { from, to: [delivery.email], subject: delivery.signup ? 'Confirm your email for Stream' : 'Sign in to Stream',
-        text: (delivery.signup ? 'Open this link within 15 minutes to verify your email and create your Stream account.' :
-          'Open this private link within 15 minutes to sign in to Stream.') + '\n\n' + link + '\n\nIf you didn’t request this link, you can ignore this email.' };
-      queue(sendStreamEmail({ key: env.RESEND_API_KEY, payload, fetchImpl: mailFetch,
+      const content = streamLinkEmail(delivery.signup
+        ? { subject: 'Confirm your email for Stream', message: 'Confirm your email address to create your filmmaker account.', action: 'Create my account', link }
+        : { subject: 'Sign in to Stream', message: 'Open your dashboard with the link below.', action: 'Open my dashboard', link });
+      queue(sendStreamEmail({ key: env.RESEND_API_KEY, payload: { from, to: [delivery.email], ...content }, fetchImpl: mailFetch,
         idempotencyKey: 'stream-login-' + createHash('sha256').update(delivery.code).digest('hex') })
         .then(response => { if (!response.ok) throw new Error(); }).catch(() => console.error('Stream sign-in email delivery failed.')));
     }
