@@ -63,12 +63,10 @@ export function accessPage({ signup, siteKey, message, error, mode, pilotNotice 
         '<p>Email access is temporarily unavailable. Please try again later.</p>'}
       ${signup ? '' : `<p>New to Stream? <a href="${signUpPath}">Sign up for free</a></p>`}
     </div>
-    ${signup ? '' : '<p role="status" data-email-sign-in hidden>Signing you in…</p>'}
+    <p role="status" data-email-sign-in hidden>${signup ? 'Creating your account…' : 'Signing you in…'}</p>
     <form method="post" action="${path}" data-exchange hidden><input type="hidden" name="code">
-      ${signup ? `<input type="hidden" name="agreement" value="${agreementVersion}">
-        <p>Confirm your email and accept the ${agreement} to create your account.</p>` :
-        '<p>Your private link is ready. Continue to sign in.</p>'}
-      <button type="submit">${signup ? 'Agree and create account' : 'Continue to Stream'}</button></form></section>`,
+      ${signup ? `<input type="hidden" name="agreement" value="${agreementVersion}">` :
+        '<p>Your private link is ready. Continue to sign in.</p><button type="submit">Continue to Stream</button>'}</form></section>`,
     { signIn: true, guestSignIn: signup, turnstile: Boolean(siteKey) });
 }
 
@@ -94,7 +92,7 @@ export async function handleAccess({path, method, get, origin, env, store, mode,
       const home = env.STREAM_PUBLIC_ORIGIN || origin;
       const link = home + (delivery.signup ? signUpPath : signInPath) + '#magic-link=' + delivery.code;
       const payload = { from, to: [delivery.email], subject: delivery.signup ? 'Confirm your email for Stream' : 'Sign in to Stream',
-        text: (delivery.signup ? 'To create your Stream account, open this link and confirm the filmmaker agreement within 15 minutes.' :
+        text: (delivery.signup ? 'Open this link within 15 minutes to verify your email and create your Stream account.' :
           'Open this private link within 15 minutes to sign in to Stream.') + '\n\n' + link + '\n\nIf you didn’t request this link, you can ignore this email.' };
       queue(sendStreamEmail({ key: env.RESEND_API_KEY, payload, fetchImpl: mailFetch,
         idempotencyKey: 'stream-login-' + createHash('sha256').update(delivery.code).digest('hex') })

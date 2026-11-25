@@ -220,11 +220,12 @@ async function checkSignup(page, origin) {
   await agreement.close();
   assert.equal(await page.getByLabel('Email address').inputValue(),email);
   await checkSiteFrame(page, null, true);
+  assert.equal(await agree.evaluate(input => input.required), true);
   await agree.check();
   await page.getByRole('button',{name:'Email me a sign-up link'}).click();
   await page.getByRole('status').filter({hasText:/Check your inbox/}).waitFor();
   await openEmail(email);
-  await page.getByRole('button', {name:'Agree and create account', exact:true}).click();
+  await page.waitForURL(origin + '/setup/settings');
   await page.getByRole('heading', {name:'Settings', exact:true}).waitFor();
   await page.getByText('Signed in as ' + email).waitFor();
   await checkSiteFrame(page, '/setup/sign-out');
