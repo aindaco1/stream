@@ -25,7 +25,7 @@
     min-block-size: var(--opening-poster-height, 0px);
     margin-block: var(--opening-poster-inset, auto) auto;
   }
-  .home-excerpt { align-self: center; }
+  .home-excerpt { align-self: center; position: sticky; top: var(--page-gutter); }
 }
 @media (max-width: 48rem) {
   .home-lead, .home-notes { grid-template-columns: minmax(0, 1fr); }
