@@ -1,28 +1,25 @@
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { unpack } from '../src/store-wire.js';
 
 // Run against workerd and a disposable persistent SQL volume. All provider calls stay inside the harness.
 const root = await mkdtemp(join(tmpdir(), 'stream-worker-tests-'));
 const messages = [];
-const bundle = join(root, 'build');
-execFileSync(
-  process.execPath,
-  [
-    'node_modules/wrangler/bin/wrangler.js',
-    'deploy',
-    '--dry-run',
-    '-c',
-    'wrangler.edge.jsonc',
-    '--outdir',
-    bundle
-  ],
-  { stdio: 'pipe' }
-);
+async function bundleWorker(entry) {
+  const bundle = join(root, entry);
+  // Bundle the deployed entry points without provisioning a media runtime in this test.
+  execFileSync(process.execPath, ['node_modules/wrangler/bin/wrangler.js', 'deploy', 'worker/' + entry + '.js',
+    '--dry-run', '-c', 'wrangler.edge.jsonc', '--outdir', bundle], { stdio: 'pipe' });
+  return { modulesRoot: bundle, modules: [
+    { type: 'ESModule', path: join(bundle, entry + '.js') },
+    ...(await readdir(bundle)).filter(name => name.endsWith('.html')).map(name => ({ type: 'Text', path: join(bundle, name) }))
+  ] };
+}
 const options = {
   outboundService: async (req) => {
     if (req.url === 'https://challenges.cloudflare.com/turnstile/v0/siteverify') {
@@ -36,11 +33,6 @@ const options = {
     throw Error('Unexpected outbound request.');
   },
   name: 'stream-pilot',
-  modulesRoot: bundle,
-  modules: [
-    { type: 'ESModule', path: join(bundle, 'edge.js') },
-    ...(await readdir(bundle)).filter(name => name.endsWith('.html')).map(name => ({ type: 'Text', path: join(bundle, name) }))
-  ],
   compatibilityDate: '2026-10-30',
   compatibilityFlags: ['nodejs_compat'],
   durableObjects: { STREAM_STORE: { className: 'StreamStore', useSQLite: true } },
@@ -57,7 +49,10 @@ const options = {
 };
 let mf;
 try {
-  mf = new Miniflare({ ...convertV4MiniflareOptions(options), resourcePersistencePath: root });
+  const start = async (entry, bindings = {}) => new Miniflare({ ...convertV4MiniflareOptions({
+    ...options, ...await bundleWorker(entry), bindings: { ...options.bindings, ...bindings }
+  }), resourcePersistencePath: root });
+  mf = await start('edge', { STREAM_WORKSPACE_PHASE: 'signup' });
   const landing = await mf.dispatchFetch('https://streamyourfilm.com/', { redirect: 'manual' });
   assert.equal(landing.status, 200);
   const publicPage = await landing.text();
@@ -124,7 +119,9 @@ try {
   const cookie = confirmed.headers.get('set-cookie').split(';')[0];
   assert.match(cookie, /__Secure-stream_setup=/);
   assert.equal((await post('/admin/sign-up', { agreement: fields.agreement, code })).status, 401);
-  assert.match(await (await get('/setup/settings', cookie)).text(), /maker@example.test/);
+  const signupWorkspace = await (await get('/setup/settings', cookie)).text();
+  assert.match(signupWorkspace, /maker@example.test/);
+  assert.match(signupWorkspace, /when the media service is available/);
   assert.equal((await get('/setup/admin', cookie)).status, 303);
   assert.equal((await get('/setup/home', cookie)).headers.get('location'), '/setup/dashboard');
   assert.equal(
@@ -151,15 +148,63 @@ try {
   await checkHeader(acookie, '/setup/admin/sign-out');
   assert.match(await (await get('/setup/admin', acookie)).text(), /Platform analytics/);
   await mf.dispose();
-  mf = new Miniflare({ ...convertV4MiniflareOptions(options), resourcePersistencePath: root });
-  assert.match(await (await get('/setup/settings', cookie)).text(), /maker@example.test/);
-  assert.match(await (await get('/setup/admin', acookie)).text(), /Platform analytics/);
+  mf = await start('container', { STREAM_WORKSPACE_PHASE: 'full', STRIPE_CONNECT_SECRET_KEY: 'sk_live_fixture',
+    STREAM_SALES_TERRITORIES: 'worldwide' });
+  const ns = await mf.getDurableObjectNamespace('STREAM_STORE');
+  const ledger = ns.get(ns.idFromName('pilot-live'));
+  async function call(method, ...args) {
+    const result = await ledger.call(method, args);
+    assert.ifError(result.error);
+    return unpack(result.value);
+  }
+  const maker = await call('session', cookie.split('=')[1], 'filmmaker');
+  const bucket = { accountId: 'a'.repeat(32), bucket: 'test-bucket', jurisdiction: 'default', uploads: true };
+  await call('saveBucket', maker.owner, { ...bucket, accessKeyId: 'fixture', secretAccessKey: 'test-secret' });
+  const id = 'f-' + randomUUID();
+  await call('saveFilm', maker.owner, bucket, { id, title: 'My first film', duration: 30 });
+  await call('setFilmPublication', maker.owner, id, true);
+  await call('createProgram', maker.owner);
+  const settings = await get('/setup/settings?bucket=change', cookie);
+  const settingsPage = await settings.text();
+  assert.match(settingsPage, /maker@example.test/);
+  assert.match(settingsPage, /Cancel bucket change/);
+  assert.match(settingsPage, /test-bucket/);
+  assert.match(settingsPage, /action="\/setup\/stripe\/start"/);
+  assert.doesNotMatch(settingsPage, /test-secret/);
+  const dashboard = await get('/setup/dashboard?film=' + id, cookie);
+  assert.match(dashboard.headers.get('cache-control'), /private, no-store/);
+  assert.match(dashboard.headers.get('content-security-policy'), /frame-src https:\/\/watch.streamyourfilm.com/);
+  const markup = await dashboard.text();
+  assert.ok(markup.includes('id="' + id + '" open'));
+  assert.match(markup, /My first film/);
+  assert.match(markup, /Untitled program/);
+  assert.ok(markup.includes('src="https://watch.streamyourfilm.com/embed/' + id));
+  assert.doesNotMatch(markup, /test-secret|test-bucket/);
+  for (const path of ['/setup/dashboard.js', '/setup/film-embed.js', '/setup/thumbnail.js', '/setup/thumbnail-frame.js']) {
+    assert.equal(await (await get(path, cookie)).text(), 'asset');
+  }
+  const refresh = token => mf.dispatchFetch(origin + '/setup/dashboard', { headers: { cookie, 'X-Stream-Analytics': token } });
+  assert.equal((await refresh('old')).status, 401);
+  const fragment = await refresh(maker.csrf);
+  assert.equal(fragment.headers.get('x-stream-analytics'), '1');
+  assert.doesNotMatch(await fragment.text(), /<form|<iframe/);
+  assert.equal((await get('/setup/dashboard', acookie)).headers.get('location'), '/admin/sign-in');
+  assert.equal((await get('/setup/admin', cookie)).headers.get('location'), '/admin/sign-in');
+  // An action that really needs the absent container still takes the origin route.
+  assert.equal((await post('/setup/next', { csrf: maker.csrf }, cookie)).status, 503);
   const adminPage = await (await get('/setup/admin', acookie)).text();
+  assert.match(adminPage, /Platform analytics/);
+  assert.match(adminPage, /new-mexico\.csv/);
+  console.log('Full Worker served signed-in filmmaker pages, scripts and live reports without a media runtime.');
   const csrf = adminPage.match(/name="csrf" value="([^"]+)"/)[1];
   const signedOut = await post('/setup/admin/sign-out', {csrf}, acookie);
   assert.equal(signedOut.headers.get('location'), '/admin/sign-in');
   assert.equal((await get('/setup/admin', acookie)).headers.get('location'), '/admin/sign-in');
   await checkHeader(acookie, null);
+  assert.equal((await post('/setup/sign-out', { csrf: maker.csrf }, cookie)).status, 303);
+  for (const path of ['/setup/settings', '/setup/dashboard']) {
+    assert.equal((await get(path, cookie)).headers.get('location'), '/admin/sign-in');
+  }
   console.log('Verified one-time signup, role-based sign-in, sign-out and session separation through restart.');
 } finally {
   try {

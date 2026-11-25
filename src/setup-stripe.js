@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { randomToken, sha256Hex, timingSafeEqual } from '@dustwave/worker-core/crypto';
 import { readBoundedJson } from '@dustwave/worker-core/response-body';
 
+import { stripeSecretMode } from './stripe-mode.js';
 import { marketplaceEnabled } from './marketplace-checkout.js';
 import { stripeBusinessCountries } from './payout-countries.js';
 
@@ -91,16 +92,20 @@ function hostedPaymentStatus(account) {
   return { ...flags, status: flags.chargesEnabled && flags.payoutsEnabled ? 'ready' : 'action_required', reason };
 }
 
+export function stripeSetupConfiguration(env, origin, mode) {
+  const base = safeOrigin(origin, mode === 'live');
+  const configured = Boolean(base && stripeSecretMode(env.STRIPE_CONNECT_SECRET_KEY) === mode);
+  return { base, configured, existingOAuth: configured && /^ca_[a-zA-Z0-9]+$/.test(env.STRIPE_CONNECT_CLIENT_ID || '') };
+}
+
 // Each ctx belongs to the authenticated creator. The persistent context guards
 // its checkpoints, ownership claims and redirects against concurrent resets.
 export function createStripeSetup({ env = process.env, origin, fetchImpl = fetch, now = Date.now, requireTransfers = marketplaceEnabled(env) }) {
   const secret = env.STRIPE_CONNECT_SECRET_KEY || '';
   const mode = env.STRIPE_CONNECT_LIVE === '1' ? 'live' : 'test';
   const live = mode === 'live';
-  const base = safeOrigin(origin, live);
-  const configured = Boolean(base && /^(sk|rk)_(test|live)_[a-zA-Z0-9]+$/.test(secret) && secret.split('_')[1] === mode);
-  const clientId = env.STRIPE_CONNECT_CLIENT_ID || '';
-  const existingOAuth = configured && /^ca_[a-zA-Z0-9]+$/.test(clientId);
+  const { base, configured, existingOAuth } = stripeSetupConfiguration(env, origin, mode);
+  const clientId = env.STRIPE_CONNECT_CLIENT_ID;
   const callbackUrl = kind => base + '/setup/stripe/' + kind;
 
   async function request(url, { body, idempotency, oauth = false } = {}) {

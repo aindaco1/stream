@@ -1,12 +1,14 @@
 import { privacyPage } from './privacy-policy.js';
 import { filmmakerHome } from './filmmaker-home.js';
 import { headerSessionPath } from './workspace-page.js';
+import { workspaceScripts } from './workspace-assets.js';
+import { filmmakerSettings, filmmakerDashboard, workspaceCsp as csp, dashboardCsp } from './filmmaker-pages.js';
 import { staticAsset } from './static-asset.js';
 import { accessPage, accessPath, handleAccess, headerSession, readSessionCookie, sessionCookie, signInPath, signUpPath } from './workspace-access.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { streamSender } from './stream-email.js';
 import { agreementModeForPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
-import { checkoutAvailability, renderFilmmakerFaq } from './filmmaker-help.js';
+import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { localPreviewPort } from './config.js';
@@ -28,11 +30,10 @@ import { programRights, renderPrivateProgram, renderProgramEditor, submittedLine
 import { newMexicoReport } from './nm-tax-report.js';
 import { reviewTaxFee } from './stripe-live-operations.js';
 import { createViewerCheckout } from './viewer-checkout.js';
-import { createStripeSetup, StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
+import { createStripeSetup, StripeSetupError } from './setup-stripe.js';
 import { creditProblem, escapeHtml, infoFields, posterChoice, selectedFields } from './film-embed.js';
-import { filmSection, renderBucketAccess, renderDashboard, renderPlatformDashboard, renderSettingsPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
+import { filmSection, renderBucketAccess, renderPlatformDashboard, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
-const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self' https://*.stripe.com; frame-ancestors 'none'; base-uri 'none'";
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
 const previewPattern = /^\/setup\/preview\/([fp]-[a-f0-9-]{36})(\/clip\.mp4)?$/;
 const callbackPattern = /^\/setup\/stripe\/(oauth|refresh|return)$/;
@@ -110,23 +111,8 @@ export async function createSetup({
 } = {}) {
   const style = staticAsset('text/css', await readFile(new URL('../public/setup.css', import.meta.url)));
   const darkStyle = staticAsset('text/css', await readFile(new URL('../public/setup-dark.css', import.meta.url)));
-  const scripts = new Map(await Promise.all(Object.entries({
-    '/setup/turnstile-size.js': new URL(import.meta.resolve('@dustwave/admin-shell/turnstile-browser')),
-    '/setup/header-session.js': new URL('../public/header-session.js', import.meta.url),
-    '/setup/sign-in.js': new URL('../public/sign-in.js', import.meta.url),
-    '/setup/appearance.js': new URL(import.meta.resolve('@dustwave/admin-shell/appearance-browser')),
-    '/setup/film-embed.js': new URL('./film-embed.js', import.meta.url),
-    '/setup/program-editor.js': new URL('../public/program-editor.js', import.meta.url),
-    '/setup/field-help.js': new URL('../public/field-help.js', import.meta.url),
-    '/setup/analytics-refresh.js': new URL('../public/analytics-refresh.js', import.meta.url),
-    '/setup/dashboard.js': new URL('../public/setup-dashboard.js', import.meta.url),
-    '/setup/thumbnail.js': new URL('../public/thumbnail.js', import.meta.url),
-    '/setup/thumbnail-frame.js': new URL('./thumbnail-frame.js', import.meta.url),
-    '/setup/video-upload.js': new URL('../public/video-upload.js', import.meta.url),
-    '/setup/navigation.js': new URL('../public/setup-navigation.js', import.meta.url),
-    '/setup/tabs.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs')),
-    '/setup/tabs-browser.js': new URL(import.meta.resolve('@dustwave/admin-shell/tabs-browser'))
-  }).map(async ([route, file]) => [route, staticAsset('text/javascript', await readFile(file))])));
+  const scripts = new Map(await Promise.all(Object.entries(workspaceScripts).map(async ([route, source]) =>
+    [route, staticAsset('text/javascript', await readFile(new URL(import.meta.resolve(source))))])));
   const from = streamSender(env);
   const siteKey = from && env.STREAM_TURNSTILE_SECRET_KEY && env.STREAM_TURNSTILE_SITE_KEY;
   const mode = stripeMode(env);
@@ -170,6 +156,9 @@ export async function createSetup({
     const reject = (status, message) => send(status, 'text/plain; charset=utf-8', message, commonHeaders);
     const method = req.method;
     const get = method === 'GET' || method === 'HEAD';
+    if (get && path === '/setup/style.css') return style(req, send, commonHeaders);
+    if (get && path === '/setup/dark.css') return darkStyle(req, send, commonHeaders);
+    if (get && scripts.has(path)) return scripts.get(path)(req, send, commonHeaders);
     const secure = origin.startsWith('https:');
     if (get && path === headerSessionPath) {
       return send(200, 'application/json', JSON.stringify(headerSession(store, req.headers.cookie, secure)),
@@ -182,25 +171,9 @@ export async function createSetup({
     const sessionId = readSessionCookie(req.headers.cookie, audience, secure);
     const session = store.session(sessionId, audience);
     const provider = stripe ?? createStripeSetup({ env, origin });
-    const display = (status = 200, feedback = {}) => {
-      const { r2, stripe: savedStripe } = store.maker(session.owner);
-      const state = stripeSetupStateForMode(savedStripe, mode);
-      return html(status, renderSettingsPage({
-        filmmaker: { name: session.email || session.owner }, csrf: session.csrf,
-        initialSection: path.startsWith('/setup/stripe/') ? 'payments' : path.startsWith('/setup/r2') ? 'storage' : undefined,
-        stripe: { configured: provider.configured, mode, existingAvailable: provider.existingOAuth, availability: mode === 'live' ? checkoutAvailability(checkout.salesTerritory) : '', hasAccount: Boolean(state.accountId), creating: Boolean(state.createRequest),
-          canReset: Boolean(state.accountId || state.flow || state.createRequest),
-          unsupportedCountry: state.unsupportedCountry,
-          status: state.status || 'unconnected', reason: state.reason, businessName: state.businessName, accountId: state.accountId },
-        r2: r2 ? { ...r2, status: 'ready' } : { status: 'unconnected' },
-        draft: store.storageDraft(session.owner) || {},
-        chooseBucket: (path === '/setup/settings' && searchParams.get('bucket') === 'change') || ['/setup/r2', '/setup/r2/location'].includes(path),
-        ...feedback
-      }));
-    };
-    if (get && path === '/setup/style.css') return style(req, send, commonHeaders);
-    if (get && path === '/setup/dark.css') return darkStyle(req, send, commonHeaders);
-    if (get && scripts.has(path)) return scripts.get(path)(req, send, commonHeaders);
+    const display = (status = 200, feedback) => html(status, filmmakerSettings({
+      store, session, provider, salesTerritory: checkout.salesTerritory, path, searchParams, feedback
+    }));
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
     const referenceHeaders = { 'Content-Security-Policy': csp + "; connect-src 'self'" };
     if (get && path === '/privacy') return html(200, privacyPage(), referenceHeaders);
@@ -293,19 +266,13 @@ export async function createSetup({
       }) + '</section><p>' + back + '</p>', { dashboard: true, filmUpload: true }),
         { 'Content-Security-Policy': csp.replace("media-src 'self'", "media-src 'self' blob:") + "; connect-src 'self'" });
     };
-    const dashboard = (status = 200, error, selectionFilm = searchParams.get('film')) => {
-      if (metricsOnly) return metrics(renderDashboard({metricsOnly:true, completedDraft:false,
-        films:store.dashboardFilms(owner), programs:store.programStats(owner)}));
+    const dashboard = (status = 200, error, selectionFilm) => {
+      if (metricsOnly) return metrics(filmmakerDashboard({ store, session, metricsOnly: true }));
       const viewer = viewerOrigin(env, origin);
       const port = localPreviewPort(env);
       const previewOrigin = port && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin) ? 'http://127.0.0.1:' + port : viewer;
-      const {draft} = store.maker(owner);
-      return html(status, renderDashboard({ csrf: session.csrf, owner: session.email || owner, error, draft, completedDraft: Boolean(store.film(owner, draft.id)),
-        origin: viewer, previewOrigin, selectionFilm, infoSaved: searchParams.get('saved') === 'details',
-        selection: searchParams.getAll('include').join(','), poster: searchParams.get('poster'),
-        programs: store.programs(owner),
-        films: store.dashboardFilms(owner).map(film => ({ ...film, published: publications.isPublished(owner, film.id) }))
-      }), { 'Content-Security-Policy': csp.replace("img-src 'self'", "img-src 'self' blob:") + "; connect-src 'self'; frame-src " + previewOrigin });
+      return html(status, filmmakerDashboard({ store, session, viewer, previewOrigin, searchParams,
+        error, selectionFilm, listedFilmIds: publications.listedFilmIds(owner) }), { 'Content-Security-Policy': dashboardCsp(previewOrigin) });
     };
     const programPath = /^\/setup\/program\/(p-[a-f0-9-]{36})$/.exec(path);
     const program = programPath ? store.program(owner, programPath[1]) : null;
