@@ -85,7 +85,13 @@ test('public signup creates one filmmaker only after verified email and agreemen
   t.after(() => db.close());
   const signup = '/admin/sign-up';
   const home = await fetch(origin + '/');
-  assert.match(await home.text(), /Release your films on your own terms/);
+  assert.equal(home.url, origin + '/');
+  const markup = await home.text();
+  assert.match(markup, /Rent your film/);
+  assert.doesNotMatch(markup, /name="email"|data-sitekey=/);
+  const clip = await fetch(origin + '/market-street-excerpt.mp4', { headers: { Range: 'bytes=0-1' } });
+  assert.equal(clip.status, 206);
+  assert.equal((await clip.arrayBuffer()).byteLength, 2);
   assert.match(await (await fetch(origin + agreementPath)).text(), /no ownership, distribution rights, exclusivity or royalties/);
   const fields = {email:'New@Example.test', agreement:agreementVersion, 'cf-turnstile-response':'verified'};
   const submit = (overrides, source) => post(signup + '/request', {...fields, ...overrides}, source);
@@ -143,7 +149,9 @@ test('live signup requires the live terms, preserves the previous edition and se
   });
   const live = agreementFor('live');
   const home = await (await fetch(origin + '/')).text();
-  assert.ok(home.includes(live.path));
+  assert.match(home, /Sign up for free/);
+  const signup = await (await fetch(origin + '/admin/sign-up')).text();
+  assert.ok(signup.includes(live.path));
   assert.doesNotMatch(home, /test payments/);
   const faq = await (await fetch(origin + '/faq')).text();
   assert.ok(faq.includes(live.path));

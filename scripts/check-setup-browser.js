@@ -73,9 +73,9 @@ const stripe = {
   }
 };
 
-async function checkSiteFrame(page, signOutPath) {
+async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   const banner = page.getByRole('banner');
-  assert.deepEqual(await banner.getByRole('link').allTextContents(), ['Stream', 'FAQ']);
+  assert.deepEqual(await banner.getByRole('link').allTextContents(), guestSignIn ? ['Stream', 'FAQ', 'Sign in'] : ['Stream', 'FAQ']);
   assert.equal(await banner.getByRole('combobox').count(), 0);
   const appearance = page.getByRole('contentinfo').getByRole('combobox', { name: 'Appearance' });
   await appearance.waitFor();
@@ -106,7 +106,15 @@ async function checkSignup(page, origin) {
     await page.getByText('Signed in as ' + email).waitFor();
   };
   await page.goto(origin);
-  await page.getByRole('heading', {name:'Release your films on your own terms.'}).waitFor();
+  await page.getByRole('heading', {name:'Rent your film on your own site.'}).waitFor();
+  await checkSiteFrame(page, null, true);
+  assert.equal(await page.getByLabel('Email address').count(), 0);
+  const sample = page.getByLabel('A Trip Down Market Street', {exact:true});
+  await page.getByRole('button', {name:'Play excerpt'}).click();
+  await page.waitForFunction(() => document.querySelector('video').currentTime > 0);
+  assert.equal(await sample.evaluate(video => video.duration), 10);
+  await page.getByRole('link', {name:'Sign up for free'}).click();
+  await page.waitForURL(origin + '/admin/sign-up');
   const agree = page.getByRole('checkbox', {name:'I agree to the filmmaker agreement.'});
   assert.equal(await agree.isChecked(), false);
   await page.getByLabel('Email address').fill(email);
@@ -117,12 +125,14 @@ async function checkSignup(page, origin) {
   await checkSiteFrame(agreement);
   await agreement.close();
   assert.equal(await page.getByLabel('Email address').inputValue(),email);
-  await checkSiteFrame(page);
+  await checkSiteFrame(page, null, true);
   await agree.check();
   await page.getByRole('button',{name:'Email me a sign-up link'}).click();
   await page.getByRole('status').filter({hasText:/Check your inbox/}).waitFor();
   await openEmail('Agree and create account', 'Settings');
   await checkSiteFrame(page, '/setup/sign-out');
+  await page.goto(origin);
+  await page.waitForURL(origin + '/setup/dashboard');
   for (const path of ['/faq', '/setup/agreement/pilot-v1', '/admin/sign-in']) {
     await page.goto(origin + path);
     await checkSiteFrame(page, '/setup/sign-out');
@@ -138,6 +148,8 @@ async function checkSignup(page, origin) {
 
   await page.goto(origin + '/admin/sign-in#' + setup.store.invite('Test operator', 'admin'));
   await page.getByRole('button', { name: 'Continue to Stream' }).click();
+  await page.waitForURL(origin + '/setup/admin');
+  await page.goto(origin);
   await page.waitForURL(origin + '/setup/admin');
   for (const path of ['/faq', '/setup/agreement/pilot-v1']) {
     await page.goto(origin + path);

@@ -25,11 +25,15 @@ export function readSessionCookie(cookieHeader, audience, secure) {
   return cookieHeader?.split(/;\s*/).find(cookie => cookie.startsWith(prefix))?.slice(prefix.length);
 }
 
+function dashboardPath(audience) {
+  return audience === 'admin' ? '/setup/admin' : '/setup/dashboard';
+}
+
 export function headerSession(store, cookieHeader, secure) {
   for (const audience of ['admin', 'filmmaker']) {
     const token = readSessionCookie(cookieHeader, audience, secure);
     const session = token && store.session(token, audience);
-    if (session) return { action: signOutPath(audience === 'admin'), csrf: session.csrf };
+    if (session) return { action: signOutPath(audience === 'admin'), csrf: session.csrf, dashboard: dashboardPath(audience) };
   }
   return null;
 }
@@ -47,14 +51,9 @@ export function accessPage({ signup, siteKey, message, error, mode, pilotNotice 
   const feedback = message ? `<p class="feedback${error ? ' error' : ''}" role="${error ? 'alert' : 'status'}">${escapeHtml(message)}</p>` : '';
   const agreement = `<a href="${agreementPath}" target="_blank" rel="noopener">filmmaker agreement</a>`;
   return workspacePage(title, null, `<section class="sign-in-panel">
-    <header class="access-intro"><h1>Release your films on your own terms.</h1>
-      <p>Embed your film on your own site, a festival’s lineup, or anywhere on the open web that accepts embeds. You set the price. Viewers rent or buy right in the player.</p>
-      <p>You keep your rights and your original files. Stream never uses your films to train AI models.</p>
-    </header>
+    <h1>${signup ? 'Sign up for Stream' : 'Sign in to Stream'}</h1>
     ${feedback}
     <div class="field-stack" data-request-link>
-      <nav class="tab-bar subtabs" aria-label="Account"><a href="${signUpPath}"${signup ? ' aria-current="page"' : ''}>Sign up</a>
-        <a href="${signInPath}"${signup ? '' : ' aria-current="page"'}>Sign in</a></nav>
       ${pilotNotice || mode === 'test' ? `<p class="hint">${escapeHtml(pilotNotice || 'This rehearsal uses test payments.')}</p>` : ''}
       ${siteKey ? `<form method="post" action="${path}/request">
         <label>Email address<input type="email" name="email" autocomplete="email" inputmode="email" required maxlength="254"></label>
@@ -63,13 +62,14 @@ export function accessPage({ signup, siteKey, message, error, mode, pilotNotice 
         <button type="submit">${signup ? 'Email me a sign-up link' : 'Email me a sign-in link'}</button>
         <p class="hint">Your email link works once and expires in 15 minutes.</p></form>` :
         '<p>Email access is temporarily unavailable. Please try again later.</p>'}
+      ${signup ? '' : `<p>New to Stream? <a href="${signUpPath}">Sign up for free</a></p>`}
     </div>
     <form method="post" action="${path}" data-exchange hidden><input type="hidden" name="code">
       ${signup ? `<input type="hidden" name="agreement" value="${agreementVersion}">
         <p>Confirm your email and accept the ${agreement} to create your account.</p>` :
         '<p>Your private link is ready. Continue to sign in.</p>'}
       <button type="submit">${signup ? 'Agree and create account' : 'Continue to Stream'}</button></form></section>`,
-    { signIn: true, turnstile: Boolean(siteKey) });
+    { signIn: true, guestSignIn: signup ? signInPath : null, turnstile: Boolean(siteKey) });
 }
 
 export async function handleAccess({path, method, get, origin, env, store, mode, siteKey, from,
@@ -112,7 +112,7 @@ export async function handleAccess({path, method, get, origin, env, store, mode,
       : store.redeemLogin(code || '', legacyAudience);
     if (!login?.id) return showAccess(401, 'This link is no longer valid. Request a fresh email link.', true);
     const admin = login.audience === 'admin';
-    const destination = admin ? '/setup/admin' : signup ? '/setup/settings' : '/setup/dashboard';
+    const destination = signup ? '/setup/settings' : dashboardPath(login.audience);
     return redirect(destination, { 'Set-Cookie': sessionCookie(login.id, admin ? 12 * 3600 : 14 * 86400, login.audience, origin.startsWith('https:')) });
   } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
 }
