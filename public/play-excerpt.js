@@ -7,6 +7,8 @@ const stage = byId('start-video');
 const offers = byId('purchase');
 const payment = byId('payment');
 const seeOffers = byId('example-offers');
+const frame = window.frameElement;
+const figure = frame?.closest('.home-excerpt');
 const hours = Number(document.body.dataset.rentalHours);
 const kinds = ['rent', 'buy'];
 let selected;
@@ -14,6 +16,7 @@ let selected;
 document.querySelector('.payment-action').hidden = true;
 
 function showOffers() {
+  figure?.setAttribute('data-interacting', '');
   seeOffers.hidden = true;
   offers.hidden = false;
   displayOfferPrices(kinds, false, false);
@@ -36,11 +39,11 @@ video.addEventListener('ended', () => {
   byId('status').textContent = 'Preview complete.';
   showOffers();
 });
-seeOffers.hidden = false;
 seeOffers.addEventListener('click', event => {
   showOffers();
   byId('rent').focus({ preventScroll: event.detail > 0 });
 });
+seeOffers.disabled = false;
 byId('tip-percent').addEventListener('input', () => displayOfferPrices(kinds, false, false));
 for (const kind of kinds) byId(kind).addEventListener('click', () => {
   selected = kind;
@@ -67,22 +70,17 @@ byId('close-checkout').addEventListener('click', () => {
 
 // This first-party example can fit its host page as offers appear. Published
 // embeds on other sites keep the filmmaker's chosen dimensions.
-const frame = window.frameElement;
 if (frame) {
   const main = document.querySelector('main');
-  const figure = frame.closest('.home-excerpt');
   const lead = figure?.closest('.home-lead');
   let lastWidth;
   let sectionHeight = 0;
   new ResizeObserver(() => {
-    const height = Math.ceil(main.getBoundingClientRect().height) + 2;
-    frame.height = String(height);
+    if (!offers.hidden) frame.height = String(Math.ceil(main.getBoundingClientRect().height) + 2);
     if (!lead) return;
-    const openingPoster = !stage.hidden && !seeOffers.hidden;
-    figure.toggleAttribute('data-interacting', !openingPoster);
     // After interaction, reserve space outside the player while its offers change height.
     const box = figure.getBoundingClientRect();
-    sectionHeight = openingPoster || box.width !== lastWidth ? box.height : Math.max(sectionHeight, box.height);
+    sectionHeight = offers.hidden || box.width !== lastWidth ? box.height : Math.max(sectionHeight, box.height);
     lastWidth = box.width;
     lead.style.setProperty('--demo-section-height', sectionHeight + 'px');
   }).observe(main);

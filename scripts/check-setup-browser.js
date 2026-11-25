@@ -121,15 +121,17 @@ async function checkDemoPosition(page, origin) {
   const { promise, resolve } = Promise.withResolvers();
   await page.route(embedRequest, async route => { await promise; await route.continue(); });
   const heading = page.getByRole('heading', {name: 'Rent your film on your own site.'});
-  let initial;
+  const poster = page.locator('iframe[title^="Example Stream player"]');
+  let initialHeading, initialPoster;
   try {
     await page.goto(origin, {waitUntil:'domcontentloaded'});
-    initial = await heading.boundingBox();
+    initialHeading = await heading.boundingBox();
+    initialPoster = await poster.boundingBox();
   } finally {
     resolve();
   }
-  const frame = page.frameLocator('iframe[title^="Example Stream player"]');
-  await frame.getByRole('button', {name: 'See rental and download options'}).waitFor();
+  const frame = poster.contentFrame();
+  await frame.getByRole('button', {name: 'Play in player'}).waitFor();
   const centerDifference = await page.locator('.home-lead').evaluate(async lead => {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const poster = lead.querySelector('iframe').getBoundingClientRect();
@@ -139,7 +141,13 @@ async function checkDemoPosition(page, origin) {
   });
   await page.unroute(embedRequest);
   const loaded = await heading.boundingBox();
-  assert.ok(Math.abs(loaded.y - initial.y) <= 1, 'The introduction should stay in place as the poster loads');
+  const loadedPoster = await poster.boundingBox();
+  assert.ok(Math.abs(loaded.y - initialHeading.y) <= 1, 'The introduction should stay in place as the poster loads');
+  assert.deepEqual(loadedPoster, initialPoster, 'The opening iframe should keep its position and size through load');
+  assert.ok(await frame.locator('#example-offers').evaluate(button => {
+    const bottom = button.getBoundingClientRect().bottom;
+    return bottom <= innerHeight && innerHeight - bottom <= 32;
+  }), 'The opening controls should fit in the reserved frame');
   assert.ok(Math.abs(centerDifference) <= 1, 'Introduction and opening poster centers differ by ' + centerDifference + 'px');
   for (const name of ['See rental and download options', 'Rent · $5.50', 'Back to film', 'Buy · $11.00', 'Back to film']) {
     const button = frame.getByRole('button', {name, exact: true});
