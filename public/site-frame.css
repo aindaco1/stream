@@ -11,8 +11,11 @@ body { display: flex; flex-direction: column; min-height: 100vh; min-height: 100
 .site-footer { margin-block-start: auto; border-block-start: 1px solid var(--line, #404040); }
 .site-footer-inner {
   width: var(--page-width); margin-inline: auto; padding-block: 1.25rem;
-  display: flex; align-items: center; gap: .875rem;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+  column-gap: clamp(.375rem, 2.5vw, .875rem);
   color: var(--muted, #c9c9c9); font-size: .8125rem; letter-spacing: .025em;
 }
 .site-footer-inner a { display: grid; place-items: center; min-height: 44px; }
 .site-footer-inner img { display: block; filter: var(--footer-logo-filter, none); }
+.site-footer .appearance select { width: auto; margin: 0; height: 2.75rem; font-size: 1rem; }
+:root:not([data-appearance-ready]) .appearance { display: none; }

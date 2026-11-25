@@ -31,12 +31,9 @@ select[data-pointer-focus]:focus { outline: none; }
 .bar, main, .workspace-nav { width: var(--page-width); margin-inline: auto; }
 .bar { display: flex; flex-wrap: wrap; align-items: center; min-height: 4rem; padding-block: .5rem; gap: .5rem 1rem; }
 .bar .brand { margin-inline-end: auto; }
-.bar .appearance { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .875rem; }
-:root:not([data-appearance-ready]) .appearance { display: none; }
-.bar .appearance select { margin: 0; width: auto; height: 2.75rem; font-size: 1rem; }
 .bar > a { display: inline-flex; align-items: center; min-height: 2.75rem; }
 @media (max-width: 26rem) {
-  .bar, .bar .appearance { gap: .375rem; }
+  .bar { gap: .375rem; }
   .bar .sign-out { padding-inline: .25rem; }
 }
 main { display: grid; gap: 1.5rem; padding-block: clamp(1.5rem, 5vw, 3rem) 4rem; }

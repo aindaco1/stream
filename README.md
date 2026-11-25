@@ -29,7 +29,7 @@ A filmmaker can set the rental and purchase prices for a film in setup. Leaving 
 
 **Settings** opens on Storage. Choose **Replace R2 key** to update access to the selected bucket, or **Use a different bucket** for future uploads. Storage and Payments link to their sections in the public FAQ at `/faq#storage` and `/faq#payments`, with setup guidance, fees and worked examples.
 
-Use the appearance selector in the filmmaker header to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, the FAQ, settings and the dashboard.
+Use the appearance selector on the right side of the footer to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, the FAQ, settings and the dashboard.
 
 ### Filmmaker dashboard
 

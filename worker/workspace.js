@@ -1,7 +1,7 @@
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { readBoundedText } from '@dustwave/worker-core/response-body';
-import { accessPage, accessPath, handleAccess, sessionCookie, sessionCookieName, signInPath, signUpPath } from '../src/workspace-access.js';
-import { workspacePage } from '../src/workspace-page.js';
+import { accessPage, accessPath, handleAccess, headerSession, readSessionCookie, sessionCookie, signInPath, signUpPath } from '../src/workspace-access.js';
+import { headerSessionPath, workspacePage } from '../src/workspace-page.js';
 import { agreementModeForPath, renderFilmmakerAgreement } from '../src/filmmaker-agreement.js';
 import { renderFilmmakerFaq } from '../src/filmmaker-help.js';
 import { liveSalesTerritory } from '../src/marketplace-checkout.js';
@@ -13,7 +13,7 @@ const csp =
   "default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 const pilotNotice = 'Sign-ups are open. Film uploads and paid screenings are being prepared.';
 const assets =
-  /^\/(?:favicon\.ico|favicon\.svg|apple-touch-icon\.png|dust-wave-square\.webp|site-frame\.css|filmmaker(?:-dark)?\.css|appearance\.js|select-focus\.js|setup\/(?:field-help|navigation|tabs|tabs-browser|analytics-refresh|sign-in|turnstile-size)\.js)$/;
+  /^\/(?:favicon\.ico|favicon\.svg|apple-touch-icon\.png|dust-wave-square\.webp|site-frame\.css|filmmaker(?:-dark)?\.css|appearance\.js|select-focus\.js|setup\/(?:field-help|header-session|navigation|tabs|tabs-browser|analytics-refresh|sign-in|turnstile-size)\.js)$/;
 
 // Public identity and information share one owner in both deployment stages.
 // Route these before starting a container, including one-time form submissions.
@@ -23,7 +23,7 @@ export function isPublicWorkspaceRequest(request) {
   if (request.method === 'POST') return path === '/setup/sign-out' || path === '/setup/admin/sign-out';
   if (request.method !== 'GET' && request.method !== 'HEAD') return false;
   return assets.test(path) || Boolean(agreementModeForPath(path)) ||
-    ['/', '/setup/home', '/faq', '/setup/faq', '/setup/admin/faq'].includes(path);
+    ['/', '/setup/home', headerSessionPath, '/faq', '/setup/faq', '/setup/admin/faq'].includes(path);
 }
 
 export async function workspaceResponse(
@@ -39,16 +39,17 @@ export async function workspaceResponse(
   const { pathname: path } = url;
   const get = ['GET', 'HEAD'].includes(request.method);
   if (get && assets.test(path)) return env.ASSETS.fetch(request);
+  if (get && path === headerSessionPath) {
+    return new Response(request.method === 'HEAD' ? null : JSON.stringify(headerSession(store, request.headers.get('cookie'), true)), {
+      headers: {'Content-Type':'application/json', 'Cache-Control':'private, no-store', 'X-Content-Type-Options':'nosniff',
+        'Cross-Origin-Resource-Policy':'same-origin'}
+    });
+  }
   const admins = path === '/setup/admin' || path.startsWith('/setup/admin/');
   const audience = admins ? 'admin' : 'filmmaker';
   const base = admins ? '/setup/admin' : '/setup';
-  const name = sessionCookieName(audience, true);
   const cookie = (value, age) => sessionCookie(value, age, audience, true);
-  const id = request.headers
-    .get('cookie')
-    ?.split(/;\s*/)
-    .find((s) => s.startsWith(name + '='))
-    ?.slice(name.length + 1);
+  const id = readSessionCookie(request.headers.get('cookie'), audience, true);
   const session = store.session(id, audience);
   const response = (status, content, extra = {}) =>
     new Response(request.method === 'HEAD' ? null : content, {

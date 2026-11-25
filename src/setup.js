@@ -1,5 +1,6 @@
+import { headerSessionPath } from './workspace-page.js';
 import { staticAsset } from './static-asset.js';
-import { accessPage, accessPath, handleAccess, sessionCookie, sessionCookieName, signInPath, signUpPath } from './workspace-access.js';
+import { accessPage, accessPath, handleAccess, headerSession, readSessionCookie, sessionCookie, signInPath, signUpPath } from './workspace-access.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { streamSender } from './stream-email.js';
 import { agreementModeForPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
@@ -109,6 +110,7 @@ export async function createSetup({
   const darkStyle = staticAsset('text/css', await readFile(new URL('../public/setup-dark.css', import.meta.url)));
   const scripts = new Map(await Promise.all(Object.entries({
     '/setup/turnstile-size.js': new URL(import.meta.resolve('@dustwave/admin-shell/turnstile-browser')),
+    '/setup/header-session.js': new URL('../public/header-session.js', import.meta.url),
     '/setup/sign-in.js': new URL('../public/sign-in.js', import.meta.url),
     '/setup/appearance.js': new URL(import.meta.resolve('@dustwave/admin-shell/appearance-browser')),
     '/setup/film-embed.js': new URL('./film-embed.js', import.meta.url),
@@ -167,12 +169,15 @@ export async function createSetup({
     const method = req.method;
     const get = method === 'GET' || method === 'HEAD';
     const secure = origin.startsWith('https:');
+    if (get && path === headerSessionPath) {
+      return send(200, 'application/json', JSON.stringify(headerSession(store, req.headers.cookie, secure)),
+        {...commonHeaders, 'Cache-Control':'private, no-store', 'Cross-Origin-Resource-Policy':'same-origin'});
+    }
     const admin = path === '/setup/admin' || path.startsWith('/setup/admin/');
     const audience = admin ? 'admin' : 'filmmaker';
     const basePath = admin ? '/setup/admin' : '/setup';
-    const cookieName = sessionCookieName(audience, secure);
     const cookie = (value, age) => sessionCookie(value, age, audience, secure);
-    const sessionId = req.headers.cookie?.split(/;\s*/).find(v => v.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
+    const sessionId = readSessionCookie(req.headers.cookie, audience, secure);
     const session = store.session(sessionId, audience);
     const provider = stripe ?? createStripeSetup({ env, origin });
     const display = (status = 200, feedback = {}) => {
@@ -195,14 +200,15 @@ export async function createSetup({
     if (get && path === '/setup/dark.css') return darkStyle(req, send, commonHeaders);
     if (get && scripts.has(path)) return scripts.get(path)(req, send, commonHeaders);
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
-    if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(mode, checkout.salesTerritory), { faq: true, admin }));
+    const referenceHeaders = { 'Content-Security-Policy': csp + "; connect-src 'self'" };
+    if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(mode, checkout.salesTerritory), { faq: true, admin }), referenceHeaders);
     const edition = agreementModeForPath(path);
-    if (get && edition) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(edition), { reference: true }));
+    if (get && edition) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(edition), { reference: true }), referenceHeaders);
     const signup = accessPath(path) === signUpPath;
     const showAccess = (status, message = '', error = false) => html(status, accessPage({ message, signup, siteKey, error, mode }), siteKey ? {
       'Content-Security-Policy': csp.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com") +
         "; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com"
-    } : {});
+    } : referenceHeaders);
     if (get && path === '/setup/home') return session ? redirect('/setup/dashboard') : redirect(signUpPath);
     if (accessPath(path)) return handleAccess({path, method, get, origin, env, store, mode, siteKey, from,
       showAccess, redirect, reject, formData: () => readForm(req), verifyChallenge, mailFetch});

@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
 import { airplayLeases, captionCues, captionMaster, captionSegment, screenerReference } from './airplay.js';
 import { openFilm } from './media.js';
-import { faqLink, siteBrand, siteFooter, siteIcons } from './site-frame.js';
+import { siteIcons } from './site-frame.js';
 import { agreementModeForPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
@@ -239,7 +239,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           return send(303, 'text/plain', '', { Location: new URL(path, workspaceOrigin).href });
         }
         return send(200, 'text/html; charset=utf-8', workspacePage(path === '/faq' ? 'FAQ' : 'Filmmaker agreement', null,
-          path === '/faq' ? renderFilmmakerFaq(mode, checkout?.salesTerritory) : renderFilmmakerAgreement(edition), { faq: path === '/faq', signInHref: '/faq#getting-started' }),
+          path === '/faq' ? renderFilmmakerFaq(mode, checkout?.salesTerritory) : renderFilmmakerAgreement(edition), { faq: path === '/faq', viewer: true }),
           { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
       if (read && staticFiles.has(path)) {
@@ -249,8 +249,10 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const embeds = catalog.list().map(({ id, title }) =>
           '<iframe src="/embed/' + encodeURIComponent(id) + '" title="' + escapeHtml(title) +
           '" loading="lazy" allow="autoplay; fullscreen; encrypted-media; payment; picture-in-picture" allowfullscreen></iframe>').join('\n');
-        return send(200, 'text/html; charset=utf-8', screening.replace('{{brand}}', siteBrand(hasWorkspace ? workspaceOrigin : '/')).replace('{{faqLink}}', faqLink()).replace('{{footer}}', siteFooter('/screening')).replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
-          { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
+        const content = screening.replace('{{embeds}}', () => embeds || '<p>No films available.</p>');
+        return send(200, 'text/html; charset=utf-8', workspacePage('Screening room', null, content, {
+          screening: true, viewer: true, home: hasWorkspace ? workspaceOrigin : '/'
+        }), { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'", 'X-Robots-Tag': 'noindex' });
       }
       if (checkout && (path === '/checkout/webhook' || path === '/checkout/platform-webhook')) {
         if (req.method !== 'POST') return fail(405);
