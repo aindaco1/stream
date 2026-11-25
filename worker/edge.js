@@ -1,3 +1,4 @@
+import { routeWorkspace } from './workspace.js';
 import { publicViewerBasics } from './viewer-basics.js';
 export { StreamStore } from './store.js';
 
@@ -5,7 +6,7 @@ export default {
   fetch(request, env) {
     const url = new URL(request.url);
     if (url.hostname === 'streamyourfilm.com') {
-      return env.STREAM_STORE.getByName('pilot-live').workspace(request);
+      return routeWorkspace(request, env, { signupOnly: true });
     }
     if (url.hostname === 'watch.streamyourfilm.com') {
       const page = publicViewerBasics(request,env);

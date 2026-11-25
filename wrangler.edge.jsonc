@@ -15,5 +15,5 @@
   ],
   "durable_objects": {"bindings": [{"name":"STREAM_STORE","class_name":"StreamStore"}]},
   "exports": {"StreamStore": {"type":"durable-object","storage":"sqlite"}},
-  "vars": {"STREAM_PUBLIC_ORIGIN":"https://streamyourfilm.com"}
+  "vars": {"STREAM_PUBLIC_ORIGIN":"https://streamyourfilm.com","STREAM_WORKSPACE_PHASE":"signup"}
 }

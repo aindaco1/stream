@@ -291,6 +291,18 @@ export function createSetupStore(db, key, paymentMode, transaction) {
         AND (audience='filmmaker' OR EXISTS(SELECT 1 FROM platform_admins a WHERE a.id=sessions.owner))`).get(hash(value), Date.now(), audience);
     },
     signOut(value) { sql('DELETE FROM sessions WHERE digest=?').run(hash(value)); },
+    filmmakerSettings(owner) {
+      const row = sql(`SELECT m.stripe, b.config AS bucket, d.config AS draft FROM makers m
+        LEFT JOIN buckets b ON b.id=m.bucket_id AND b.owner=m.id
+        LEFT JOIN storage_drafts d ON d.owner=m.id WHERE m.id=?`).get(owner);
+      return { stripe: JSON.parse(row.stripe), r2: row.bucket && JSON.parse(row.bucket), draft: row.draft ? JSON.parse(row.draft) : {} };
+    },
+    dashboardDraft(owner) {
+      // A completed opening or closing clip is absent from the standalone film list.
+      const row = sql(`SELECT draft, EXISTS(SELECT 1 FROM films f WHERE f.id=m.draft->>'$.id' AND f.owner=m.id) AS completed
+        FROM makers m WHERE id=?`).get(owner);
+      return { draft: JSON.parse(row.draft), completedDraft: Boolean(row.completed) };
+    },
     maker(owner) {
       const row = sql('SELECT * FROM makers WHERE id=?').get(owner);
       if (!row) return;
@@ -767,14 +779,6 @@ export function createSetupStore(db, key, paymentMode, transaction) {
         }
         return true;
       });
-    },
-    programs(owner) {
-      const editions = sql(`SELECT p.id, v.metadata->>'$.prices' AS prices, v.metadata->>'$.rentalHours' AS rentalHours,
-          json_array_length(v.metadata,'$.lineup') AS lineupSize
-        FROM programs p JOIN program_versions v ON v.programId=p.id AND v.revision=p.revision
-        WHERE p.owner=? AND p.published=1`).all(owner);
-      const offers = new Map(editions.map(({id,prices,rentalHours,lineupSize}) => [id, {prices:JSON.parse(prices), rentalHours,lineupSize}]));
-      return store.programStats(owner).map(({id,stats,lineupViews}) => ({ ...store.program(owner,id), publishedOffer:offers.get(id), stats, lineupViews }));
     },
     bucketFilmTitles(owner, config, keys) {
       const rows = sql(`SELECT json_extract(metadata,'$.objectKey') AS key, json_extract(metadata,'$.title') AS title

@@ -19,6 +19,14 @@ export function validRights(rights) {
   );
 }
 
+export function programFromRow(row) {
+  return {
+    ...JSON.parse(row.metadata),
+    id: row.id, owner: row.owner, version: row.version, revision: row.revision,
+    published: Boolean(row.published), bucket: row.config && JSON.parse(row.config)
+  };
+}
+
 export function programStore(db, transaction, filmFor) {
   db.exec(`CREATE TABLE IF NOT EXISTS programs (
       id TEXT PRIMARY KEY, owner TEXT NOT NULL, metadata TEXT NOT NULL, bucket_id TEXT,
@@ -53,23 +61,10 @@ export function programStore(db, transaction, filmFor) {
           AND NOT EXISTS (SELECT 1 FROM connected_test_orders WHERE filmId=f.id)
         GROUP BY f.id HAVING COUNT(DISTINCT u.programId)=1 AND MIN(u.role IN ('opening','closing'))=1`);
   });
-  function row(owner, id) {
-    return query(`SELECT p.*,b.config FROM programs p LEFT JOIN buckets b ON b.id=p.bucket_id AND b.owner=p.owner
-      WHERE p.owner=? AND p.id=?`).get(owner, id);
-  }
   function program(owner, id) {
-    const p = row(owner, id);
-    return (
-      p && {
-        ...JSON.parse(p.metadata),
-        id: p.id,
-        owner,
-        version: p.version,
-        revision: p.revision,
-        published: Boolean(p.published),
-        bucket: p.config && JSON.parse(p.config)
-      }
-    );
+    const row = query(`SELECT p.*,b.config FROM programs p LEFT JOIN buckets b ON b.id=p.bucket_id AND b.owner=p.owner
+      WHERE p.owner=? AND p.id=?`).get(owner, id);
+    return row && programFromRow(row);
   }
   function programVersion(id, revision) {
     const saved = query('SELECT metadata FROM program_versions WHERE programId=? AND revision=?').get(id, revision);

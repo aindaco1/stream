@@ -172,6 +172,9 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
     openProgramPreview: programs.openProgramPreview,
     programFile: programs.programFile,
     get(id, options) { return isProgramId(id) ? programs.get(id, options) : record(id, options)?.spec; },
+    listedFilmIds(owner) {
+      return [...publications()].filter(([, listedOwner]) => listedOwner === owner).map(([id]) => id);
+    },
     isPublished(owner, id) {
       return isProgramId(id) ? Boolean(store.program(owner, id)?.published) : publicationOwner(id) === owner;
     },

@@ -71,6 +71,10 @@ test('only opted-in IDs publish, with a public projection and distinct receipt s
   assert.equal(f.sourceCalls.length, 0);
   assert.deepEqual(await catalog.verify(second.id), catalog.get(second.id));
   assert.deepEqual(f.sourceCalls, [{ ...b.bucket, ...b.keys, objectKey: 'originals/private.mp4' }]);
+  const cards = () => f.store.dashboardFilms(a.owner, catalog.listedFilmIds(a.owner)).map(({id,published}) => [id,published]);
+  assert.deepEqual(cards(), [[draft.id,false],[first.id,true]]);
+  f.store.setFilmPublication(a.owner, first.id, false);
+  assert.deepEqual(cards(), [[draft.id,false],[first.id,false]], 'explicit unpublication overrides the legacy list');
 });
 
 test('publication configuration is explicit, bounded, and fails closed on removal or malformed edits', async t => {

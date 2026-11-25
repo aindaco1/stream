@@ -2,6 +2,9 @@ import { privacyPage } from '../src/privacy-policy.js';
 import playerTemplate from '../public/player.html';
 import { examplePath, exampleHeaders, examplePlayer } from '../src/player-page.js';
 import { rangeFor } from '../src/http-range.js';
+import { filmmakerSettings, filmmakerDashboard, workspaceCsp, dashboardCsp } from '../src/filmmaker-pages.js';
+import { stripeSetupConfiguration } from '../src/setup-stripe.js';
+import { workspaceAssets } from '../src/workspace-assets.js';
 import { filmmakerHome } from '../src/filmmaker-home.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { readBoundedText } from '@dustwave/worker-core/response-body';
@@ -17,8 +20,8 @@ import { renderPlatformDashboard } from '../src/setup-view.js';
 const csp =
   "default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 const pilotNotice = 'Sign-ups are open. Film uploads and paid screenings are being prepared.';
-const assets =
-  /^\/(?:favicon\.ico|favicon\.svg|apple-touch-icon\.png|dust-wave-square\.webp|site-frame\.css|play-excerpt\.js|offer-display\.js|platform-tip\.js|poster\.css|style\.css|filmmaker-home\.css|market-street-(?:still\.webp|excerpt\.mp4)|filmmaker(?:-dark)?\.css|appearance\.js|select-focus\.js|setup\/(?:field-help|header-session|navigation|tabs|tabs-browser|analytics-refresh|sign-in|turnstile-size)\.js)$/;
+export const hostedViewerOrigin = 'https://watch.streamyourfilm.com';
+const privatePages = new Set(['/setup/admin', '/setup/dashboard', '/setup/settings']);
 
 // Some asset bindings return the entire file for a byte-range request. Safari
 // starts video playback with a two-byte probe. Only the fixed home sample needs this fallback.
@@ -39,15 +42,19 @@ async function homeExcerpt(request, assets) {
   return new Response(bytes.slice(start, end + 1), { status: 206, headers });
 }
 
-// Public identity and information share one owner in both deployment stages.
-// Route these before starting a container, including one-time form submissions.
-export function isPublicWorkspaceRequest(request) {
-  const path = new URL(request.url).pathname;
-  if (accessPath(path)) return true;
-  if (request.method === 'POST') return path === '/setup/sign-out' || path === '/setup/admin/sign-out';
-  if (request.method !== 'GET' && request.method !== 'HEAD') return false;
-  return assets.test(path) || Boolean(agreementModeForPath(path)) ||
-    ['/', examplePath, '/privacy', '/setup/home', headerSessionPath, '/faq', '/setup/faq', '/setup/admin/faq'].includes(path);
+// Static files bypass both Durable Objects. Account pages run beside their SQLite data.
+export function routeWorkspace(request, env, { signupOnly = false } = {}) {
+  const url = new URL(request.url);
+  if (url.origin !== env.STREAM_PUBLIC_ORIGIN) return new Response('Unknown host.', { status: 404 });
+  const path = url.pathname;
+  const read = request.method === 'GET' || request.method === 'HEAD';
+  if (read && Object.hasOwn(workspaceAssets, path)) {
+    return path === '/market-street-excerpt.mp4' ? homeExcerpt(request, env.ASSETS) : env.ASSETS.fetch(request);
+  }
+  const page = read && (privatePages.has(path) || agreementModeForPath(path) ||
+    ['/', examplePath, '/privacy', '/setup', '/setup/home', headerSessionPath, '/faq', '/setup/faq', '/setup/admin/faq'].includes(path));
+  const signOut = request.method === 'POST' && (path === '/setup/sign-out' || path === '/setup/admin/sign-out');
+  if (signupOnly || page || signOut || accessPath(path)) return env.STREAM_STORE.getByName('pilot-live').workspace(request);
 }
 
 export async function workspaceResponse(
@@ -62,8 +69,6 @@ export async function workspaceResponse(
   if (url.origin !== origin) return new Response('Unknown host.', { status: 404 });
   const { pathname: path } = url;
   const get = ['GET', 'HEAD'].includes(request.method);
-  if (get && path === '/market-street-excerpt.mp4') return homeExcerpt(request, env.ASSETS);
-  if (get && assets.test(path)) return env.ASSETS.fetch(request);
   if (get && path === headerSessionPath) {
     return new Response(request.method === 'HEAD' ? null : JSON.stringify(headerSession(store, request.headers.get('cookie'), true)), {
       headers: {'Content-Type':'application/json', 'Cache-Control':'private, no-store', 'X-Content-Type-Options':'nosniff',
@@ -126,6 +131,7 @@ export async function workspaceResponse(
   if (get && path === '/') return response(200, filmmakerHome(), {
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; frame-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
   });
+  if (get && path === '/setup' && env.STREAM_WORKSPACE_PHASE === 'full') return redirect(session ? '/setup/settings' : '/setup/home');
   if (get && ['/setup/home', '/setup'].includes(path))
     return redirect(session ? '/setup/dashboard' : '/');
   if (accessPath(path))
@@ -158,17 +164,30 @@ export async function workspaceResponse(
     store.signOut(id);
     return redirect(signInPath, { 'Set-Cookie': cookie('', 0) });
   }
-  if (['/setup/admin', '/setup/dashboard', '/setup/settings'].includes(path) && get) {
+  if (get && privatePages.has(path)) {
+    const full = env.STREAM_WORKSPACE_PHASE === 'full';
+    const analytics = full && request.headers.has('X-Stream-Analytics');
+    if (analytics && (!session || request.headers.get('X-Stream-Analytics') !== session.csrf)) return reject(401, 'Sign in again.');
     if (!session) return redirect(signInPath);
+    const headers = { 'Referrer-Policy': 'same-origin', 'Content-Security-Policy': workspaceCsp };
     if (admins) {
-      const report = store.platformReport(
-        url.searchParams.get('maker'),
-        Number(url.searchParams.get('page') || 1)
-      );
+      const report = store.platformReport(url.searchParams.get('maker'), Number(url.searchParams.get('page') || 1));
       if (!report) return reject(404, 'Filmmaker unavailable.');
-      return response(200, renderPlatformDashboard(session.csrf, report));
+      const markup = renderPlatformDashboard(session.csrf, report, analytics, full);
+      return response(200, markup, { ...headers, 'Content-Security-Policy': workspaceCsp + "; connect-src 'self'",
+        ...(analytics && { 'X-Stream-Analytics': '1' }) });
     }
     const dashboard = path === '/setup/dashboard';
+    if (full) {
+      if (dashboard) headers['Content-Security-Policy'] = dashboardCsp(hostedViewerOrigin);
+      if (dashboard && analytics) headers['X-Stream-Analytics'] = '1';
+      if (request.method === 'HEAD') return response(200, null, headers);
+      const markup = dashboard
+        ? filmmakerDashboard({ store, session, searchParams: url.searchParams, viewer: hostedViewerOrigin, metricsOnly: analytics })
+        : filmmakerSettings({ store, session, path, searchParams: url.searchParams,
+          provider: stripeSetupConfiguration(env, origin, 'live'), salesTerritory: liveSalesTerritory(env.STREAM_SALES_TERRITORIES) });
+      return response(200, markup, headers);
+    }
     const heading = dashboard ? 'Dashboard' : 'Settings';
     return response(
       200,

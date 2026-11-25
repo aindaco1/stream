@@ -2,7 +2,7 @@ import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import { readBoundedJson } from '@dustwave/worker-core/response-body';
 import { timingSafeEqual } from '@dustwave/worker-core/crypto';
 import { unpack } from '../src/store-wire.js';
-import { isPublicWorkspaceRequest } from './workspace.js';
+import { hostedViewerOrigin, routeWorkspace } from './workspace.js';
 import { publicViewerBasics } from './viewer-basics.js';
 export { StreamStore } from './store.js';
 
@@ -47,7 +47,7 @@ export class StreamRuntime extends DurableObject {
       this.stage = 'starting container';
       container.start({ image:container.images.base, instance:{vcpu:1,memoryMib:2048,diskMb:4096},
         enableInternet:true, env:{ ...secrets,STREAM_RUNTIME_RELEASE:release,STRIPE_CONNECT_LIVE:'1',STREAM_STRIPE_TAX_MODE:'marketplace',
-          STREAM_WORKSPACE_ORIGIN:'https://streamyourfilm.com',STREAM_VIEWER_ORIGIN:'https://watch.streamyourfilm.com' } });
+          STREAM_WORKSPACE_ORIGIN:'https://streamyourfilm.com',STREAM_VIEWER_ORIGIN:hostedViewerOrigin } });
       await this.ctx.storage.put('runtime-release',release);
     }
     this.stage = 'setting inactivity timeout';
@@ -126,9 +126,9 @@ export default {
   async fetch(request,env) {
     const url = new URL(request.url);
     if (!sites.has(url.hostname) || url.protocol !== 'https:' || url.port) return new Response(null,{status:404});
-    // These routes have a single owner. Signing in never depends on a media VM.
-    if (url.hostname === 'streamyourfilm.com' && isPublicWorkspaceRequest(request)) {
-      return env.STREAM_STORE.getByName('pilot-live').workspace(request);
+    if (url.hostname === 'streamyourfilm.com') {
+      const page = routeWorkspace(request, env);
+      if (page) return page;
     }
     if (url.hostname === 'watch.streamyourfilm.com') {
       const page = publicViewerBasics(request,env);
