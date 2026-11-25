@@ -31,7 +31,8 @@ select[data-pointer-focus]:focus { outline: none; }
 .bar, main, .workspace-nav { width: var(--page-width); margin-inline: auto; }
 .bar { display: flex; flex-wrap: wrap; align-items: center; min-height: 4rem; padding-block: .5rem; gap: .5rem 1rem; }
 .bar .brand { margin-inline-end: auto; }
-.bar > a:not([hidden]) { display: inline-flex; align-items: center; min-height: 2.75rem; }
+.bar .account-actions { display: flex; align-items: center; gap: inherit; }
+.bar a:not([hidden]) { display: inline-flex; align-items: center; min-height: 2.75rem; }
 @media (max-width: 26rem) {
   .bar { gap: .375rem; }
   .bar .sign-out { padding-inline: .25rem; }
@@ -239,13 +240,13 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
   .thumbnail-preview { order: -1; }
 }
 
-.filmmaker-help { display: grid; gap: 1.25rem; }
-.provider-card p, .filmmaker-help section :is(p, ol) { max-width: 72ch; }
-.filmmaker-help section { display: grid; gap: .625rem; padding-block-start: 1.25rem; border-block-start: 1px solid var(--line); }
-.filmmaker-help h3 { font-size: 1.0625rem; margin-block-start: .5rem; }
+.reference-content { display: grid; gap: 1.25rem; }
+.provider-card p, .reference-content section :is(p, ol) { max-width: 72ch; }
+.reference-content section { display: grid; gap: .625rem; padding-block-start: 1.25rem; border-block-start: 1px solid var(--line); }
+.reference-content h3 { font-size: 1.0625rem; margin-block-start: .5rem; }
 @media (min-width: 60rem) {
-  .filmmaker-help section { grid-template-columns: minmax(13rem, 1fr) minmax(0, 2fr); column-gap: 3rem; }
-  .filmmaker-help section > :not(h2) { grid-column: 2; }
+  .reference-content section { grid-template-columns: minmax(13rem, 1fr) minmax(0, 2fr); column-gap: 3rem; }
+  .reference-content section > :not(h2) { grid-column: 2; }
   .film-sharing, .thumbnail-editor, .thumbnail-readonly { grid-template-columns: minmax(0, 1fr) minmax(0, 1.85fr); column-gap: 1.5rem; align-items: start; }
   .thumbnail-tools { display: grid; min-width: 0; align-content: start; gap: .875rem; }
 }
@@ -313,6 +314,5 @@ button.info-button:is(:hover, [aria-expanded=true]) { background: var(--subtle);
 .sign-in-panel input[type=email] { width: min(100%, 42rem); }
 .sign-in-panel [hidden] { display: none; }
 .cf-turnstile { min-width: 0; }
-:is(.filmmaker-agreement, .privacy-policy) { display: grid; gap: 1.5rem; max-width: 70ch; }
-:is(.filmmaker-agreement, .privacy-policy) :is(header, section) { display: grid; gap: .375rem; }
-.filmmaker-help > .faq-intro { max-width: none; }
+.reference-content > header { display: grid; gap: .375rem; }
+.reference-content > .faq-intro { max-width: none; }

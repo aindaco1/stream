@@ -19,13 +19,18 @@
 .home-notes h2 { font: 500 clamp(1.5rem, 2.5vw, 2.05rem)/1.1 Georgia, 'Times New Roman', serif; letter-spacing: -.035em; }
 .home-notes p { max-width: 56ch; }
 @media (width > 48rem) {
-  .home-lead { min-block-size: var(--demo-section-height, 0px); }
-  .home-pitch {
-    align-content: center;
-    min-block-size: var(--opening-poster-height, 0px);
-    margin-block: var(--opening-poster-inset, auto) auto;
+  /* The copy and the opening poster share a center before the iframe loads. */
+  .home-lead {
+    --poster-space: clamp(54rem, calc(44rem + 15vw), 57rem);
+    min-block-size: var(--demo-section-height, 0px);
   }
+  .home-pitch { min-block-size: var(--poster-space); align-content: center; }
   .home-excerpt { align-self: center; position: sticky; top: var(--page-gutter); }
+  .home-excerpt:not([data-interacting]) {
+    display: grid; min-block-size: var(--poster-space); grid-template-rows: 1fr auto 1fr;
+  }
+  .home-excerpt figcaption { align-self: end; }
+  .home-excerpt .excerpt-source { align-self: start; justify-self: start; }
 }
 @media (max-width: 48rem) {
   .home-lead, .home-notes { grid-template-columns: minmax(0, 1fr); }

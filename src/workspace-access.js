@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { workspacePage, signInPath, signOutPath } from './workspace-page.js';
+import { workspacePage, dashboardPath, signInPath, signOutPath } from './workspace-page.js';
 import { agreementFor } from './filmmaker-agreement.js';
 import { escapeHtml } from './film-embed.js';
 import { mailbox, sendStreamEmail } from './stream-email.js';
@@ -25,15 +25,14 @@ export function readSessionCookie(cookieHeader, audience, secure) {
   return cookieHeader?.split(/;\s*/).find(cookie => cookie.startsWith(prefix))?.slice(prefix.length);
 }
 
-function dashboardPath(audience) {
-  return audience === 'admin' ? '/setup/admin' : '/setup/dashboard';
-}
-
 export function headerSession(store, cookieHeader, secure) {
   for (const audience of ['admin', 'filmmaker']) {
     const token = readSessionCookie(cookieHeader, audience, secure);
     const session = token && store.session(token, audience);
-    if (session) return { action: signOutPath(audience === 'admin'), csrf: session.csrf, dashboard: dashboardPath(audience) };
+    if (session) {
+      const admin = audience === 'admin';
+      return { action: signOutPath(admin), csrf: session.csrf, dashboard: dashboardPath(admin) };
+    }
   }
   return null;
 }
@@ -112,7 +111,7 @@ export async function handleAccess({path, method, get, origin, env, store, mode,
       : store.redeemLogin(code || '', legacyAudience);
     if (!login?.id) return showAccess(401, 'This link is no longer valid. Request a fresh email link.', true);
     const admin = login.audience === 'admin';
-    const destination = signup ? '/setup/settings' : dashboardPath(login.audience);
+    const destination = signup ? '/setup/settings' : dashboardPath(admin);
     return redirect(destination, { 'Set-Cookie': sessionCookie(login.id, admin ? 12 * 3600 : 14 * 86400, login.audience, origin.startsWith('https:')) });
   } catch (e) { return reject(e.statusCode || 400, 'Check the sign-in form and try again.'); }
 }

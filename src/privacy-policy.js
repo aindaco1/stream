@@ -1,7 +1,7 @@
 import { workspacePage } from './workspace-page.js';
 
 export function privacyPage(options = {}) {
-  return workspacePage('Privacy policy', null, `<article class="privacy-policy">
+  return workspacePage('Privacy policy', null, `<article class="privacy-policy reference-content">
     <header><h1>Privacy policy</h1><p>Last updated November 25, 2026</p>
       <p>Dust Wave runs Stream from New Mexico. This policy covers streamyourfilm.com and the Stream player, including when you watch on a filmmaker’s site. The site around the player has its own privacy practices.</p></header>
     <section><h2>When you watch a film</h2>

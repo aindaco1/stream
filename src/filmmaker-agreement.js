@@ -18,7 +18,7 @@ export function agreementModeForPath(path) {
 
 export function renderFilmmakerAgreement(mode = 'test') {
   const live = mode === 'live';
-  return `<article class="filmmaker-agreement">
+  return `<article class="filmmaker-agreement reference-content">
     <header><h1>Filmmaker agreement</h1><p class="hint">${live ? 'Live pilot edition 1' : 'Pilot edition 1'} · November 21, 2026</p></header>
     <p>This is the agreement between you and Stream, operated by Dust Wave, when you open a filmmaker workspace. If you’re signing up for a company or a filmmaking team, you confirm you can agree on its behalf.</p>
     <section><h2>Your film stays yours</h2><p>You and your collaborators keep your rights. Stream takes no ownership, distribution rights, exclusivity or royalties. You choose where to embed your work, what viewers can rent or download, and at what price. You can distribute it elsewhere at any time.</p></section>
