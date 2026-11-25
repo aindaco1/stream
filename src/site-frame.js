@@ -2,6 +2,10 @@ export const siteIcons = `<link rel="icon" href="/favicon.ico" sizes="16x16 32x3
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">`;
 
+export function siteBrand(home) {
+  return `<a class="brand" href="${home}" aria-label="Stream home"><img src="/favicon.svg" width="40" height="40" alt="">Stream</a>`;
+}
+
 export function faqLink(current = false, href = '/faq') {
   return `<a href="${href}"${current ? ' aria-current="page"' : ''}>FAQ</a>`;
 }

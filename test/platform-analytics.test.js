@@ -24,7 +24,7 @@ test('operator-only analytics has its own invitations, session, directory and si
   const maker = store.invite('Owner');
   const admin = store.invite('Owner', 'admin');
   for (let i = 0; i < 25; i++) store.invite('Zero films ' + String(i).padStart(2,'0'));
-  assert.equal((await get('/setup/admin')).headers.get('location'), '/setup/admin/sign-in');
+  assert.equal((await get('/setup/admin')).headers.get('location'), '/admin/sign-in');
   assert.equal((await post('/setup/sign-in', { code: admin })).status, 401);
   assert.equal((await post('/setup/admin/sign-in', { code: maker })).status, 401);
   const filmmaker = await post('/setup/sign-in', { code: maker });

@@ -1,15 +1,15 @@
-import { faqLink, siteFooter, siteIcons } from './site-frame.js';
+import { faqLink, siteBrand, siteFooter, siteIcons } from './site-frame.js';
 import { escapeHtml } from './film-embed.js';
 import { hidden } from './offer-fields.js';
 
 const publicDescriptions = new Map([
-  ['Create your filmmaker workspace', 'Embed your films on your own website. Join the Stream pilot to try previews, rentals and downloads with your own film storage.'],
-  ['Filmmaker sign-in', 'Sign in to your Stream filmmaker workspace with a private email link.'],
+  ['Sign up', 'Reach viewers on the open web. Set your prices, keep your rights and sell rentals or downloads directly from your film player.'],
+  ['Sign in', 'Sign in to Stream with a private email link.'],
   ['FAQ', 'Learn how to put a film on your website, create a program, connect storage and payments, and understand fees and viewer access.'],
   ['Filmmaker agreement', 'Read the Stream pilot terms for filmmakers, including film ownership, permissions, storage and viewer access.']
 ]);
 
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, signInHref = '/setup/sign-in', turnstile = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, signInHref = '/admin/sign-in', turnstile = false } = {}) {
   const current = ' aria-current="page"';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -29,9 +29,9 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     ${programEditor ? '<script type="module" src="/setup/program-editor.js"></script><script type="module" src="/setup/thumbnail.js"></script>' : ''}
     ${filmUpload ? '<script type="module" src="/setup/video-upload.js"></script>' : ''}</head>
     <body><a class="skip" href="#main">Skip to content</a>
-    <header class="masthead"><div class="bar"><a class="brand" href="${admin ? '/setup/admin' : '/'}" aria-label="Stream home">Stream</a>
+    <header class="masthead"><div class="bar">${siteBrand(admin ? '/setup/admin' : '/')}
       ${faqLink(faq, admin ? '/setup/admin/faq' : csrf ? '/setup/faq' : '/faq')}
-      <label class="appearance" title="Appearance"><span aria-hidden="true">🌓</span><select aria-label="Appearance" data-appearance-select>
+      <label class="appearance" title="Appearance"><select aria-label="Appearance" data-appearance-select>
         <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
       </select></label>
       ${csrf ? `<form method="post" action="${admin ? '/setup/admin/sign-out' : '/setup/sign-out'}">${hidden('csrf', csrf)}

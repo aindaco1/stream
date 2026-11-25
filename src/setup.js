@@ -1,5 +1,5 @@
 import { staticAsset } from './static-asset.js';
-import { accessPage, handleAccess, isAccessPath } from './workspace-access.js';
+import { accessPage, accessPath, handleAccess, sessionCookie, sessionCookieName, signInPath, signUpPath } from './workspace-access.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { streamSender } from './stream-email.js';
 import { agreementModeForPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
@@ -170,8 +170,8 @@ export async function createSetup({
     const admin = path === '/setup/admin' || path.startsWith('/setup/admin/');
     const audience = admin ? 'admin' : 'filmmaker';
     const basePath = admin ? '/setup/admin' : '/setup';
-    const cookieName = (secure ? '__Secure-' : '') + (admin ? 'stream_admin' : 'stream_setup');
-    const cookie = (value, age) => cookieName + '=' + value + '; Path=' + basePath + '; HttpOnly; SameSite=Lax; Max-Age=' + age + (secure ? '; Secure' : '');
+    const cookieName = sessionCookieName(audience, secure);
+    const cookie = (value, age) => sessionCookie(value, age, audience, secure);
     const sessionId = req.headers.cookie?.split(/;\s*/).find(v => v.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
     const session = store.session(sessionId, audience);
     const provider = stripe ?? createStripeSetup({ env, origin });
@@ -198,19 +198,19 @@ export async function createSetup({
     if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(mode, checkout.salesTerritory), { faq: true, admin }));
     const edition = agreementModeForPath(path);
     if (get && edition) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(edition), { reference: true }));
-    const signup = ['/setup/home', '/setup/sign-up', '/setup/sign-up/request'].includes(path);
-    const showAccess = (status, message = '', error = false) => html(status, accessPage({ message, admin, signup, siteKey, error, mode }), siteKey ? {
+    const signup = accessPath(path) === signUpPath;
+    const showAccess = (status, message = '', error = false) => html(status, accessPage({ message, signup, siteKey, error, mode }), siteKey ? {
       'Content-Security-Policy': csp.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com") +
         "; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com"
     } : {});
-    if (get && path === '/setup/home') return session ? redirect('/setup/dashboard') : showAccess(200);
-    if (isAccessPath(path)) return handleAccess({path, method, get, origin, env, store, mode, siteKey, from,
-      showAccess, redirect, reject, cookie, formData: () => readForm(req), verifyChallenge, mailFetch});
+    if (get && path === '/setup/home') return session ? redirect('/setup/dashboard') : redirect(signUpPath);
+    if (accessPath(path)) return handleAccess({path, method, get, origin, env, store, mode, siteKey, from,
+      showAccess, redirect, reject, formData: () => readForm(req), verifyChallenge, mailFetch});
     const metricsOnly = get && req.headers['x-stream-analytics'] !== undefined;
     if (metricsOnly && (!session || req.headers['x-stream-analytics'] !== session.csrf)) return reject(401, 'Sign in again.');
     const metrics = markup => html(200, markup, {'X-Stream-Analytics':'1', 'Cache-Control':'no-store'});
     if (admin) {
-      if (!session) return get ? redirect(basePath + '/sign-in') : reject(401, 'Sign in as a super admin.');
+      if (!session) return get ? redirect(signInPath) : reject(401, 'Sign in as a super admin.');
       if (get && path === basePath) {
         const report = store.platformReport(searchParams.get('maker'), Number(searchParams.get('page') || 1));
         if (!report) return reject(404, 'Filmmaker unavailable.');
@@ -254,14 +254,14 @@ export async function createSetup({
         try { form = await readForm(req); } catch { return reject(400, 'Use the sign-out form.'); }
         if (form.csrf !== session.csrf) return reject(403, 'Reload before signing out.');
         store.signOut(sessionId);
-        return redirect(basePath + '/sign-in', { 'Set-Cookie': cookie('', 0) });
+        return redirect(signInPath, { 'Set-Cookie': cookie('', 0) });
       }
       return reject(404, 'Page unavailable.');
     }
     const preview = previewPattern.exec(path);
     if (!session) {
       if (get && path === '/setup') return redirect('/setup/home');
-      if (get && (path === '/setup/dashboard' || path === '/setup/settings' || path === '/setup/dashboard/new')) return redirect('/setup/sign-in');
+      if (get && (path === '/setup/dashboard' || path === '/setup/settings' || path === '/setup/dashboard/new')) return redirect(signInPath);
       if (get && callbackPattern.test(path)) return showAccess(401, 'Your Stream session has ended. Sign in again and continue from the Stripe card.', true);
       return reject(401, 'Sign in to your filmmaker workspace.');
     }
@@ -537,7 +537,7 @@ export async function createSetup({
         }
         return redirect('/setup/program/' + saved.id + (removing ? '?removed=' + data.action.slice(7) : '?saved=1'));
       }
-      if (path === '/setup/sign-out') { store.signOut(sessionId); return redirect('/setup/sign-in', { 'Set-Cookie': cookie('', 0) }); }
+      if (path === '/setup/sign-out') { store.signOut(sessionId); return redirect(signInPath, { 'Set-Cookie': cookie('', 0) }); }
       const { r2, draft } = store.maker(owner);
       if (callback || path === '/setup/stripe/start' || path === '/setup/stripe/check') {
         const ctx = store.stripeContext(owner, mode);

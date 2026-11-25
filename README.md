@@ -12,7 +12,7 @@ Viewers pay once in the embed. **Previous title** and **Next title** move throug
 
 Open the [filmmaker workspace](https://streamyourfilm.com/). For local development, run `npm start` and open `/`. Filmmakers can sign up with an email address and the [pilot filmmaker agreement](src/filmmaker-agreement.js). They confirm their email and acceptance before Stream creates a workspace. The stored receipt records the agreement edition, email and confirmation time. Returning filmmakers choose **Sign in** on the same page. Both forms use Turnstile. Email links work once for 15 minutes. A filmmaker session lasts 14 days.
 
-For an existing named workspace without an email, the operator can attach an address using its exact name. Super admins must be enrolled by the operator and sign in at `/setup/admin/sign-in` for a separate 12-hour session.
+For an existing named workspace without an email, the operator can attach an address using its exact name. Both roles use `/admin/sign-in`. An email enrolled by the operator opens platform analytics with a separate 12-hour admin session. New filmmakers register at `/admin/sign-up`.
 
 ```sh
 npm run invite -- "Existing filmmaker name" --email filmmaker@example.org
@@ -29,7 +29,7 @@ A filmmaker can set the rental and purchase prices for a film in setup. Leaving 
 
 **Settings** opens on Storage. Choose **Replace R2 key** to update access to the selected bucket, or **Use a different bucket** for future uploads. Storage and Payments link to their sections in the public FAQ at `/faq#storage` and `/faq#payments`, with setup guidance, fees and worked examples.
 
-Use the **🌓** appearance selector in the filmmaker header to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, the FAQ, settings and the dashboard.
+Use the appearance selector in the filmmaker header to follow your system or choose **Light** or **Dark**. Your browser remembers the choice across sign-in, the FAQ, settings and the dashboard.
 
 ### Filmmaker dashboard
 
@@ -43,7 +43,7 @@ Under **Dashboard → Films → Thumbnail**, choose a JPEG, PNG or WebP up to 8 
 
 ### Platform analytics
 
-On the host, run `npm run invite -- --super-admin "Stream owner"` with the same `STREAM_STATE_DIR` and setup origin as the service. Open the private one-use link and select **Open platform analytics**. Reissue a link with the same name to return after the 12-hour session ends. The account is separate from filmmaker accounts, including a filmmaker with the same name.
+On the host, run `npm run invite -- --super-admin "Stream owner"` with the same `STREAM_STATE_DIR` and setup origin as the service. Open the private one-use link and select **Continue to Stream**. Reissue a link with the same name to return after the 12-hour session ends. The account is separate from filmmaker accounts, including a filmmaker with the same name.
 
 The read-only report at `/setup/admin` shows platform totals and a directory of filmmakers. Select a filmmaker to see their films, including titles with no sales. Platform tips appear separately from film revenue. Keep this invitation private.
 

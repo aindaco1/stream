@@ -8,10 +8,11 @@ import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
 import { airplayLeases, captionCues, captionMaster, captionSegment, screenerReference } from './airplay.js';
 import { openFilm } from './media.js';
-import { faqLink, siteFooter, siteIcons } from './site-frame.js';
+import { faqLink, siteBrand, siteFooter, siteIcons } from './site-frame.js';
 import { agreementModeForPath, renderFilmmakerAgreement } from './filmmaker-agreement.js';
 import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
+import { accessPath } from './workspace-access.js';
 import { escapeHtml, filmByline, posterChoice, renderFilmInfo, selectedFields } from './film-embed.js';
 import { formatDuration } from './offer-fields.js';
 import { programPresentation, streamProgramArchive } from './program-delivery.js';
@@ -222,7 +223,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           ...mediaHeaders, 'Content-Range': 'bytes ' + from + '-' + to + '/' + data.length
         });
       };
-      if (setup && (path === '/setup' || path.startsWith('/setup/'))) {
+      if (setup && (path === '/setup' || path.startsWith('/setup/') || accessPath(path))) {
         return await setup.handle(req, { path, origin, send, sendMp4 });
       }
       const read = req.method === 'GET' || req.method === 'HEAD';
@@ -248,7 +249,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         const embeds = catalog.list().map(({ id, title }) =>
           '<iframe src="/embed/' + encodeURIComponent(id) + '" title="' + escapeHtml(title) +
           '" loading="lazy" allow="autoplay; fullscreen; encrypted-media; payment; picture-in-picture" allowfullscreen></iframe>').join('\n');
-        return send(200, 'text/html; charset=utf-8', screening.replace('{{faqLink}}', faqLink()).replace('{{footer}}', siteFooter('/screening')).replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
+        return send(200, 'text/html; charset=utf-8', screening.replace('{{brand}}', siteBrand(hasWorkspace ? workspaceOrigin : '/')).replace('{{faqLink}}', faqLink()).replace('{{footer}}', siteFooter('/screening')).replace('{{embeds}}', () => embeds || '<p>No films available.</p>'),
           { 'Content-Security-Policy': "default-src 'none'; style-src 'self'; img-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'", 'X-Robots-Tag': 'noindex' });
       }
       if (checkout && (path === '/checkout/webhook' || path === '/checkout/platform-webhook')) {

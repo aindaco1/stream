@@ -75,16 +75,16 @@ const stripe = {
 
 async function checkSignup(page, origin) {
   const email = 'new-filmmaker@example.test';
-  const openEmail = async button => {
+  const openEmail = async (button, destination) => {
     const message = emails.at(-1);
     assert.deepEqual(message.to, [email]);
     await page.goto(message.text.match(/http:\S+/)[0]);
     await page.getByRole('button', {name:button, exact:true}).click();
-    await page.getByRole('heading', {name:'Settings', exact:true}).waitFor();
+    await page.getByRole('heading', {name:destination, exact:true}).waitFor();
     await page.getByText('Signed in as ' + email).waitFor();
   };
   await page.goto(origin);
-  await page.getByRole('heading', {name:'Create your filmmaker workspace'}).waitFor();
+  await page.getByRole('heading', {name:'Release your films on your own terms.'}).waitFor();
   const agree = page.getByRole('checkbox', {name:'I agree to the filmmaker agreement.'});
   assert.equal(await agree.isChecked(), false);
   await page.getByLabel('Email address').fill(email);
@@ -97,14 +97,14 @@ async function checkSignup(page, origin) {
   await agree.check();
   await page.getByRole('button',{name:'Email me a sign-up link'}).click();
   await page.getByRole('status').filter({hasText:/Check your inbox/}).waitFor();
-  await openEmail('Agree and create workspace');
+  await openEmail('Agree and create account', 'Settings');
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
   await page.goto(origin);
   await page.getByRole('link',{name:'Sign in',exact:true}).click();
   await page.getByLabel('Email address').fill(email);
   await page.getByRole('button',{name:'Email me a sign-in link'}).click();
   await page.getByRole('status').filter({hasText:/sign-in link will arrive/}).waitFor();
-  await openEmail('Open workspace');
+  await openEmail('Continue to Stream', 'Dashboard');
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
 }
 
@@ -144,8 +144,11 @@ async function checkAppearance(page, origin) {
 }
 
 async function signIn(page, origin, owner) {
+  // Bookmarked invitation links still carry their fragment to the shared sign-in page.
   await page.goto(origin + '/setup/sign-in#' + setup.store.invite(owner));
-  await page.getByRole('button', { name: 'Open workspace' }).click();
+  await page.getByRole('button', { name: 'Continue to Stream' }).click();
+  await page.waitForURL(origin + '/setup/dashboard');
+  await page.goto(origin + '/setup/settings');
   await page.getByRole('heading', { name: 'Settings', exact: true }).waitFor();
 }
 

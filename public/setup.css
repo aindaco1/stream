@@ -30,7 +30,7 @@ select[data-pointer-focus]:focus { outline: none; }
 .masthead { border-bottom: 1px solid var(--line); background: var(--surface); }
 .bar, main, .workspace-nav { width: var(--page-width); margin-inline: auto; }
 .bar { display: flex; flex-wrap: wrap; align-items: center; min-height: 4rem; padding-block: .5rem; gap: .5rem 1rem; }
-.brand { text-decoration: none; margin-inline-end: auto; font-size: 1.125rem; font-weight: 750; letter-spacing: -.035em; }
+.bar .brand { margin-inline-end: auto; }
 .bar .appearance { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .875rem; }
 :root:not([data-appearance-ready]) .appearance { display: none; }
 .bar .appearance select { margin: 0; width: auto; height: 2.75rem; font-size: 1rem; }
@@ -312,7 +312,13 @@ button.info-button:is(:hover, [aria-expanded=true]) { background: var(--subtle);
 @media (pointer: coarse) { button.info-button, .provider-card button.info-button { width: 2rem; height: 2rem; } }
 @media (forced-colors: active) { .info-tooltip { border: 1px solid CanvasText; } }
 
-.sign-in-panel { display: grid; gap: 1rem; max-width: 35rem; }
+.sign-in-panel { display: grid; gap: clamp(1.25rem, 3vw, 2rem); min-width: 0; }
+.access-intro { display: grid; gap: .65rem; }
+.access-intro h1 { max-width: 34ch; }
+.access-intro p { max-width: 78ch; }
+.access-intro p:first-of-type { font-size: clamp(1.1rem, 2vw, 1.3rem); }
+.access-intro p + p { color: var(--muted); }
+.sign-in-panel input[type=email] { width: min(100%, 42rem); }
 .sign-in-panel [hidden] { display: none; }
 .cf-turnstile { min-width: 0; }
 .filmmaker-agreement { display: grid; gap: 1.5rem; max-width: 70ch; }

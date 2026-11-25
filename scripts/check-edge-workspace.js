@@ -58,15 +58,17 @@ try {
   mf = new Miniflare({ ...convertV4MiniflareOptions(options), resourcePersistencePath: root });
   const landing = await mf.dispatchFetch('https://streamyourfilm.com/', { redirect: 'manual' });
   assert.equal(landing.headers.get('location'), '/setup/home');
-  const res = await mf.dispatchFetch('https://streamyourfilm.com/setup/home');
+  const home = await mf.dispatchFetch('https://streamyourfilm.com/setup/home', {redirect:'manual'});
+  assert.equal(home.headers.get('location'), '/admin/sign-up');
+  const res = await mf.dispatchFetch('https://streamyourfilm.com/admin/sign-up');
   const html = await res.text();
   if (res.status !== 200) throw Error(res.status + ' ' + html.slice(0, 400));
-  assert.match(html, /Create your filmmaker workspace/);
+  assert.match(html, /Release your films on your own terms/);
   console.log('Worker homepage and SQLite store opened.');
   for (const [name, test] of [
     ['faq', /How do I put a film/],
     ['setup/agreement/pilot-live-v1', /charged real money/],
-    ['setup/admin/sign-in', /Super admin sign-in/]
+    ['admin/sign-in', /Email me a sign-in link/]
   ]) {
     const r = await mf.dispatchFetch('https://streamyourfilm.com/' + name);
     assert.equal(r.status, 200);
@@ -83,10 +85,10 @@ try {
     });
   const get = (path, cookie) => mf.dispatchFetch(origin + path, { headers: { cookie }, redirect: 'manual' });
   const fields = { email: 'maker@example.test', agreement: 'pilot-live-v1', 'cf-turnstile-response': 'valid' };
-  assert.equal((await post('/setup/sign-up/request', fields, undefined, 'https://other.example')).status, 403);
-  assert.equal((await post('/setup/sign-up/request', { ...fields, 'cf-turnstile-response': 'bad' })).status, 400);
-  assert.equal((await post('/setup/sign-up/request', { ...fields, agreement: 'pilot-v1' })).status, 400);
-  const requested = await post('/setup/sign-up/request', fields);
+  assert.equal((await post('/admin/sign-up/request', fields, undefined, 'https://other.example')).status, 403);
+  assert.equal((await post('/admin/sign-up/request', { ...fields, 'cf-turnstile-response': 'bad' })).status, 400);
+  assert.equal((await post('/admin/sign-up/request', { ...fields, agreement: 'pilot-v1' })).status, 400);
+  const requested = await post('/admin/sign-up/request', fields);
   assert.equal(requested.status, 200, (await requested.text()).match(/feedback[^>]*>([^<]*)/)?.[1]);
   async function lastCode(number) {
     for (let i = 0; i < 40 && messages.length < number; i++)
@@ -97,22 +99,22 @@ try {
     return new URLSearchParams(link.hash.slice(1)).get('magic-link');
   }
   const code = await lastCode(1);
-  assert.equal((await post('/setup/sign-up', { agreement: 'pilot-v1', code })).status, 401);
-  const confirmed = await post('/setup/sign-up', { agreement: fields.agreement, code });
+  assert.equal((await post('/admin/sign-up', { agreement: 'pilot-v1', code })).status, 401);
+  const confirmed = await post('/admin/sign-up', { agreement: fields.agreement, code });
   assert.equal(confirmed.status, 303);
   const cookie = confirmed.headers.get('set-cookie').split(';')[0];
   assert.match(cookie, /__Secure-stream_setup=/);
-  assert.equal((await post('/setup/sign-up', { agreement: fields.agreement, code })).status, 401);
+  assert.equal((await post('/admin/sign-up', { agreement: fields.agreement, code })).status, 401);
   assert.match(await (await get('/setup/settings', cookie)).text(), /maker@example.test/);
   assert.equal((await get('/setup/admin', cookie)).status, 303);
   assert.equal((await get('/setup/home', cookie)).headers.get('location'), '/setup/dashboard');
   assert.equal(
-    (await post('/setup/admin/sign-in/request', { ...fields, email: 'operator@example.test' })).status,
+    (await post('/admin/sign-in/request', { ...fields, email: 'operator@example.test' })).status,
     200
   );
   const acode = await lastCode(2);
   assert.equal((await post('/setup/sign-in', { code: acode })).status, 401);
-  const admin = await post('/setup/admin/sign-in', { code: acode });
+  const admin = await post('/admin/sign-in', { code: acode });
   assert.equal(admin.status, 303);
   const acookie = admin.headers.get('set-cookie').split(';')[0];
   assert.match(await (await get('/setup/admin', acookie)).text(), /Platform analytics/);
