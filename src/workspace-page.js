@@ -12,6 +12,8 @@ const publicDescriptions = new Map([
   ['Filmmaker agreement', 'Read the Stream pilot terms for filmmakers, including film ownership, permissions, storage and viewer access.']
 ]);
 
+export const signInPath = '/admin/sign-in';
+
 // Both existing session cookies reach this path, including on visits from public pages.
 export const headerSessionPath = '/setup/admin/header-session';
 export const signOutPath = admin => admin ? '/setup/admin/sign-out' : '/setup/sign-out';
@@ -21,7 +23,7 @@ function signOutForm(csrf, admin) {
     <button class="sign-out" type="submit">Sign out</button></form>`;
 }
 
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, guestSignIn, landing = false, viewer = false, screening = false, home = admin ? '/setup/admin' : '/', turnstile = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, guestSignIn = true, landing = false, viewer = false, screening = false, home = admin ? '/setup/admin' : '/', turnstile = false } = {}) {
   const current = ' aria-current="page"';
   const checkSession = !csrf && !viewer;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -47,8 +49,8 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     <body><a class="skip" href="#main">Skip to content</a>
     <header class="masthead"><div class="bar">${siteBrand(home)}
       ${faqLink(faq, admin ? '/setup/admin/faq' : csrf ? '/setup/faq' : '/faq')}
-      ${guestSignIn && !csrf ? `<a href="${guestSignIn}" data-guest-sign-in>Sign in</a>` : ''}
-      ${csrf ? signOutForm(csrf, admin) : checkSession ? `<template data-header-session="${headerSessionPath}"${landing ? ' data-home' : ''}>${signOutForm('', false)}</template>` : ''}</div></header>
+      ${guestSignIn && checkSession ? `<a href="${signInPath}" data-guest-sign-in>Sign in</a>` : ''}
+      ${csrf ? signOutForm(csrf, admin) : checkSession ? `<template data-header-session="${headerSessionPath}">${signOutForm('', false)}</template>` : ''}</div></header>
       ${csrf && !admin ? `<nav class="workspace-nav" aria-label="Workspace navigation"><div class="tab-bar">
         <a href="/setup/dashboard"${dashboard && !faq ? current : ''}>Dashboard</a>
         <a href="/setup/settings"${dashboard || faq || reference ? '' : current}>Settings</a>
