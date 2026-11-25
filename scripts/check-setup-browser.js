@@ -82,10 +82,14 @@ async function checkSiteFrame(page, signOutPath, guestSignIn = false) {
   assert.ok(await appearance.evaluate(select => {
     const control = select.getBoundingClientRect();
     const footer = select.closest('.site-footer-inner');
-    const privacy = footer.querySelector('a[href="/privacy"]').getBoundingClientRect();
+    const items = [...footer.children].map(item => item.getBoundingClientRect());
+    const credit = document.createRange();
+    credit.selectNodeContents(footer.querySelector('span'));
     return Math.abs(control.right - footer.getBoundingClientRect().right) <= 1 &&
-      privacy.right < control.left && Math.abs(control.top - privacy.top) <= 1;
-  }), 'Appearance stays on the right of the footer beside the privacy link');
+      credit.getClientRects().length === 1 && items.every((item, i) =>
+        Math.abs(item.top + item.height / 2 - control.top - control.height / 2) <= 1 &&
+        (i === 0 || items[i - 1].right < item.left));
+  }), 'The credit, privacy link and appearance selector fit on one row');
   const logout = banner.getByRole('button', { name: 'Sign out', exact: true });
   if (signOutPath) {
     await logout.waitFor();
@@ -144,7 +148,10 @@ async function checkSignup(page, origin) {
   };
   await page.goto(origin);
   await page.getByRole('heading', {name:'Rent your film on your own site.'}).waitFor();
+  const originalSize = page.viewportSize();
+  await page.setViewportSize({...originalSize, width: 320});
   await checkSiteFrame(page, null, true);
+  await page.setViewportSize(originalSize);
   assert.equal(await page.getByLabel('Email address').count(), 0);
   const frame = page.frameLocator('iframe[title="Example Stream player for A Trip Down Market Street"]');
   const sample = frame.locator('video');
