@@ -24,6 +24,6 @@ try {
     console.log('Email sign-in enabled for this account.');
   } else {
     console.log('Private sign-in link (single use, expires in 30 minutes):');
-    console.log(origin + (admin ? '/setup/admin/sign-in#' : '/setup/sign-in#') + store.invite(name, admin ? 'admin' : 'filmmaker'));
+    console.log(origin + '/admin/sign-in#' + store.invite(name, admin ? 'admin' : 'filmmaker'));
   }
 } finally { store.close(); }

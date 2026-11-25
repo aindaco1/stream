@@ -31,44 +31,61 @@ async function fixture(t, env = {}) {
 
 test('email login requires a verified challenge and an enrolled address for that role', async t => {
   const { setup, messages, actions, origin, post, request } = await fixture(t);
-  const routes = ['/setup/sign-in','/setup/admin/sign-in'];
+  const path = '/admin/sign-in';
   const addresses = ['maker@example.test','operator@example.test'];
-  for (const [i,path] of routes.entries()) {
+  for (const [i,email] of addresses.entries()) {
     const role = i ? 'admin' : 'filmmaker';
     setup.store.invite('Pilot',role);
     setup.store.enrollLogin('Pilot',role,addresses[i]);
     assert.throws(()=>setup.store.enrollLogin('Pilot',role,'other@example.test'));
     assert.equal((await request(path,addresses[i],'verified','https://other.example')).status,403);
     assert.equal((await request(path,addresses[i],'')).status,400);
-    const unknown = await (await request(path,addresses[1-i])).text();
+    const unknown = await (await request(path,'unregistered@example.test')).text();
     assert.equal(messages.length,i);
     const known = await (await request(path,addresses[i].toUpperCase())).text();
     assert.equal(known,unknown);
     await request(path,addresses[i]);
     assert.equal(messages.length,i+1);
-    assert.equal(actions.at(-1),'stream_'+role);
-    assert.deepEqual(messages[i].to,[addresses[i]]);
+    assert.equal(actions.at(-1),'stream_signin');
+    assert.deepEqual(messages[i].to,[email]);
     const link = new URL(messages[i].text.match(/http:\S+/)[0]);
     assert.equal(link.origin,origin);
     assert.equal(link.pathname,path);
     assert.equal(link.search,'');
     const code = new URLSearchParams(link.hash.slice(1)).get('magic-link');
     assert.equal((await fetch(link)).status,200);
-    assert.equal((await post(routes[1-i],{code})).status,401);
-    const signedIn = await post(path,{code});
+    assert.equal((await post(i ? '/setup/sign-in' : '/setup/admin/sign-in',{code})).status,401);
+    const signedIn = await post(path,{code,audience:'admin'});
+    assert.equal(signedIn.headers.get('location'), i ? '/setup/admin' : '/setup/dashboard');
     assert.equal(signedIn.status,303);
     assert.match(signedIn.headers.get('set-cookie'),/HttpOnly/);
     assert.equal((await post(path,{code})).status,401);
   }
 });
 
+test('an enrolled admin address takes priority even when it also belongs to a filmmaker', async t => {
+  const {setup, messages, request, post} = await fixture(t);
+  const address = 'dual@example.test';
+  setup.store.enrollLogin('Maker', 'filmmaker', address);
+  setup.store.enrollLogin('Operator', 'admin', address);
+  await post('/admin/sign-up/request', {email: address, agreement: agreementVersion, 'cf-turnstile-response':'verified'});
+  await request('/admin/sign-in', address);
+  assert.equal(messages.length, 1);
+  const link = new URL(messages[0].text.match(/http:\S+/)[0]);
+  assert.equal(link.pathname, '/admin/sign-in');
+  const code = new URLSearchParams(link.hash.slice(1)).get('magic-link');
+  const response = await post(link.pathname, {code});
+  assert.equal(response.headers.get('location'), '/setup/admin');
+  assert.match(response.headers.get('set-cookie'), /stream_admin=.*Path=\/setup\/admin/);
+});
+
 test('public signup creates one filmmaker only after verified email and agreement confirmation', async t => {
   const { directory, messages, origin, actions, post, setup } = await fixture(t);
   const db = new DatabaseSync(join(directory, 'setup.sqlite'));
   t.after(() => db.close());
-  const signup = '/setup/sign-up';
+  const signup = '/admin/sign-up';
   const home = await fetch(origin + '/');
-  assert.match(await home.text(), /Create your filmmaker workspace/);
+  assert.match(await home.text(), /Release your films on your own terms/);
   assert.match(await (await fetch(origin + agreementPath)).text(), /no ownership, distribution rights, exclusivity or royalties/);
   const fields = {email:'New@Example.test', agreement:agreementVersion, 'cf-turnstile-response':'verified'};
   const submit = (overrides, source) => post(signup + '/request', {...fields, ...overrides}, source);
@@ -102,12 +119,12 @@ test('public signup creates one filmmaker only after verified email and agreemen
   assert.notEqual(receipt.owner, receipt.email);
   assert.equal((await fetch(origin+'/setup/home',{headers:{cookie},redirect:'manual'})).headers.get('location'), '/setup/dashboard');
   assert.match(await (await fetch(origin+'/setup/dashboard',{headers:{cookie}})).text(), /Signed in as new@example.test/);
-  assert.equal((await fetch(origin+'/setup/admin',{headers:{cookie},redirect:'manual'})).headers.get('location'), '/setup/admin/sign-in');
+  assert.equal((await fetch(origin+'/setup/admin',{headers:{cookie},redirect:'manual'})).headers.get('location'), '/admin/sign-in');
 
   setup.store.enrollLogin('Original filmmaker','filmmaker','existing@example.test');
   assert.equal(await (await submit({email:'EXISTING@example.test'})).text(),confirmation);
   const returning = new URL(messages.at(-1).text.match(/http:\S+/)[0]);
-  assert.equal(returning.pathname, '/setup/sign-in');
+  assert.equal(returning.pathname, '/admin/sign-in');
   const access = await post(returning.pathname,{code:new URLSearchParams(returning.hash.slice(1)).get('magic-link')});
   const session = access.headers.get('set-cookie').split(';')[0].split('=')[1];
   assert.equal(setup.store.session(session).owner,'Original filmmaker');

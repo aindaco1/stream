@@ -1,6 +1,6 @@
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { readBoundedText } from '@dustwave/worker-core/response-body';
-import { accessPage, handleAccess, isAccessPath } from '../src/workspace-access.js';
+import { accessPage, accessPath, handleAccess, sessionCookie, sessionCookieName, signInPath, signUpPath } from '../src/workspace-access.js';
 import { workspacePage } from '../src/workspace-page.js';
 import { agreementModeForPath, renderFilmmakerAgreement } from '../src/filmmaker-agreement.js';
 import { renderFilmmakerFaq } from '../src/filmmaker-help.js';
@@ -19,7 +19,7 @@ const assets =
 // Route these before starting a container, including one-time form submissions.
 export function isPublicWorkspaceRequest(request) {
   const path = new URL(request.url).pathname;
-  if (isAccessPath(path)) return true;
+  if (accessPath(path)) return true;
   if (request.method === 'POST') return path === '/setup/sign-out' || path === '/setup/admin/sign-out';
   if (request.method !== 'GET' && request.method !== 'HEAD') return false;
   return assets.test(path) || Boolean(agreementModeForPath(path)) ||
@@ -42,9 +42,8 @@ export async function workspaceResponse(
   const admins = path === '/setup/admin' || path.startsWith('/setup/admin/');
   const audience = admins ? 'admin' : 'filmmaker';
   const base = admins ? '/setup/admin' : '/setup';
-  const name = '__Secure-' + (admins ? 'stream_admin' : 'stream_setup');
-  const cookie = (value, age) =>
-    name + '=' + value + '; Secure; HttpOnly; SameSite=Lax; Path=' + base + '; Max-Age=' + age;
+  const name = sessionCookieName(audience, true);
+  const cookie = (value, age) => sessionCookie(value, age, audience, true);
   const id = request.headers
     .get('cookie')
     ?.split(/;\s*/)
@@ -93,14 +92,14 @@ export async function workspaceResponse(
     /^[123]x0{10,}/.test(value || '')
   );
   const siteKey = !testWidget && from && env.STREAM_TURNSTILE_SECRET_KEY && env.STREAM_TURNSTILE_SITE_KEY;
-  const signup = path === '/' || path === '/setup/home' || path.startsWith('/setup/sign-up');
+  const signup = accessPath(path) === signUpPath;
   const showAccess = (status, message, error) =>
-    response(status, accessPage({ admin: admins, signup, siteKey, message, error, mode: 'live', pilotNotice:env.STREAM_WORKSPACE_PHASE === 'full' ? 'Sign-ups are open.' : pilotNotice }));
+    response(status, accessPage({ signup, siteKey, message, error, mode: 'live', pilotNotice:env.STREAM_WORKSPACE_PHASE === 'full' ? '' : pilotNotice }));
   // Workspace cookies are scoped to /setup, so sign-in detection belongs there.
   if (get && path === '/') return redirect('/setup/home');
   if (get && ['/setup/home', '/setup'].includes(path))
-    return session ? redirect('/setup/dashboard') : showAccess(200);
-  if (isAccessPath(path))
+    return session ? redirect('/setup/dashboard') : redirect(signUpPath);
+  if (accessPath(path))
     return handleAccess({
       path,
       method: request.method,
@@ -114,7 +113,6 @@ export async function workspaceResponse(
       showAccess,
       redirect,
       reject,
-      cookie,
       formData,
       verifyChallenge,
       mailFetch,
@@ -129,10 +127,10 @@ export async function workspaceResponse(
     }
     if (!session || session.csrf !== form.csrf) return reject(403, 'Open the sign-out form on Stream.');
     store.signOut(id);
-    return redirect('/', { 'Set-Cookie': cookie('', 0) });
+    return redirect(signInPath, { 'Set-Cookie': cookie('', 0) });
   }
   if (['/setup/admin', '/setup/dashboard', '/setup/settings'].includes(path) && get) {
-    if (!session) return redirect(base + '/sign-in');
+    if (!session) return redirect(signInPath);
     if (admins) {
       const report = store.platformReport(
         url.searchParams.get('maker'),

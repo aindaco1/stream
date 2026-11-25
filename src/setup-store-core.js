@@ -179,6 +179,12 @@ export function createSetupStore(db, key, paymentMode, transaction) {
     if (audience === 'admin') sql('INSERT OR IGNORE INTO platform_admins(id) VALUES(?)').run(owner);
     else sql('INSERT OR IGNORE INTO makers(id,draft) VALUES(?,?)').run(owner, JSON.stringify(newDraft()));
   }
+  function enrolledAudience(email) {
+    // A previously enrolled operator may also have a filmmaker account.
+    return sql(`SELECT audience FROM login_addresses WHERE email=? AND
+      (audience='filmmaker' OR EXISTS(SELECT 1 FROM platform_admins WHERE id=login_addresses.owner))
+      ORDER BY CASE audience WHEN 'admin' THEN 0 ELSE 1 END LIMIT 1`).get(email)?.audience;
+  }
   function openSession(owner, audience, now) {
     const session = token();
     sql('DELETE FROM sessions WHERE expires<=?').run(now);
@@ -217,6 +223,8 @@ export function createSetupStore(db, key, paymentMode, transaction) {
       const email = mailbox(address)?.toLowerCase();
       if (!email) return;
       return transaction(() => {
+        audience ??= enrolledAudience(email);
+        if (!audience) return;
         const now = Date.now();
         const row = sql(`UPDATE login_addresses SET lastSent=? WHERE email=? AND audience=? AND lastSent<?
           AND (SELECT count(*) FROM login_addresses WHERE lastSent>=?)<60 RETURNING owner`)
@@ -231,9 +239,8 @@ export function createSetupStore(db, key, paymentMode, transaction) {
     requestSignup(address, version) {
       const email = mailbox(address)?.toLowerCase();
       if (!email || version !== agreementVersion) return;
-      if (sql("SELECT 1 FROM login_addresses WHERE email=? AND audience='filmmaker'").get(email)) {
-        return store.requestLogin(email, 'filmmaker');
-      }
+      const audience = enrolledAudience(email);
+      if (audience) return store.requestLogin(email, audience);
       return transaction(() => {
         const now = Date.now();
         sql('DELETE FROM signup_links WHERE expires<=?').run(now);
@@ -264,13 +271,18 @@ export function createSetupStore(db, key, paymentMode, transaction) {
         return openSession(owner, 'filmmaker', now);
       });
     },
-    signIn(code, audience = 'filmmaker') {
+    redeemLogin(code, expectedAudience = null) {
       if (!/^[\w-]{43}$/.test(code)) return;
       return transaction(() => {
-        const row = sql('DELETE FROM invitations WHERE digest=? AND expires>? AND audience=? RETURNING owner').get(hash(code), Date.now(), audience);
-        if (!row) return;
-        return openSession(row.owner, audience, Date.now());
+        const now = Date.now();
+        const row = sql(`DELETE FROM invitations WHERE digest=? AND expires>?
+          AND (? IS NULL OR audience=?) RETURNING owner,audience`).get(hash(code), now, expectedAudience, expectedAudience);
+        if (!row || (row.audience === 'admin' && !sql('SELECT 1 FROM platform_admins WHERE id=?').get(row.owner))) return;
+        return { id: openSession(row.owner, row.audience, now), audience: row.audience };
       });
+    },
+    signIn(code, audience = 'filmmaker') {
+      return store.redeemLogin(code, audience)?.id;
     },
     session(value, audience = 'filmmaker') {
       return value && sql(`SELECT owner, csrf,
