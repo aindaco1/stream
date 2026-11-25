@@ -2,10 +2,11 @@ import { privacyPage } from './privacy-policy.js';
 import { rangeFor } from './http-range.js';
 import { workspacePage } from './setup-view.js';
 import { staticAsset } from './static-asset.js';
-import { examplePath, exampleResponse } from './example-checkout.js';
+import { examplePath, exampleCheckout } from './example-checkout.js';
 import { createServer } from 'node:http';
 import { createCipheriv } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
+import { exampleMedia } from './workspace-assets.js';
 import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
@@ -189,7 +190,6 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
   const lookup = (id, entitled = false, revision) => catalog?.get(id, { entitled, ...(revision && {revision}) }) || (openMaker && filmSpec(id));
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, staticAsset(type, await readFile(new URL(file, import.meta.url)))])));
-  const homeExcerpt = setup && await readFile(new URL('../public/market-street-excerpt.mp4', import.meta.url));
   const server = createServer(async (req, res) => {
     const held = new Set();
     const connection = (spec, entitled = false, memberId) => acquire(spec, entitled, held, memberId);
@@ -232,19 +232,25 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
       if (setup && read && path === examplePath) return send(200, 'text/html; charset=utf-8', examplePlayer(template), exampleHeaders);
-      if (setup && path.startsWith(examplePath + '/')) {
-        const abort = new AbortController();
-        res.on('close', () => abort.abort());
-        const request = new Request(new URL(req.url, origin), { method: req.method,
-          headers: req.headers, signal: abort.signal });
-        const result = await exampleResponse(request, demoEnv);
-        res.writeHead(result.status, Object.fromEntries(result.headers));
-        if (result.body) await pipeline(result.body, res);
-        else res.end();
-        return;
+      if (setup && path === examplePath + '/checkout') {
+        const request = new Request(new URL(req.url, origin), { method: req.method, headers: req.headers });
+        const result = await exampleCheckout(request, demoEnv);
+        return send(result.status, 'application/json', await result.text(), Object.fromEntries(result.headers));
       }
-      if (homeExcerpt && read && path === '/market-street-excerpt.mp4') {
-        return sendMp4(homeExcerpt, { 'Cache-Control': 'public, max-age=86400' });
+      if (setup && read && Object.hasOwn(exampleMedia, path)) {
+        const file = await open(new URL(exampleMedia[path], import.meta.url));
+        try {
+          const {size} = await file.stat();
+          const range = req.headers.range ? rangeFor(req.headers.range, size) : [0, size - 1];
+          if (!range) return send(416, 'text/plain', '', { 'Content-Range': 'bytes */' + size });
+          const [start, end] = range;
+          res.writeHead(req.headers.range ? 206 : 200, { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes',
+            'Content-Length': end - start + 1, 'Cache-Control': 'public, max-age=86400',
+            ...(req.headers.range && { 'Content-Range': `bytes ${start}-${end}/${size}` }) });
+          if (req.method === 'HEAD') res.end();
+          else await pipeline(file.createReadStream({ start, end }), res);
+          return;
+        } finally { await file.close(); }
       }
       if (read && staticFiles.has(path)) {
         return staticFiles.get(path)(req, send);

@@ -13,7 +13,7 @@ export function renderPlayer(template, { published, style, fields, program, post
   const values = {
     siteIcons, paymentMode: mode, playerScript: example ? '/play-excerpt.js' : '/app.js',
     title, description: escapeHtml(description), style, poster: posterUrl ? ` poster="${escapeHtml(posterUrl)}"` : '',
-    downloadControl: example ? '<a id="example-download" href="/example/market-street/film.mp4" download="A Trip Down Market Street.mp4">Download the film (MP4, 227 MB)</a>'
+    downloadControl: example ? '<a id="example-download" href="/example/market-street/film.mp4" download="A Trip Down Market Street.mp4">Download the film (MP4, 18.4 MB)</a>'
       : '<form id="download" method="post"><input type="hidden" name="receipt"><button>Download film</button></form>',
     exampleOffers: example ? '<button type="button" id="example-offers" class="secondary" disabled>See rental and download options</button>' : '',
     previewSource: example ? ' src="/market-street-excerpt.mp4"' : '',

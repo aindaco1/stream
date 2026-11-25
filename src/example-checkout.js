@@ -5,36 +5,10 @@ import { tipFor } from './checkout-tips.js';
 export const examplePath = '/example/market-street';
 export const exampleTitle = 'A Trip Down Market Street';
 export const examplePrices = { rent: 500, buy: 1000 };
-const archiveFilm = 'https://tile.loc.gov/storage-services/service/mbrs/ntscrm/00015143/00015143.mp4';
 
-// The public-domain viewing copy stays at the archive. Streaming it from this
-// fixed path also lets the purchase button download the file on the same origin.
-export async function exampleResponse(request, env, fetchImpl = fetch) {
+export async function exampleCheckout(request, env, fetchImpl = fetch) {
   const url = new URL(request.url);
   const fail = status => new Response(null, { status, headers: { 'Cache-Control': 'no-store' } });
-  if (url.pathname === examplePath + '/film.mp4') {
-    if (!['GET', 'HEAD'].includes(request.method)) return fail(405);
-    try {
-      const mediaHeaders = new Headers();
-      for (const name of ['Range', 'If-Range']) {
-        if (request.headers.has(name)) mediaHeaders.set(name, request.headers.get(name));
-      }
-      const upstream = await fetchImpl(archiveFilm, {
-        method: request.method, headers: mediaHeaders, redirect: 'error', signal: request.signal
-      });
-      if (![200, 206, 416].includes(upstream.status)) {
-        await upstream.body?.cancel();
-        return fail(502);
-      }
-      const headers = new Headers({ 'Content-Type': 'video/mp4', 'Cache-Control': 'public, max-age=86400',
-        'Cross-Origin-Resource-Policy': 'same-origin', 'X-Content-Type-Options': 'nosniff' });
-      for (const name of ['Accept-Ranges', 'Content-Range', 'Content-Length', 'ETag', 'Last-Modified']) {
-        if (upstream.headers.has(name)) headers.set(name, upstream.headers.get(name));
-      }
-      return new Response(upstream.body, { status: upstream.status, headers });
-    } catch { return fail(502); }
-  }
-
   if (url.pathname !== examplePath + '/checkout') return fail(404);
   if (request.method !== 'POST') return fail(405);
   if (request.headers.get('Origin') !== url.origin) return fail(403);
@@ -51,7 +25,7 @@ export async function exampleResponse(request, env, fetchImpl = fetch) {
       if (!attempt.success) return fail(429);
     }
     const stripe = createStripeClient(key, { fetchImplementation: (url, init) =>
-      fetchImpl(url, { ...init, signal: AbortSignal.timeout(15000), redirect: 'error' }) });
+      fetchImpl(url, { ...init, signal: AbortSignal.timeout(15000), redirect: 'manual' }) });
     const session = await stripe.checkout.sessions.create({
       mode: 'payment', ui_mode: 'elements', allowed_payment_method_types: ['card'],
       adaptive_pricing: { enabled: false }, return_url: url.origin + examplePath,

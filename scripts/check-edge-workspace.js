@@ -1,7 +1,7 @@
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { randomBytes, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,11 +20,18 @@ async function bundleWorker(entry) {
     ...(await readdir(bundle)).filter(name => name.endsWith('.html')).map(name => ({ type: 'Text', path: join(bundle, name) }))
   ] };
 }
+const excerptFixture = await readFile(new URL('../public/market-street-excerpt.mp4', import.meta.url));
+const movieFixture = await readFile(new URL('../public/market-street.mp4', import.meta.url));
 const options = {
   outboundService: async (req) => {
     if (req.url === 'https://challenges.cloudflare.com/turnstile/v0/siteverify') {
       const body = await req.json();
       return Response.json({ success: body.response === 'valid' });
+    }
+    if (req.url === 'https://api.stripe.com/v1/checkout/sessions') {
+      assert.equal(req.headers.get('Authorization'), 'Bearer sk_test_fixture');
+      assert.equal((await req.formData()).get('line_items[0][price_data][unit_amount]'), '550');
+      return Response.json({ livemode: false, id: 'cs_test_demo', client_secret: 'cs_test_demo_secret_example', amount_total: 550 });
     }
     if (req.url === 'https://api.resend.com/emails') {
       messages.push(await req.json());
@@ -38,6 +45,7 @@ const options = {
   durableObjects: { STREAM_STORE: { className: 'StreamStore', useSQLite: true } },
   bindings: {
     STREAM_PUBLIC_ORIGIN: 'https://streamyourfilm.com',
+    STREAM_DEMO_STRIPE_SECRET_KEY: 'sk_test_fixture', STREAM_DEMO_STRIPE_PUBLISHABLE_KEY: 'pk_test_fixture',
     STREAM_VAULT_KEY: randomBytes(32).toString('base64url'),
     STREAM_ADMIN_EMAIL: 'operator@example.test',
     STREAM_RECOVERY_FROM: 'identity@example.test',
@@ -45,7 +53,11 @@ const options = {
     STREAM_TURNSTILE_SECRET_KEY: 'mock-secret',
     STREAM_TURNSTILE_SITE_KEY: 'mock-site'
   },
-  serviceBindings: { ASSETS: () => new Response('asset') }
+  serviceBindings: { ASSETS: req => {
+    if (req.url.endsWith('/film.mp4')) return new Response(movieFixture);
+    if (req.url.endsWith('/market-street-excerpt.mp4')) return new Response(excerptFixture);
+    return new Response('asset');
+  } }
 };
 let mf;
 try {
@@ -64,9 +76,18 @@ try {
   const excerpt = 'https://streamyourfilm.com/market-street-excerpt.mp4';
   const probe = await mf.dispatchFetch(excerpt, {headers:{Range:'bytes=0-1'}});
   assert.equal(probe.status, 206);
-  assert.equal(probe.headers.get('content-range'), 'bytes 0-1/5');
-  assert.equal(await probe.text(), 'as');
-  assert.equal((await mf.dispatchFetch(excerpt, {headers:{Range:'bytes=19-'}})).status, 416);
+  assert.equal(probe.headers.get('content-range'), 'bytes 0-1/' + excerptFixture.length);
+  assert.deepEqual(Buffer.from(await probe.arrayBuffer()), excerptFixture.subarray(0, 2));
+  assert.equal((await mf.dispatchFetch(excerpt, {headers:{Range:'bytes=' + excerptFixture.length + '-'}})).status, 416);
+  const film = 'https://streamyourfilm.com/example/market-street/film.mp4';
+  const tail = await mf.dispatchFetch(film, { headers: { Range: 'bytes=-2' } });
+  assert.equal(tail.status, 206);
+  assert.deepEqual(Buffer.from(await tail.arrayBuffer()), movieFixture.subarray(-2));
+  const sandbox = await mf.dispatchFetch('https://streamyourfilm.com/example/market-street/checkout?offer=rent&tip=10', {
+    method: 'POST', headers: { Origin: 'https://streamyourfilm.com' }
+  });
+  assert.equal(sandbox.status, 200);
+  assert.equal((await sandbox.json()).amount, 550);
   const home = await mf.dispatchFetch('https://streamyourfilm.com/setup/home', {redirect:'manual'});
   assert.equal(home.headers.get('location'), '/');
   const res = await mf.dispatchFetch('https://streamyourfilm.com/admin/sign-up');
