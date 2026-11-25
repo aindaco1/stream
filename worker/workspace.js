@@ -1,5 +1,6 @@
 import { privacyPage } from '../src/privacy-policy.js';
 import playerTemplate from '../public/player.html';
+import movieSizes from '../.local/worker-assets/movie-sizes.json' with { type: 'json' };
 import { examplePath, exampleCheckout } from '../src/example-checkout.js';
 import { exampleHeaders, examplePlayer } from '../src/player-page.js';
 import { rangeFor } from '../src/http-range.js';
@@ -26,14 +27,12 @@ const privatePages = new Set(['/setup/admin', '/setup/dashboard', '/setup/settin
 
 // Some asset bindings return the entire file for a byte-range request. Safari
 // starts video playback with a two-byte probe. Stream only the requested bytes of the fixed homepage movies.
-async function homeMovie(request, assets) {
+async function homeMovie(request, assets, size) {
   const asset = await assets.fetch(request);
   const range = request.headers.get('Range');
   if (request.method !== 'GET' || asset.status !== 200 || !range) return asset;
   const validator = request.headers.get('If-Range');
   if (validator && validator !== asset.headers.get('ETag') && validator !== asset.headers.get('Last-Modified')) return asset;
-  const size = Number(asset.headers.get('Content-Length'));
-  if (!Number.isSafeInteger(size) || size <= 0) return asset;
   const bounds = rangeFor(range, size);
   if (!bounds) {
     await asset.body.cancel();
@@ -73,7 +72,7 @@ export function routeWorkspace(request, env, { signupOnly = false } = {}) {
   const path = url.pathname;
   const read = request.method === 'GET' || request.method === 'HEAD';
   if (read && Object.hasOwn(workspaceAssets, path)) {
-    return Object.hasOwn(exampleMedia, path) ? homeMovie(request, env.ASSETS) : env.ASSETS.fetch(request);
+    return Object.hasOwn(exampleMedia, path) ? homeMovie(request, env.ASSETS, movieSizes[path]) : env.ASSETS.fetch(request);
   }
   if (read && path === examplePath) return new Response(request.method === 'HEAD' ? null : examplePlayer(playerTemplate), {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
