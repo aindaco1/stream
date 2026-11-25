@@ -1,6 +1,7 @@
 import { privacyPage } from '../src/privacy-policy.js';
 import playerTemplate from '../public/player.html';
-import { examplePath, exampleHeaders, examplePlayer } from '../src/player-page.js';
+import { examplePath, exampleResponse } from '../src/example-checkout.js';
+import { exampleHeaders, examplePlayer } from '../src/player-page.js';
 import { rangeFor } from '../src/http-range.js';
 import { filmmakerSettings, filmmakerDashboard, workspaceCsp, dashboardCsp } from '../src/filmmaker-pages.js';
 import { stripeSetupConfiguration } from '../src/setup-stripe.js';
@@ -51,8 +52,13 @@ export function routeWorkspace(request, env, { signupOnly = false } = {}) {
   if (read && Object.hasOwn(workspaceAssets, path)) {
     return path === '/market-street-excerpt.mp4' ? homeExcerpt(request, env.ASSETS) : env.ASSETS.fetch(request);
   }
+  if (read && path === examplePath) return new Response(request.method === 'HEAD' ? null : examplePlayer(playerTemplate), {
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex', ...exampleHeaders }
+  });
+  if (path.startsWith(examplePath + '/')) return exampleResponse(request, env);
   const page = read && (privatePages.has(path) || agreementModeForPath(path) ||
-    ['/', examplePath, '/privacy', '/setup', '/setup/home', headerSessionPath, '/faq', '/setup/faq', '/setup/admin/faq'].includes(path));
+    ['/', '/privacy', '/setup', '/setup/home', headerSessionPath, '/faq', '/setup/faq', '/setup/admin/faq'].includes(path));
   const signOut = request.method === 'POST' && (path === '/setup/sign-out' || path === '/setup/admin/sign-out');
   if (signupOnly || page || signOut || accessPath(path)) return env.STREAM_STORE.getByName('pilot-live').workspace(request);
 }
@@ -96,7 +102,6 @@ export async function workspaceResponse(
       }
     });
   if (get && path === '/privacy') return response(200, privacyPage());
-  if (get && path === examplePath) return response(200, examplePlayer(playerTemplate), exampleHeaders);
   const redirect = (path, headers) => response(303, '', { Location: path, ...headers });
   const reject = (status, msg) => response(status, msg, { 'Content-Type': 'text/plain; charset=utf-8' });
   const formData = async () => {

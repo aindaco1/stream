@@ -2,6 +2,7 @@ import { privacyPage } from './privacy-policy.js';
 import { rangeFor } from './http-range.js';
 import { workspacePage } from './setup-view.js';
 import { staticAsset } from './static-asset.js';
+import { examplePath, exampleResponse } from './example-checkout.js';
 import { createServer } from 'node:http';
 import { createCipheriv } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -16,7 +17,7 @@ import { renderFilmmakerFaq } from './filmmaker-help.js';
 import { createSetup } from './setup.js';
 import { accessPath } from './workspace-access.js';
 import { escapeHtml, posterChoice, selectedFields } from './film-embed.js';
-import { exampleHeaders, examplePath, examplePlayer, renderPlayer } from './player-page.js';
+import { exampleHeaders, examplePlayer, renderPlayer, stripePlayerHeaders } from './player-page.js';
 import { programPresentation, streamProgramArchive } from './program-delivery.js';
 import { stripeMode } from './stripe-mode.js';
 import { playbackSettings } from './operator.js';
@@ -34,6 +35,7 @@ const assets = new Map([
   ['/video-controls.js', ['../public/video-controls.js', 'text/javascript']],
   ['/select-focus.js', ['../public/select-focus.js', 'text/javascript']],
   ['/subtitles.js', ['../public/subtitles.js', 'text/javascript']],
+  ['/stripe-script.js', ['../public/stripe-script.js', 'text/javascript']],
   ['/checkout.js', ['../public/checkout.js', 'text/javascript']],
   ['/payment.js', ['../public/payment.js', 'text/javascript']],
   ['/platform-tip.js', [import.meta.resolve('@dustwave/worker-core/platform-tip'), 'text/javascript']],
@@ -114,19 +116,6 @@ function viewingOrder(text) {
   return { token:request.token, tipPercent:request.tipPercent, viewingAddress:address, programRevision };
 }
 
-// Only published player pages load Stripe. Each filmmaker's payment UI mounts
-// inside that film's frame. Card details are collected by Stripe.
-const stripePlayerHeaders = {
-  'Referrer-Policy': 'strict-origin',
-  'Content-Security-Policy': [
-    "default-src 'none'", "script-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com",
-    "style-src 'self'", "connect-src 'self' https://api.stripe.com https://checkout.stripe.com https://link.com https://*.link.com",
-    "frame-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com https://hooks.stripe.com https://link.com https://*.link.com",
-    "img-src 'self' data: https://*.stripe.com https://*.link.com", "media-src 'self' blob:", "worker-src 'none'",
-    "frame-ancestors *", "base-uri 'none'", "form-action 'self'"
-  ].join('; ')
-};
-
 function attachmentName(title, extension) {
   const name = String(title).replace(/[\p{C}/\\]/gu, '').trim().slice(0, 150).toWellFormed() || 'film';
   const encoded = encodeURIComponent(name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16));
@@ -139,7 +128,7 @@ const checkoutHeaders = {
   'X-Robots-Tag': 'noindex'
 };
 
-export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout, recovery, workspaceOrigin = process.env.STREAM_WORKSPACE_ORIGIN, mode = stripeMode(process.env), maxIndexes = 32 } = {}) {
+export async function makeServer(openMaker, { setup, publicOrigin, catalog, checkout, recovery, demoEnv = process.env, workspaceOrigin = process.env.STREAM_WORKSPACE_ORIGIN, mode = stripeMode(process.env), maxIndexes = 32 } = {}) {
   if (mode === 'live' && openMaker) throw new Error('Live Stream cannot serve rehearsal films.');
   if (!Number.isSafeInteger(maxIndexes) || maxIndexes < 1) throw new Error('A positive media index limit is required.');
   if (publicOrigin) {
@@ -243,6 +232,17 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
       }
       if (setup && read && path === examplePath) return send(200, 'text/html; charset=utf-8', examplePlayer(template), exampleHeaders);
+      if (setup && path.startsWith(examplePath + '/')) {
+        const abort = new AbortController();
+        res.on('close', () => abort.abort());
+        const request = new Request(new URL(req.url, origin), { method: req.method,
+          headers: req.headers, signal: abort.signal });
+        const result = await exampleResponse(request, demoEnv);
+        res.writeHead(result.status, Object.fromEntries(result.headers));
+        if (result.body) await pipeline(result.body, res);
+        else res.end();
+        return;
+      }
       if (homeExcerpt && read && path === '/market-street-excerpt.mp4') {
         return sendMp4(homeExcerpt, { 'Cache-Control': 'public, max-age=86400' });
       }

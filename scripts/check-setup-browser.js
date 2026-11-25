@@ -201,6 +201,7 @@ async function checkSignup(page, origin) {
   await frame.getByRole('slider', {name:'Optional tip'}).fill('0');
   await frame.getByRole('button', {name:'Buy · $10.00'}).click();
   await frame.getByText('Example purchase · Watch and download').waitFor();
+  await frame.getByText(/The Stripe test fields could not load/).waitFor();
   await checkDemoOrderFits(frame);
   await frame.getByRole('button', {name:'Back to film'}).click();
   await page.getByRole('contentinfo').getByRole('link', {name:'Privacy policy'}).click();
@@ -1005,7 +1006,7 @@ try {
   viewer = await makeServer(null, { catalog });
   await new Promise(resolve => viewer.listen(0, '127.0.0.1', resolve));
   env.STREAM_VIEWER_ORIGIN = 'http://127.0.0.1:' + viewer.address().port;
-  const app = await makeServer(() => { throw Error('Setup fixture is private'); }, { setup });
+  const app = await makeServer(() => { throw Error('Setup fixture is private'); }, { setup, demoEnv: {} });
   server = createServer((req, res) => {
     if (req.url === '/fixture/embed-host' && req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'text/html' });

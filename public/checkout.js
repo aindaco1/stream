@@ -1,25 +1,8 @@
+import { stripeScript } from './stripe-script.js';
 import { currency, displayOfferPrices, rentalLength } from './offer-display.js';
 
 const validToken = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 const kinds = ['rent', 'buy'];
-let scriptPromise;
-
-function stripeScript() {
-  scriptPromise ??= new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'https://js.stripe.com/endive/stripe.js';
-    script.referrerPolicy = 'origin';
-    script.onload = resolve;
-    script.onerror = () => {
-      script.remove();
-      scriptPromise = undefined;
-      reject(new Error('Stripe unavailable'));
-    };
-    document.head.append(script);
-  });
-  return scriptPromise;
-}
-
 function read(store, key) {
   try { return window[store].getItem(key); } catch { return null; }
 }

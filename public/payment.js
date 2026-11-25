@@ -20,7 +20,7 @@ function appearance(container) {
   };
 }
 
-export function createCardForm(stripe, order, onSubmit, complete, viewingAddress) {
+export function createCardForm(stripe, order, onSubmit, complete, viewingAddress, interrupted = complete) {
   const form = document.querySelector('#card-form');
   const button = document.querySelector('#confirm-payment');
   const errorBox = form.querySelector('#payment-error');
@@ -77,7 +77,7 @@ export function createCardForm(stripe, order, onSubmit, complete, viewingAddress
     }
     const amount = matches ? total.amount : '';
     price.textContent = amount && marketplace ? 'Total ' + amount : amount;
-    button.textContent = submitting ? 'Processing…' : waiting ? 'Confirming payment…' : amount ? 'Pay ' + amount : 'Pay';
+    button.textContent = submitting ? 'Processing…' : waiting ? 'Confirming payment…' : amount ? 'Pay ' + amount + (order.demo ? ' in test mode' : '') : 'Pay';
     button.disabled = submitting || waiting || !matches || !session.canConfirm;
     const changedPrice = 'The price has changed. Go back to the film and review the offer.';
     if (ready && !matches) feedback(changedPrice);
@@ -113,7 +113,7 @@ export function createCardForm(stripe, order, onSubmit, complete, viewingAddress
       if (!destroyed) {
         feedback('Confirmation was interrupted. Check payment before trying again.');
         errorBox.focus();
-        complete();
+        interrupted();
       }
     } finally {
       submitting = false;
@@ -144,7 +144,7 @@ export function createCardForm(stripe, order, onSubmit, complete, viewingAddress
       }
       payment = checkout.createPaymentElement({
         paymentMethodOrder: ['card'],
-        wallets: { link: 'never' },
+        wallets: { link: 'never', ...(order.demo && { applePay: 'never', googlePay: 'never' }) },
         layout: 'tabs',
         fields: { billingDetails: { email: 'never', address: automatic && !useViewingAddress ? 'never' : 'if_required' } }
       });

@@ -17,6 +17,7 @@
     "binding": "ASSETS",
     "run_worker_first": true
   },
+  "ratelimits": [{ "name": "STREAM_DEMO_LIMIT", "namespace_id": "74621", "simple": { "limit": 12, "period": 60 } }],
   "routes": [
     {
       "pattern": "streamyourfilm.com",
