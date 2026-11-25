@@ -9,6 +9,7 @@
   "keep_vars": true,
   "build": {"command": "node scripts/edge-assets.js"},
   "assets": {"directory": ".local/worker-assets", "binding": "ASSETS", "run_worker_first": true},
+  "ratelimits": [{ "name": "STREAM_DEMO_LIMIT", "namespace_id": "74621", "simple": { "limit": 12, "period": 60 } }],
   "routes": [
     {"pattern":"streamyourfilm.com","custom_domain":true},
     {"pattern":"watch.streamyourfilm.com","custom_domain":true}

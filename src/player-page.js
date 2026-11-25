@@ -1,5 +1,6 @@
 import { escapeHtml, filmByline, renderFilmInfo, selectedFields } from './film-embed.js';
 import { formatDuration } from './offer-fields.js';
+import { exampleTitle, examplePrices } from './example-checkout.js';
 import { siteIcons } from './site-frame.js';
 
 export function renderPlayer(template, { published, style, fields, program, posterUrl, previewSeconds, payable, checkout, recovery, mode, example = false }) {
@@ -12,6 +13,8 @@ export function renderPlayer(template, { published, style, fields, program, post
   const values = {
     siteIcons, paymentMode: mode, playerScript: example ? '/play-excerpt.js' : '/app.js',
     title, description: escapeHtml(description), style, poster: posterUrl ? ` poster="${escapeHtml(posterUrl)}"` : '',
+    downloadControl: example ? '<a id="example-download" href="/example/market-street/film.mp4" download="A Trip Down Market Street.mp4">Download the film (MP4, 227 MB)</a>'
+      : '<form id="download" method="post"><input type="hidden" name="receipt"><button>Download film</button></form>',
     exampleOffers: example ? '<button type="button" id="example-offers" class="secondary" disabled>See rental and download options</button>' : '',
     previewSource: example ? ' src="/market-street-excerpt.mp4"' : '',
     masthead: `<header class="poster-head"><div class="poster-imprint"><span id="poster-byline"${byline ? '' : ' hidden'}>${escapeHtml(byline)}</span>${runtime}</div>${style === 'broadside' ? heading : ''}</header>`,
@@ -26,15 +29,25 @@ export function renderPlayer(template, { published, style, fields, program, post
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key]);
 }
 
-export const examplePath = '/example/market-street';
-export const exampleHeaders = {
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'",
-  'X-Frame-Options': 'SAMEORIGIN'
-};
+function paymentHeaders(ancestors) {
+  return {
+    'Referrer-Policy': 'strict-origin',
+    'Content-Security-Policy': [
+      "default-src 'none'", "script-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com",
+      "style-src 'self'", "connect-src 'self' https://api.stripe.com https://checkout.stripe.com https://link.com https://*.link.com",
+      "frame-src 'self' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com https://hooks.stripe.com https://link.com https://*.link.com",
+      "img-src 'self' data: https://*.stripe.com https://*.link.com", "media-src 'self' blob:", "worker-src 'none'",
+      'frame-ancestors ' + ancestors, "base-uri 'none'", "form-action 'self'"
+    ].join('; ')
+  };
+}
+
+export const stripePlayerHeaders = paymentHeaders('*');
+export const exampleHeaders = { ...paymentHeaders("'self'"), 'X-Frame-Options': 'SAMEORIGIN' };
 
 export function examplePlayer(template) {
   const film = {
-    title: 'A Trip Down Market Street', duration: 503, prices: {rent: 500, buy: 1000}, rentalHours: 48,
+    title: exampleTitle, duration: 579, prices: examplePrices, rentalHours: 48,
     info: { byline: 'the Miles Brothers', synopsis: 'A cable car threads its way through San Francisco traffic in 1906, days before the earthquake.',
       credits: [{role: 'Filmed by', name: 'Miles Brothers'}, {role: 'Archival print', name: 'Library of Congress'}] }
   };

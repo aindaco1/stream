@@ -27,6 +27,8 @@ export const workspaceAssets = {
   '/style.css': '../public/style.css',
   '/offer-display.js': '../public/offer-display.js',
   '/platform-tip.js': '@dustwave/worker-core/platform-tip',
+  '/stripe-script.js': '../public/stripe-script.js',
+  '/payment.js': '../public/payment.js',
   '/play-excerpt.js': '../public/play-excerpt.js',
   '/filmmaker-home.css': '../public/filmmaker-home.css',
   '/market-street-still.webp': '../public/market-street-still.webp',

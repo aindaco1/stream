@@ -1,3 +1,4 @@
+import { stripeScript } from './stripe-script.js';
 import { currency, displayOfferPrices, offerAmounts, rentalLength } from './offer-display.js';
 
 const byId = id => document.getElementById(id);
@@ -12,10 +13,15 @@ const figure = frame?.closest('.home-excerpt');
 const hours = Number(document.body.dataset.rentalHours);
 const kinds = ['rent', 'buy'];
 let selected;
-// The example ends at an order summary, before any payment details.
-document.querySelector('.payment-action').hidden = true;
+let generation = 0;
+let card;
+let unlocked = false;
+const feedback = byId('payment-feedback');
+const originalPreview = video.getAttribute('src');
+feedback.setAttribute('role', 'status');
 
 function showOffers() {
+  document.body.setAttribute('data-interacting', '');
   figure?.setAttribute('data-interacting', '');
   seeOffers.hidden = true;
   offers.hidden = false;
@@ -23,29 +29,67 @@ function showOffers() {
   byId('terms').textContent = 'Rent for ' + rentalLength(hours) + ' from payment. Buy to watch and download.';
 }
 
-function playPreview() {
+function playFilm() {
   video.controls = true;
   stage.hidden = true;
-  video.play().catch(() => { byId('status').textContent = 'Select Play to try the preview again.'; });
+  video.play().catch(() => { byId('status').textContent = 'Select Play to try again.'; });
 }
 video.controls = false;
 stage.hidden = false;
-stage.addEventListener('click', playPreview);
-preview.addEventListener('click', playPreview);
+stage.addEventListener('click', playFilm);
+preview.addEventListener('click', playFilm);
 video.addEventListener('play', () => { preview.hidden = true; byId('status').textContent = ''; });
 video.addEventListener('ended', () => {
-  preview.textContent = 'Replay preview';
+  preview.textContent = unlocked ? 'Replay the film' : 'Replay preview';
   preview.hidden = false;
+  if (unlocked) return;
   byId('status').textContent = 'Preview complete.';
   showOffers();
 });
 seeOffers.addEventListener('click', event => {
+  if (unlocked) {
+    unlocked = false;
+    video.src = originalPreview;
+    video.controls = false;
+    stage.hidden = false;
+    preview.textContent = 'Play 10-second preview';
+    preview.hidden = false;
+    byId('ownership').hidden = true;
+    byId('status').textContent = '';
+  }
   showOffers();
   byId('rent').focus({ preventScroll: event.detail > 0 });
 });
 seeOffers.disabled = false;
 byId('tip-percent').addEventListener('input', () => displayOfferPrices(kinds, false, false));
-for (const kind of kinds) byId(kind).addEventListener('click', () => {
+function closePayment() {
+  generation++;
+  card?.destroy();
+  card = undefined;
+  document.body.classList.remove('paying');
+  payment.hidden = true;
+}
+
+function finishOrder(kind) {
+  closePayment();
+  unlocked = true;
+  offers.hidden = true;
+  video.src = location.pathname + '/film.mp4';
+  video.controls = true;
+  stage.hidden = false;
+  preview.textContent = 'Watch the full film';
+  preview.hidden = false;
+  seeOffers.textContent = 'Try another test checkout';
+  seeOffers.hidden = false;
+  byId('ownership').hidden = kind !== 'buy';
+  byId('status').textContent = kind === 'buy'
+    ? 'Test purchase complete. You can watch or download the film.'
+    : 'Test rental complete. A viewer’s 48 hours start at payment. You can now watch the full film.';
+  preview.focus({preventScroll: true});
+}
+
+async function startCheckout(kind) {
+  const run = ++generation;
   selected = kind;
   video.pause();
   const { price, tip, total } = offerAmounts(kind);
@@ -53,18 +97,45 @@ for (const kind of kinds) byId(kind).addEventListener('click', () => {
   byId('order-terms').textContent = kind === 'rent' ? 'Example rental · ' + rentalLength(hours) : 'Example purchase · Watch and download';
   byId('order-price').textContent = money(total);
   byId('order-tip').hidden = false;
-  byId('order-tip').textContent = 'Film ' + money(price) + ' + optional tip to Stream ' + money(tip) + '. Before any applicable tax.';
-  byId('payment-feedback').textContent = kind === 'rent'
-    ? 'This is a demonstration. In a published player, paying here starts the rental and unlocks the full film.'
-    : 'This is a demonstration. In a published player, paying here unlocks the full film and its download.';
+  byId('order-tip').textContent = 'Film ' + money(price) + ' + optional tip to Stream ' + money(tip) + '.';
+  feedback.textContent = 'Opening Stripe test checkout…';
   byId('status').textContent = '';
   payment.hidden = false;
   document.body.classList.add('paying');
   byId('checkout-heading').focus({preventScroll: true});
-});
+  try {
+    const params = new URLSearchParams({offer: kind, tip: byId('tip-percent').value});
+    const response = await fetch(location.pathname + '/checkout?' + params, {
+      method: 'POST', credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(20000)
+    });
+    if (response.status === 429) {
+      if (run === generation) feedback.textContent = 'Several test checkouts just opened. Go back and try again in a minute.';
+      return;
+    }
+    if (!response.ok) throw Error();
+    const order = await response.json();
+    if (run !== generation) return;
+    if (!order.publishableKey?.startsWith('pk_test_') || !order.clientSecret?.startsWith('cs_test_') || order.amount !== total) throw Error();
+    const [, { createCardForm }] = await Promise.all([stripeScript(), import('./payment.js')]);
+    if (run !== generation) return;
+    feedback.innerHTML = '<p>Use this test card <strong class="test-card-number">4242 4242 4242 4242</strong></p>' +
+      '<p>Expiry <strong>12/34</strong> · CVC <strong>123</strong> · ZIP <strong>10001</strong></p>';
+    const stripe = window.Stripe(order.publishableKey);
+    card = createCardForm(stripe, { ...order, demo: true }, () => {}, () => finishOrder(kind), undefined,
+      () => { feedback.textContent = 'Confirmation was interrupted. Go back to the film and try another test checkout.'; });
+    await card.mount();
+  } catch {
+    if (run !== generation) return;
+    card?.destroy();
+    card = undefined;
+    feedback.textContent = 'The Stripe test fields could not load. Go back to the film and open the offer to try again.';
+  }
+}
+
+document.querySelector('.payment-credit').textContent = 'Stripe test mode · No money moves';
+for (const kind of kinds) byId(kind).addEventListener('click', () => startCheckout(kind));
 byId('close-checkout').addEventListener('click', () => {
-  document.body.classList.remove('paying');
-  payment.hidden = true;
+  closePayment();
   byId(selected).focus({preventScroll: true});
 });
 
@@ -76,11 +147,11 @@ if (frame) {
   let lastWidth;
   let sectionHeight = 0;
   new ResizeObserver(() => {
-    if (!offers.hidden) frame.height = String(Math.ceil(main.getBoundingClientRect().height) + 2);
+    if (figure?.hasAttribute('data-interacting')) frame.height = String(Math.ceil(main.getBoundingClientRect().height) + 2);
     if (!lead) return;
     // After interaction, reserve space outside the player while its offers change height.
     const box = figure.getBoundingClientRect();
-    sectionHeight = offers.hidden || box.width !== lastWidth ? box.height : Math.max(sectionHeight, box.height);
+    sectionHeight = !figure.hasAttribute('data-interacting') || box.width !== lastWidth ? box.height : Math.max(sectionHeight, box.height);
     lastWidth = box.width;
     lead.style.setProperty('--demo-section-height', sectionHeight + 'px');
   }).observe(main);

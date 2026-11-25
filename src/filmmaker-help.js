@@ -65,10 +65,10 @@ export function renderFilmmakerFaq(mode = 'test', territory = '') {
       <p>Upload a film you own or have permission to distribute. It can be an MP4, MOV or MKV file, up to 10 GB and four hours long. Stream reads H.264, H.265 (also called HEVC), AV1 and VP9 video.</p>
       <p>After you connect your private Cloudflare bucket, you can upload the film and its thumbnail right from Stream, or choose a film already in the bucket. The original stays in your account. For a thumbnail, use a JPEG, PNG or WebP up to 8 MB. We recommend 1920 × 1080 pixels.</p>
     </section>
-    <section><h2>Can I watermark a rental screener?</h2>
+    <section id="watermark"><h2>Can I watermark a rental screener?</h2>
       <p>Yes. In Prices and playback for a film or program, turn on <strong>Rental screener watermark</strong>. A short, anonymous rental reference appears in an upper corner for four seconds each minute. It travels with the video during playback and uses no viewer name or email address. Previews, purchases and original downloads keep their usual picture.</p>
     </section>
-    <section><h2>Can viewers turn subtitles on?</h2>
+    <section id="subtitles"><h2>Can viewers turn subtitles on?</h2>
       <p>Yes. If the film has subtitles, tap or move over the video to show its controls. Choose the captions button to pick a language or turn subtitles off. Stream supports embedded text subtitles and DVD or Blu-ray picture subtitles. Check the private preview for the tracks available in your file.</p>
     </section>
     <section id="tv"><h2>Can I watch a rental on my TV?</h2>
@@ -84,7 +84,7 @@ export function renderFilmmakerFaq(mode = 'test', territory = '') {
       <p>A rental lets someone watch for the time you choose, from one hour to 30 days. Their time starts when they pay. Buying lets them watch and download the original file. You can offer either option or both. Sales are final.</p>
       <p>You can offer up to 180 seconds (3 minutes) for free. Leave at least one full second of the film after the preview. For a program, use the length of the video you chose for the preview. The usual default is 10 seconds. Choose zero to show the offers immediately.</p>
     </section>
-    <section><h2>How do I offer a double feature or a program of shorts?</h2>
+    <section id="programs"><h2>How do I offer a double feature or a program of shorts?</h2>
       <p>Once you’ve saved two films, choose <strong>Create program</strong> in the Programs section of your Dashboard. Pick at least two of your films, put them in screening order, and add an opening or closing video if you like. Choose the program image, preview and price, then publish and copy its embed code. Opening and closing videos you upload for a program are managed in its editor.</p>
       <p>Viewers pay once in the player and can move between titles with Previous title and Next title. The player remembers their caption choice when a matching track is available. One rental window covers the lineup. A purchase includes the original videos, in order, in a ZIP. After editing prices or the lineup, choose <strong>Publish changes</strong> to update the public embed. Earlier buyers keep their edition.</p>
     </section>

@@ -73,10 +73,10 @@ body[data-poster]:not(.paying) :is(#play, #rent, #buy, #download button, #restor
   border: 1px solid var(--ink); border-radius: 2px; color: var(--paper); background: var(--ink);
 }
 /* The homepage reserves the frame. The archival image fits the space left by the title, credits and buttons. */
-body[data-payment-mode=example] main:has(#purchase[hidden]) {
+body[data-payment-mode=example]:not([data-interacting]) main {
   height: min(100dvh, 52rem); grid-template-rows: auto minmax(4rem, 1fr) auto;
 }
-body[data-payment-mode=example] main:has(#purchase[hidden]) video {
+body[data-payment-mode=example]:not([data-interacting]) main video {
   height: 100%; max-height: none; aspect-ratio: auto; object-fit: contain;
 }
 body[data-payment-mode=example] #example-offers {
@@ -101,3 +101,9 @@ body[data-poster=broadside] .program-list > li {
 body[data-poster=broadside] .program-list > li::before { content: counter(screening, decimal-leading-zero); font: 900 1.7rem/1 var(--display); }
 body[data-poster=broadside] .program-actions { grid-column: 2; }
 body.paying .poster-head { display: none; }
+
+/* The homepage iframe grows with the card fields, including Stripe validation messages. */
+body[data-payment-mode=example].paying main:has(#card-form:not([hidden])) { max-height: none; }
+body[data-payment-mode=example] #payment-feedback p { color: var(--pay-text); margin-bottom: .5rem; }
+.test-card-number { display: block; width: fit-content; font-size: 1.125rem; font-variant-numeric: tabular-nums; user-select: all; }
+#example-download { color: var(--ink); text-underline-offset: .18em; }
