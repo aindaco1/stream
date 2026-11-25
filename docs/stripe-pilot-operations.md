@@ -24,7 +24,7 @@ For the first genuine purchase, match the order to its paid Checkout Session, su
 
 The live super-admin dashboard links **Review pending Stripe Tax fees** when an automatic-tax charge is waiting. Select a charge and enter the completed incurred-at Fees report ID. Stream retrieves that report from the live platform account and matches the transaction. If you separately verified a zero fee in Stripe, the checkbox records that decision with your operator identity, timestamp and report ID. For a zero decision the report must include the charge date and have been created at least four days after payment.
 
-For New Mexico filing, choose the reporting month in the live super-admin overview and select **Download district totals**. The CSV uses New Mexico calendar months, reports paid film and tip receipts net of included tax, and separates the tax on each. Combine these manual district totals with Stripe's automatic-tax records and review flagged disputes or adjustments. The export sends no filing or payment.
+For New Mexico filing, choose the reporting month in the live super-admin overview and select **Download totals**. The CSV uses New Mexico calendar months, reports paid film and tip receipts net of included tax, and separates the tax on each. Combine these manual district totals with Stripe's automatic-tax records and review flagged disputes or adjustments. The export sends no filing or payment.
 
 ## Rehearsal evidence, November 21, 2026
 

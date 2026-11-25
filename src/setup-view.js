@@ -246,9 +246,9 @@ export function renderPlatformDashboard(csrf, report, metricsOnly = false, live 
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
       <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films${total.programs ? ' · ' + total.programs + ' programs' : ''}</p></div>
     <section class="film-card"><h2>Overview</h2>${overview}${analyticsGuide(true)}
-      ${live && platform ? `<form class="film-actions" method="get" action="/setup/admin/new-mexico.csv">
+      ${live && platform ? `<form class="film-actions report-download" method="get" action="/setup/admin/new-mexico.csv">
         <label>New Mexico sales month<input type="month" name="month" required value="${reportingMonth()}"></label>
-        <button type="submit">Download district totals</button></form>
+        <button type="submit">Download totals</button></form>
         <small>These totals cover orders where Stream calculated New Mexico tax. Use Stripe’s tax report for orders calculated by Stripe. Review any flagged adjustments before filing.</small>` : ''}
       ${live && platform && total.pendingTaxFees ? '<p><a href="/setup/admin/tax-fees">Review pending Stripe Tax fees</a></p>' : ''}
       ${total.transfersToReview ? '<p class="hint">Review the affected marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>

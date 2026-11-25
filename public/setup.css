@@ -189,6 +189,7 @@ button:hover, .primary-link:hover { background: var(--accent-hover); }
 .film-sharing :is(h3, h4), .film-info-editor h3 { margin: 0; font-size: 1.125rem; }
 .info-fields { display: grid; gap: 1rem; }
 @media (min-width: 42rem) {
+  .report-download { flex-direction: column; align-items: flex-start; }
   .info-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .info-fields > :first-child, .info-fields > :last-child { grid-column: 1 / -1; }
 }
