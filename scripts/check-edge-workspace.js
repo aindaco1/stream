@@ -57,13 +57,18 @@ let mf;
 try {
   mf = new Miniflare({ ...convertV4MiniflareOptions(options), resourcePersistencePath: root });
   const landing = await mf.dispatchFetch('https://streamyourfilm.com/', { redirect: 'manual' });
-  assert.equal(landing.headers.get('location'), '/setup/home');
+  assert.equal(landing.status, 200);
+  const publicPage = await landing.text();
+  assert.match(publicPage, /Rent your film/);
+  assert.match(publicPage, /href="\/admin\/sign-up">Sign up for free/);
+  assert.doesNotMatch(publicPage, /name="email"|data-sitekey=/);
+  assert.match(landing.headers.get('content-security-policy'), /media-src 'self'/);
   const home = await mf.dispatchFetch('https://streamyourfilm.com/setup/home', {redirect:'manual'});
-  assert.equal(home.headers.get('location'), '/admin/sign-up');
+  assert.equal(home.headers.get('location'), '/');
   const res = await mf.dispatchFetch('https://streamyourfilm.com/admin/sign-up');
   const html = await res.text();
   if (res.status !== 200) throw Error(res.status + ' ' + html.slice(0, 400));
-  assert.match(html, /Release your films on your own terms/);
+  assert.match(html, /Sign up for Stream/);
   console.log('Worker homepage and SQLite store opened.');
   for (const [name, test] of [
     ['faq', /How do I put a film/],

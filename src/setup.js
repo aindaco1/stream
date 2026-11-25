@@ -1,3 +1,4 @@
+import { filmmakerHome } from './filmmaker-home.js';
 import { headerSessionPath } from './workspace-page.js';
 import { staticAsset } from './static-asset.js';
 import { accessPage, accessPath, handleAccess, headerSession, readSessionCookie, sessionCookie, signInPath, signUpPath } from './workspace-access.js';
@@ -201,6 +202,7 @@ export async function createSetup({
     if (get && scripts.has(path)) return scripts.get(path)(req, send, commonHeaders);
     if (method === 'POST' && req.headers.origin !== origin) return reject(403, 'Open the form in your Stream workspace.');
     const referenceHeaders = { 'Content-Security-Policy': csp + "; connect-src 'self'" };
+    if (get && path === '/') return html(200, filmmakerHome(), referenceHeaders);
     if (get && path === basePath + '/faq') return html(200, workspacePage('FAQ', session?.csrf, renderFilmmakerFaq(mode, checkout.salesTerritory), { faq: true, admin }), referenceHeaders);
     const edition = agreementModeForPath(path);
     if (get && edition) return html(200, workspacePage('Filmmaker agreement', session?.csrf, renderFilmmakerAgreement(edition), { reference: true }), referenceHeaders);
@@ -209,7 +211,7 @@ export async function createSetup({
       'Content-Security-Policy': csp.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com") +
         "; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com"
     } : referenceHeaders);
-    if (get && path === '/setup/home') return session ? redirect('/setup/dashboard') : redirect(signUpPath);
+    if (get && path === '/setup/home') return redirect(session ? '/setup/dashboard' : '/');
     if (accessPath(path)) return handleAccess({path, method, get, origin, env, store, mode, siteKey, from,
       showAccess, redirect, reject, formData: () => readForm(req), verifyChallenge, mailFetch});
     const metricsOnly = get && req.headers['x-stream-analytics'] !== undefined;

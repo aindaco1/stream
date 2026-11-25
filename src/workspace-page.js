@@ -3,6 +3,7 @@ import { escapeHtml } from './film-embed.js';
 import { hidden } from './offer-fields.js';
 
 const publicDescriptions = new Map([
+  ['Rent and sell independent films on your own site', 'Give your audience a place to watch. Embed rentals and downloads on your own site with no Stream subscription or commission.'],
   ['Sign up', 'Reach viewers on the open web. Set your prices, keep your rights and sell rentals or downloads directly from your film player.'],
   ['Sign in', 'Sign in to Stream with a private email link.'],
   ['Screening room', 'Preview films and programs and rent or buy directly in the player.'],
@@ -19,7 +20,7 @@ function signOutForm(csrf, admin) {
     <button class="sign-out" type="submit">Sign out</button></form>`;
 }
 
-export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, viewer = false, screening = false, home = admin ? '/setup/admin' : '/', turnstile = false } = {}) {
+export function workspacePage(title, csrf, content, { dashboard = false, builder = false, filmUpload = false, programEditor = false, programPreview = false, admin = false, faq = false, reference = false, signIn = false, guestSignIn, landing = false, viewer = false, screening = false, home = admin ? '/setup/admin' : '/', turnstile = false } = {}) {
   const current = ' aria-current="page"';
   const checkSession = !csrf && !viewer;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -29,6 +30,7 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     ${publicDescriptions.has(title) ? `<meta name="description" content="${escapeHtml(publicDescriptions.get(title))}">` : ''}
     <title>${escapeHtml(title)} · Stream</title><link rel="stylesheet" href="/site-frame.css"><link rel="stylesheet" href="/filmmaker.css">
     <link rel="stylesheet" href="/filmmaker-dark.css" media="(prefers-color-scheme: dark)" data-appearance-dark>
+    ${landing ? '<link rel="stylesheet" href="/filmmaker-home.css"><script type="module" src="/play-excerpt.js"></script>' : ''}
     ${screening ? '<link rel="stylesheet" href="/screening.css">' : ''}
     ${checkSession ? '<script type="module" src="/setup/header-session.js"></script>' : ''}
     ${programPreview ? '<link rel="stylesheet" href="/program-lineup.css">' : ''}
@@ -44,11 +46,12 @@ export function workspacePage(title, csrf, content, { dashboard = false, builder
     <body><a class="skip" href="#main">Skip to content</a>
     <header class="masthead"><div class="bar">${siteBrand(home)}
       ${faqLink(faq, admin ? '/setup/admin/faq' : csrf ? '/setup/faq' : '/faq')}
-      ${csrf ? signOutForm(csrf, admin) : checkSession ? `<template data-header-session="${headerSessionPath}">${signOutForm('', false)}</template>` : ''}</div></header>
+      ${guestSignIn && !csrf ? `<a href="${guestSignIn}" data-guest-sign-in>Sign in</a>` : ''}
+      ${csrf ? signOutForm(csrf, admin) : checkSession ? `<template data-header-session="${headerSessionPath}"${landing ? ' data-home' : ''}>${signOutForm('', false)}</template>` : ''}</div></header>
       ${csrf && !admin ? `<nav class="workspace-nav" aria-label="Workspace navigation"><div class="tab-bar">
         <a href="/setup/dashboard"${dashboard && !faq ? current : ''}>Dashboard</a>
         <a href="/setup/settings"${dashboard || faq || reference ? '' : current}>Settings</a>
       </div></nav>` : ''}
-    <main class="setup-shell${faq ? ' filmmaker-help' : screening ? ' screening-room' : ''}" id="main" tabindex="-1">${content}</main>
+    <main class="setup-shell${landing ? ' filmmaker-home' : faq ? ' filmmaker-help' : screening ? ' screening-room' : ''}" id="main" tabindex="-1">${content}</main>
     ${siteFooter(home)}</body></html>`;
 }

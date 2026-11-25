@@ -39,6 +39,9 @@ const assets = new Map([
   ['/filmmaker.css', ['../public/setup.css', 'text/css']],
   ['/filmmaker-dark.css', ['../public/setup-dark.css', 'text/css']],
   ['/dust-wave-square.webp', ['../public/dust-wave-square.webp', 'image/webp']],
+  ['/play-excerpt.js', ['../public/play-excerpt.js', 'text/javascript']],
+  ['/filmmaker-home.css', ['../public/filmmaker-home.css', 'text/css']],
+  ['/market-street-still.webp', ['../public/market-street-still.webp', 'image/webp']],
   ['/site-frame.css', ['../public/site-frame.css', 'text/css']],
   ['/screening.css', ['../public/screening.css', 'text/css']],
   ['/poster.css', ['../public/poster.css', 'text/css']],
@@ -201,6 +204,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
   const lookup = (id, entitled = false, revision) => catalog?.get(id, { entitled, ...(revision && {revision}) }) || (openMaker && filmSpec(id));
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, staticAsset(type, await readFile(new URL(file, import.meta.url)))])));
+  const homeExcerpt = setup && await readFile(new URL('../public/market-street-excerpt.mp4', import.meta.url));
   const server = createServer(async (req, res) => {
     const held = new Set();
     const connection = (spec, entitled = false, memberId) => acquire(spec, entitled, held, memberId);
@@ -223,12 +227,12 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
           ...mediaHeaders, 'Content-Range': 'bytes ' + from + '-' + to + '/' + data.length
         });
       };
-      if (setup && (path === '/setup' || path.startsWith('/setup/') || accessPath(path))) {
+      const read = req.method === 'GET' || req.method === 'HEAD';
+      if (setup && ((path === '/' && read) || path === '/setup' || path.startsWith('/setup/') || accessPath(path))) {
         return await setup.handle(req, { path, origin, send, sendMp4 });
       }
-      const read = req.method === 'GET' || req.method === 'HEAD';
-      if (setup && read && (path === '/' || path === '/faq')) {
-        return send(303, 'text/plain', '', { Location: path === '/' ? '/setup/home' : '/setup/faq' });
+      if (setup && read && path === '/faq') {
+        return send(303, 'text/plain', '', { Location: '/setup/faq' });
       }
       const hasWorkspace = workspaceOrigin && workspaceOrigin !== origin && (!publicOrigin || workspaceOrigin.startsWith('https://'));
       if (!setup && read && path === '/' && hasWorkspace) return send(303, 'text/plain', '', { Location: workspaceOrigin + '/' });
@@ -241,6 +245,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         return send(200, 'text/html; charset=utf-8', workspacePage(path === '/faq' ? 'FAQ' : 'Filmmaker agreement', null,
           path === '/faq' ? renderFilmmakerFaq(mode, checkout?.salesTerritory) : renderFilmmakerAgreement(edition), { faq: path === '/faq', viewer: true }),
           { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'" });
+      }
+      if (homeExcerpt && read && path === '/market-street-excerpt.mp4') {
+        return sendMp4(homeExcerpt, { 'Cache-Control': 'public, max-age=86400' });
       }
       if (read && staticFiles.has(path)) {
         return staticFiles.get(path)(req, send);

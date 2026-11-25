@@ -31,7 +31,7 @@ select[data-pointer-focus]:focus { outline: none; }
 .bar, main, .workspace-nav { width: var(--page-width); margin-inline: auto; }
 .bar { display: flex; flex-wrap: wrap; align-items: center; min-height: 4rem; padding-block: .5rem; gap: .5rem 1rem; }
 .bar .brand { margin-inline-end: auto; }
-.bar > a { display: inline-flex; align-items: center; min-height: 2.75rem; }
+.bar > a:not([hidden]) { display: inline-flex; align-items: center; min-height: 2.75rem; }
 @media (max-width: 26rem) {
   .bar { gap: .375rem; }
   .bar .sign-out { padding-inline: .25rem; }
@@ -310,11 +310,6 @@ button.info-button:is(:hover, [aria-expanded=true]) { background: var(--subtle);
 @media (forced-colors: active) { .info-tooltip { border: 1px solid CanvasText; } }
 
 .sign-in-panel { display: grid; gap: clamp(1.25rem, 3vw, 2rem); min-width: 0; }
-.access-intro { display: grid; gap: .65rem; }
-.access-intro h1 { max-width: 34ch; }
-.access-intro p { max-width: 78ch; }
-.access-intro p:first-of-type { font-size: clamp(1.1rem, 2vw, 1.3rem); }
-.access-intro p + p { color: var(--muted); }
 .sign-in-panel input[type=email] { width: min(100%, 42rem); }
 .sign-in-panel [hidden] { display: none; }
 .cf-turnstile { min-width: 0; }

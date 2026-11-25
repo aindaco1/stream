@@ -2,9 +2,11 @@
 // for the sign-out action without moving either credential to a broader path.
 const template = document.querySelector('template[data-header-session]');
 if (template) {
+  const guestLink = document.querySelector('[data-guest-sign-in]');
   let form;
   async function refresh() {
     form?.remove();
+    if (guestLink) guestLink.hidden = false;
     try {
       const response = await fetch(template.dataset.headerSession, {
         credentials: 'same-origin', mode: 'same-origin', redirect: 'error', cache: 'no-store'
@@ -12,6 +14,11 @@ if (template) {
       if (!response.ok) return;
       const session = await response.json();
       if (!session) return;
+      if (template.hasAttribute('data-home')) {
+        location.replace(session.dashboard);
+        return;
+      }
+      if (guestLink) guestLink.hidden = true;
       form = template.content.firstElementChild.cloneNode(true);
       form.action = session.action;
       form.elements.csrf.value = session.csrf;

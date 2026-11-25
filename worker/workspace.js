@@ -1,3 +1,4 @@
+import { filmmakerHome } from '../src/filmmaker-home.js';
 import { verifyTurnstile } from '@dustwave/worker-core/turnstile';
 import { readBoundedText } from '@dustwave/worker-core/response-body';
 import { accessPage, accessPath, handleAccess, headerSession, readSessionCookie, sessionCookie, signInPath, signUpPath } from '../src/workspace-access.js';
@@ -13,7 +14,7 @@ const csp =
   "default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 const pilotNotice = 'Sign-ups are open. Film uploads and paid screenings are being prepared.';
 const assets =
-  /^\/(?:favicon\.ico|favicon\.svg|apple-touch-icon\.png|dust-wave-square\.webp|site-frame\.css|filmmaker(?:-dark)?\.css|appearance\.js|select-focus\.js|setup\/(?:field-help|header-session|navigation|tabs|tabs-browser|analytics-refresh|sign-in|turnstile-size)\.js)$/;
+  /^\/(?:favicon\.ico|favicon\.svg|apple-touch-icon\.png|dust-wave-square\.webp|site-frame\.css|play-excerpt\.js|filmmaker-home\.css|market-street-(?:still\.webp|excerpt\.mp4)|filmmaker(?:-dark)?\.css|appearance\.js|select-focus\.js|setup\/(?:field-help|header-session|navigation|tabs|tabs-browser|analytics-refresh|sign-in|turnstile-size)\.js)$/;
 
 // Public identity and information share one owner in both deployment stages.
 // Route these before starting a container, including one-time form submissions.
@@ -96,10 +97,11 @@ export async function workspaceResponse(
   const signup = accessPath(path) === signUpPath;
   const showAccess = (status, message, error) =>
     response(status, accessPage({ signup, siteKey, message, error, mode: 'live', pilotNotice:env.STREAM_WORKSPACE_PHASE === 'full' ? '' : pilotNotice }));
-  // Workspace cookies are scoped to /setup, so sign-in detection belongs there.
-  if (get && path === '/') return redirect('/setup/home');
+  if (get && path === '/') return response(200, filmmakerHome(), {
+    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+  });
   if (get && ['/setup/home', '/setup'].includes(path))
-    return session ? redirect('/setup/dashboard') : redirect(signUpPath);
+    return redirect(session ? '/setup/dashboard' : '/');
   if (accessPath(path))
     return handleAccess({
       path,
