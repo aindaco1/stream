@@ -79,7 +79,7 @@ test('an enrolled admin address takes priority even when it also belongs to a fi
   assert.match(response.headers.get('set-cookie'), /stream_admin=.*Path=\/setup\/admin/);
 });
 
-test('public signup creates one filmmaker only after verified email and agreement confirmation', async t => {
+test('public signup creates one filmmaker after verifying the email for the accepted agreement', async t => {
   const { directory, messages, origin, actions, post, setup } = await fixture(t);
   const db = new DatabaseSync(join(directory, 'setup.sqlite'));
   t.after(() => db.close());
@@ -101,6 +101,8 @@ test('public signup creates one filmmaker only after verified email and agreemen
   assert.equal((await submit({},'https://other.example')).status, 403);
   assert.equal(messages.length, 0);
   const confirmation = await (await submit({})).text();
+  const pending = db.prepare('SELECT email, version, requestedAt FROM signup_links').get();
+  assert.equal(pending.version, agreementVersion);
   assert.match(confirmation, /Check your inbox/);
   assert.equal(await (await submit({})).text(), confirmation);
   assert.deepEqual(messages[0].to, ['new@example.test']);
@@ -119,6 +121,7 @@ test('public signup creates one filmmaker only after verified email and agreemen
   const cookie = responses.find(r => r.status === 303).headers.get('set-cookie').split(';')[0];
   const receipt = db.prepare('SELECT * FROM filmmaker_agreements').get();
   assert.equal(receipt.email,'new@example.test');
+  assert.equal(receipt.requestedAt, pending.requestedAt);
   assert.equal(receipt.version,agreementVersion);
   assert.ok(receipt.confirmedAt >= receipt.requestedAt);
   assert.ok(setup.store.maker(receipt.owner));

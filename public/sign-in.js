@@ -18,8 +18,8 @@ function openPrivateLink() {
 
   form.elements.code.value = code;
   document.querySelector('[data-request-link]').hidden = true;
-  // Sign-up confirms the agreement; older operator invitations use the manual form.
-  pendingSignIn = Boolean(emailCode && signInStatus);
+  // Only bare sign-in invitations require a manual confirmation.
+  pendingSignIn = Boolean(emailCode || form.elements.agreement);
   form.hidden = pendingSignIn;
   if (signInStatus) signInStatus.hidden = !pendingSignIn;
   if (pendingSignIn) signInWhenVisible();
