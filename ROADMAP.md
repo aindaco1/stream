@@ -1,16 +1,16 @@
 # Stream roadmap
 
-November 25, 2026
+## Live in the hosted pilot
 
-## Recommended next release
+The November 26, 2026 release (UTC) added filmmaker-managed coupons, separate SRT tracks and rental watermark lookup. [Stream release PR](https://github.com/aindaco1/stream/pull/42)
 
-**Ship the optional rental watermark improvements and the super-admin lookup together.** A filmmaker can send a screener, and support can trace a code found in a reported copy. Both pieces are implemented and tested locally. Production verification is pending.
+| Shipped | What a filmmaker or viewer can do |
+| --- | --- |
+| Coupons | Limit a code to one film or program, one kind of offer, a date or a number of uses. A 100% code grants the usual rental or purchase. We confirmed both in Stripe’s sandbox, including recovery and the purchase download entitlement. [Coupon FAQ](https://streamyourfilm.com/faq#coupons) |
+| Uploaded subtitles | Offer multiple tracks in the same language alongside embedded captions, including separate dialogue and SDH tracks. [Subtitle FAQ](https://streamyourfilm.com/faq#subtitles) |
+| Optional rental watermark | Show an eight-character order code inside the picture. Support can trace it in **Platform analytics → Rental watermark lookup**. Local crop and re-encode tests recovered the code from square and 4:3 footage. [Renderer and lookup tests](docs/rental-copy-protection-plan.md#2-trace-a-watermarked-rental) |
 
-- **What the viewer sees.** When a filmmaker enables the existing watermark, the rental offer explains it before payment. An eight-character rental code appears for four seconds each minute, moving between four interior positions. Only the code appears on screen. It remained readable when square and 4:3 test footage was cropped to widescreen, resized by half and re-encoded. A clip taken between appearances can miss it.
-- **What support sees.** In **Platform analytics → Rental watermark lookup**, a super-admin enters the code to find the title, payment and associated customer email. Older codes remain traceable. If two rentals share a code, support sees the candidate payments and can review the title and date. A match identifies the order associated with the footage. It does not establish who shared it.
-- **What it costs.** The code goes into the existing rental-order write. An explicit lookup can index older orders in batches and consult Stripe for the contact on a unique match. Playback adds no Worker or Durable Object reads or writes for the lookup. The renderer uses the existing marked intervals.
-
-**Release check.** Deploy the workspace Worker and media runtime from the same revision. Use a team-controlled rental on the hosted service to match the code seen in the picture to the expected payment. Check a clean preview, an unmarked rental and a purchase. On a TV, read the code with captions on and check that both remain legible. Record which device passed. [Cloudflare deployment](docs/origin-cloudflare.md) · [Rental research and test results](docs/rental-copy-protection-plan.md)
+**Next playback check.** Match the code from a team-controlled hosted rental to its checkout in super-admin. Check a preview, an unmarked rental and a purchase alongside it. Verify caption selection, sync after a seek and watermark legibility on the physical receivers listed below.
 
 ## Download protection decisions
 
@@ -26,7 +26,7 @@ November 25, 2026
 
 **First, establish which TVs play a rental from the existing embed.** Stream already offers Safari AirPlay, a browser TV picker where supported, and a private rental link for handoff. The receiver uses an expiring playback lease. An earlier rehearsal reported Safari advancing a paid rental on a physical Roku Ultra. Physical Google Cast output and the appearance of captions and the revised watermark on the TV still need confirmation. [Player handoff](public/airplay.js) · [Receiver rehearsal](https://github.com/aindaco1/stream/pull/23) · [Google Cast media support](https://developers.google.com/cast/docs/media)
 
-Run one marked two-film program on a Roku Ultra over AirPlay and on a Chromecast or Google TV device over Cast. Start on the phone, seek, change titles, return to a captioned title, disconnect and resume. Read the watermark and captions on the television itself. Confirm the viewer keeps the same rental and that expired access stops further playback. Publish a short compatibility table in the filmmaker FAQ with the receiver model, sender browser, and observed result.
+Run one marked two-film program on a Roku Ultra over AirPlay and on a Chromecast or Google TV device over Cast. Start on the phone, seek, change titles, return to a title with both ordinary subtitles and SDH, switch tracks, disconnect and resume. Read the watermark and captions on the television itself. Confirm the viewer keeps the same rental and that expired access stops further playback. Publish a short compatibility table in the filmmaker FAQ with the receiver model, sender browser, and observed result.
 
 **Then decide whether viewers need an installable TV app.** Ask pilot filmmakers which devices their audiences use and where handoff fails. Choose one platform for a prototype. The first useful app lets someone open an existing rental on the couch, resume the correct program title, select captions with the remote, and see when access expires. Reuse Stream's order, program edition and media authorization. Check platform rules and the effect on filmmaker payouts before committing to a storefront.
 
@@ -40,7 +40,6 @@ Run one marked two-film program on a Roku Ultra over AirPlay and on a Chromecast
 
 | Viewer or filmmaker need | Smallest useful next step |
 | --- | --- |
-| A faster first visit to Dashboard and Settings | Measure first sign-in and the first round trip between both pages on a production filmmaker account. Record page timings and Worker/SQLite reads and writes. Change a repeated query only when a matched before-and-after run shows a benefit. |
+| A faster first visit to Dashboard and Settings | Dashboard and Settings now run beside their SQLite data. In a signed-in Helium check with the media container idle, controls appeared in 1.24 seconds going to Settings and 1.28 seconds returning to Dashboard. Repeat from a fresh sign-in and record Worker and SQLite operations across several visits. [Dashboard release](https://github.com/aindaco1/stream/pull/39) |
 | Reliable playback on cellular and accessible checkout | Time first frame, seeking and program transitions on a physical phone with a feature-length film. Exercise the actual payment fields, error recovery and captions with VoiceOver and TalkBack. Fix the first reproducible point where a viewer gets stuck. [Web audit](docs/web-audit-2026-11-21.md#priorities-before-a-public-release) |
-| Captions for films with no embedded track | SRT uploads and multiple tracks per language are implemented locally. Verify sync and switching between subtitles and SDH on physical TV receivers after seeking. |
-| Private invitations for press and festival programmers | If filmmakers are issuing one-off access manually, trial a revocable invitation to one film or program with an expiry. Reuse playback authorization and the optional watermark. Keep complimentary access distinguishable from paid orders in support and sales reports. |
+| Private invitations for press and festival programmers | A one-use, 100% rental coupon already covers a complimentary screening. If filmmakers need to withdraw access after redemption, trial a revocable invitation for one title. Reuse playback authorization and the optional watermark. Keep complimentary access distinguishable from paid orders in support and sales reports. |
