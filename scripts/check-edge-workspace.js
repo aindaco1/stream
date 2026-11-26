@@ -178,6 +178,7 @@ try {
     assert.ifError(result.error);
     return unpack(result.value);
   }
+  assert.deepEqual(await call('rentalsForReference','0123ABCD'),{matches:[]});
   const maker = await call('session', cookie.split('=')[1], 'filmmaker');
   const bucket = { accountId: 'a'.repeat(32), bucket: 'test-bucket', jurisdiction: 'default', uploads: true };
   await call('saveBucket', maker.owner, { ...bucket, accessKeyId: 'fixture', secretAccessKey: 'test-secret' });
@@ -185,10 +186,15 @@ try {
   await call('saveFilm', maker.owner, bucket, { id, title: 'My first film', duration: 30 });
   await call('setFilmPublication', maker.owner, id, true);
   await call('createProgram', maker.owner);
+  await call('changeCoupon',maker.owner,{action:'save',code:'WORKER',type:'amount',value:'1',titleId:id,kind:'rent',maxUses:'2'});
+  assert.equal((await call('couponForOrder',maker.owner,id,'rent',100,'worker')).amount,0);
+  const coupons = await get('/setup/settings?section=coupons',cookie);
+  assert.match(await coupons.text(),/WORKER · 0 used or reserved/);
   const settings = await get('/setup/settings?bucket=change', cookie);
   const settingsPage = await settings.text();
   assert.match(settingsPage, /maker@example.test/);
   assert.match(settingsPage, /Cancel bucket change/);
+  assert.doesNotMatch(settingsPage,/WORKER · 0 used or reserved/);
   assert.match(settingsPage, /test-bucket/);
   assert.match(settingsPage, /action="\/setup\/stripe\/start"/);
   assert.doesNotMatch(settingsPage, /test-secret/);
@@ -215,6 +221,7 @@ try {
   assert.equal((await post('/setup/next', { csrf: maker.csrf }, cookie)).status, 503);
   const adminPage = await (await get('/setup/admin', acookie)).text();
   assert.match(adminPage, /Platform analytics/);
+  assert.match(adminPage, /action="\/setup\/admin\/watermark"/);
   assert.match(adminPage, /new-mexico\.csv/);
   console.log('Full Worker served signed-in filmmaker pages, scripts and live reports without a media runtime.');
   const csrf = adminPage.match(/name="csrf" value="([^"]+)"/)[1];

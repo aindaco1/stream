@@ -38,7 +38,7 @@ export function priceFields(film, program = false) {
           <option value="on"${film.screenerWatermark === true ? ' selected' : ''}>On</option>
         </select>
       </label>
-      <p class="hint" id="watermark-${escapeHtml(film.id || 'draft')}">Show an anonymous rental reference briefly each minute in the video.</p></div>
+      <p class="hint" id="watermark-${escapeHtml(film.id || 'draft')}">Show an order-specific code briefly each minute in the video.</p></div>
     </div>
   </fieldset>`;
 }

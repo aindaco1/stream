@@ -1,4 +1,5 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+export { screenerReference } from './rental-reference.js';
 
 // A receiver can fetch only HLS for the film and revision the viewer rented.
 // Its opaque URL is separate from the receipt, checkout token and normal grants.
@@ -36,12 +37,6 @@ export function airplayLeases({ now = Date.now, capacity = 512 } = {}) {
     },
     active, touch
   };
-}
-
-// A stable anonymous reference for a settled rental. It conveys no playback access.
-export function screenerReference(offer, access) {
-  if (!offer.screenerWatermark || access?.access !== 'rent' || !access.orderId) return;
-  return createHash('sha256').update(JSON.stringify(['screener', offer.scope, access.orderId])).digest('hex').slice(0, 8).toUpperCase();
 }
 
 export function captionMaster(track) {

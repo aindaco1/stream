@@ -59,12 +59,13 @@ export async function probeFilm(source, head) {
 // The reference is server-generated and validated before rendering. Supplying a tiny
 // in-memory PNG avoids temporary files and works with FFmpeg builds without drawtext.
 async function screenerImage(label, video) {
-  const frameWidth = Math.min(video.width, 1280, video.width * 720 / video.height);
-  const width = Math.max(1, Math.round(Math.min(160, frameWidth * .45, Math.max(68, frameWidth * .16))));
+  const scale = Math.min(1, 1280 / video.width, 720 / video.height);
+  const frameWidth = video.width * scale;
+  const width = Math.max(1, Math.round(Math.min(180, video.height * scale * .78, frameWidth * .45, Math.max(68, frameWidth * .20))));
   const height = Math.max(1, Math.round(width * 24 / 116));
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 116 24">
-    <rect width="116" height="24" rx="3" fill="black" opacity=".36"/>
-    <text x="58" y="17" text-anchor="middle" font-family="sans-serif" font-weight="600" font-size="15" fill="white" opacity=".78">${label}</text></svg>`;
+    <rect width="116" height="24" rx="3" fill="black" opacity=".62"/>
+    <text x="58" y="17" text-anchor="middle" font-family="sans-serif" font-weight="600" font-size="15" fill="white" opacity=".96">${label}</text></svg>`;
   const png = await sharp(Buffer.from(svg)).png().toBuffer();
   return 'data:image/png;base64,' + png.toString('base64');
 }
@@ -86,9 +87,13 @@ export async function transcode(source, head, media, start, end, preview, pictur
   if (watermark) {
     inputs.push('-protocol_whitelist', 'data', '-f', 'png_pipe', '-i', await screenerImage(watermark, media.video));
     const time = `(t+${start})`;
-    const x = `if(mod(floor(${time}/${markPeriod}),2),W*.035,W-w-W*.035)`;
+    // Keep the whole label inside the overlap of a centered square and 16:9 crop.
+    // Moving on both axes makes a fixed edge crop less effective across minutes.
+    const minute = `floor(${time}/${markPeriod})`;
+    const x = `(W-w)/2+if(mod(${minute},2),-1,1)*max(0,min(W,H)-w)*0.30`;
+    const y = `(H-h)/2+if(between(mod(${minute},4),1,2),1,-1)*max(0,min(H,W*9/16)-h)*0.25`;
     const visible = `lt(mod(${time},${markPeriod}),${markDuration})`;
-    graph += `[film];[film][${pictureData ? 2 : 1}:v]overlay=x='${x}':y='H*.04':enable='${visible}'`;
+    graph += `[film];[film][${pictureData ? 2 : 1}:v]overlay=x='${x}':y='${y}':enable='${visible}'`;
   }
   const filters = pictureData || watermark ? ['-filter_complex', graph + '[v]', '-map', '[v]'] :
     ['-map', '0:' + media.video.index, '-vf', trim + scale];

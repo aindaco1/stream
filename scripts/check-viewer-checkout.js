@@ -11,6 +11,7 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
+import { readSrt } from '../src/film-subtitles.js';
 import { openFilm } from '../src/media.js';
 import { createRentalAuthority, rentalScope } from '../src/rental.js';
 import { makeServer } from '../src/server.js';
@@ -28,7 +29,9 @@ await Promise.all([
 execFileSync('ffmpeg', ['-v', 'error', '-i', clock, '-i', text, '-itsoffset', '2', '-f', 'sup', '-i', picture,
   '-map', '0:v:0', '-map', '0:a:0', '-map', '1:s', '-map', '2:s', '-c', 'copy',
   '-metadata:s:s:0', 'language=eng', '-metadata:s:s:1', 'language=fra', path]);
-const source = createFileSource(path);
+const uploadedTrack = {id:'u-11111111-1111-4111-8111-111111111111',language:'en',label:'English SDH',kind:'captions',format:'text'};
+const uploadedText = readSrt(Buffer.from('1\n00:00:01,000 --> 00:00:11,000\n[Street sounds]\n\n2\n00:01:00,000 --> 00:01:01,000\n[Door closes]'),130);
+const source = {...createFileSource(path),uploadedSubtitles:{list:()=>[uploadedTrack],read:id=>id===uploadedTrack.id ? uploadedText : null}};
 const film = await openFilm(source);
 const fileHead = await source.head();
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -55,15 +58,16 @@ let mismatchedTotal;
 let opening;
 let downloadChecks = 0;
 const checkout = {
-  async start({ offer, token, kind, tipPercent, viewingAddress }) {
+  async start({ offer, token, kind, tipPercent, viewingAddress, couponCode }) {
     assert.match(token, /^[A-Za-z0-9_-]{43}$/);
     assert.ok(['rent', 'buy'].includes(kind));
     if (interruptNext) { interruptNext = false; throw Error('Simulated outage'); }
     if (opening) await opening.promise;
     if (!orders.has(token)) {
-      const filmAmount = offer.prices[kind], tipAmount = Math.round(filmAmount * tipPercent / 100);
+      if (couponCode && couponCode !== 'SCREENING') throw Object.assign(Error('That coupon is unavailable for this offer.'),{code:'coupon_invalid'});
+      const filmAmount = couponCode ? 0 : offer.prices[kind], tipAmount = Math.round(filmAmount * tipPercent / 100);
       const taxPolicy = offer.id === 'second' || (offer.id === 'first' && kind === 'buy') ? 'marketplace-v1' : undefined;
-      const order = { offer, kind, id: 'session_' + (orders.size + 1), status: 'pending',
+      const order = { offer, kind, couponCode, id: 'session_' + (orders.size + 1), status: 'pending',
         filmAmount, tipPercent, tipAmount, taxPolicy, amount: filmAmount + tipAmount, attempts: 0, submissions: 0, pendingChecks: 0 };
       if (viewingAddress) {
         assert.deepEqual([viewingAddress.country,viewingAddress.state,viewingAddress.city,viewingAddress.postalCode], ['US','NM','Albuquerque','87102']);
@@ -81,7 +85,8 @@ const checkout = {
     assert.equal(order.tipPercent, tipPercent);
     return order.status === 'paid' ? { status: 'paid' } :
       { clientSecret: order.id, publishableKey: 'pk_test_fixture', account: order.taxPolicy ? null : 'acct_' + offer.id, taxPolicy: order.taxPolicy,
-        uiMode: offer.id === 'legacy' ? 'embedded_page' : 'elements', orderId: order.id, amount: order.amount,
+        ...(order.couponCode && {couponCode:order.couponCode,listAmount:offer.prices[kind]}),
+        uiMode: offer.id === 'legacy' || order.amount === 0 ? 'embedded_page' : 'elements', orderId: order.id, amount: order.amount,
         filmAmount: order.filmAmount, tipPercent, tipAmount: order.tipAmount, currency: 'usd', title: offer.title, kind, ...order.quote };
   },
   async abandon({ offer, token }) {
@@ -122,6 +127,12 @@ async function confirm(id) {
   const { scope, revision, authority } = order.offer;
   const amount = order.charged ?? order.amount;
   const entitlement = { film: scope, revision };
+  if (amount === 0 && order.couponCode) {
+    order.status = 'paid';
+    order.receipt = await authority.issueCouponReceipt({status:'paid',couponId:'fixture',sessionId:id,orderId:id,
+      amount,chargedTotalCents:0,kind:order.kind,scope,revision,paidAt:Math.floor(Date.now()/1000),rentalHours:48},entitlement);
+    return;
+  }
   const pi = 'pi_' + id;
   const intent = { object: 'payment_intent', id: pi, status: 'succeeded', livemode: false, amount, amount_received: amount, currency: 'usd',
     metadata: { product: 'stream-rental-prototype', scope: rentalScope(entitlement), amount: String(amount), kind: order.kind, order: id },
@@ -298,7 +309,7 @@ async function install(context) {
   });
   await context.exposeBinding('completeLegacy', ({ frame }, id) => {
     assert.equal(frame.url(), vendor + '/legacy');
-    assert.equal(sessions.get(id).offer.id, 'legacy');
+    assert.ok(sessions.get(id).offer.id === 'legacy' || sessions.get(id).couponCode === 'SCREENING');
     return confirm(id);
   });
   await context.route('**/*', route => {
@@ -354,6 +365,10 @@ async function preview(frame, captions = false, native = false) {
       await pip.click();
       await frame.waitForFunction(() => !document.pictureInPictureElement);
     }
+    await menu.selectOption({label:'English SDH'});
+    await frame.waitForFunction(() => [...document.querySelector('video').textTracks].some(track =>
+      track.mode === 'showing' && track.kind === 'captions' && track.cues?.length === 1 &&
+      track.cues[0].text === '[Street sounds]' && track.cues[0].endTime === 10));
     // Exercise pointer selection without leaving an OS-owned picker over the playing video.
     await menu.focus();
     await menu.dispatchEvent('pointerdown', { pointerType: 'mouse' });
@@ -805,6 +820,29 @@ try {
   await nm.close();
 
   checkout.manualNmEnabled = false;
+  const couponContext = await browser.newContext({serviceWorkers:'block'});
+  await install(couponContext);
+  const comp = await couponContext.newPage();
+  await comp.goto(app + '/embed/second');
+  await comp.locator('#buy').waitFor();
+  await comp.getByText('Have a coupon?',{exact:true}).click();
+  await comp.getByLabel('Coupon code').fill('unknown');
+  await comp.locator('#buy').click();
+  await comp.getByText('That coupon is unavailable for this offer.').waitFor();
+  await comp.getByLabel('Coupon code').fill('screening');
+  await comp.locator('#rent').click();
+  await comp.getByText('Coupon SCREENING · $0.99 off').waitFor();
+  const heldRental = [...orders.values()].at(-1);
+  await comp.locator('#close-checkout').click();
+  await comp.locator('#buy').click();
+  await comp.getByText('Coupon SCREENING · $2.99 off').waitFor();
+  assert.equal(heldRental.status,'expired');
+  assert.equal(await comp.locator('#order-price').textContent(),'$0.00');
+  await comp.frameLocator('#stripe-checkout iframe').getByRole('button').click();
+  await comp.locator('#download button').waitFor();
+  assert.equal(await comp.locator('#card-form').isHidden(),true);
+  await couponContext.close();
+
   // Fixed publisher slots exercise both layouts without moving a live payment iframe under the pointer.
   const layouts = await context.newPage();
   await layouts.goto(host + '/program-layout');
@@ -845,7 +883,7 @@ try {
     assert.ok(!requests.some(({ url, referrer }) => [url, referrer].some(address =>
       address.includes(token) || (order.receipt && address.includes(order.receipt)))), 'A private credential appeared in a URL or referrer');
   }
-  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: location-based tax, inclusive and zero tips, visible Pay, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, program order, previous/next, caption carryover, ZIP, download and recovery.');
+  console.log('Inline checkout passed at 320×200, 375×211, 390×300, keyboard-sized 390×150, and 900×660: coupon correction and free checkout, uploaded SDH playback, location-based tax, inclusive and zero tips, visible Pay, held prices, correction, duplicate submit, delayed settlement, legacy checkout, independent embeds, 120-second seek, program order, previous/next, caption carryover, ZIP, download and recovery.');
 } finally {
   await browser.close();
   await Promise.all([player, publisher].map(server => new Promise(resolve => server.close(resolve))));

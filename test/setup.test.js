@@ -153,6 +153,46 @@ test('guided setup carries an authenticated filmmaker from empty storage to priv
   assert.equal(clip.status, 206);
   assert.equal((await clip.arrayBuffer()).byteLength, 32);
   const other = await login('Ben');
+  const code = {action:'save',code:'SCHOOL',type:'percent',value:'25',titleId:id,kind:'buy',maxUses:'2',ends:'2099-02-10'};
+  assert.equal((await submit('coupons',code)).headers.get('location'),'/setup/settings?section=coupons#coupons');
+  assert.doesNotMatch(await (await get('/setup/settings')).text(),/SCHOOL/);
+  assert.match(await (await get('/setup/settings?section=coupons')).text(),/SCHOOL/);
+  const coupon = setup.store.couponSettings('Ada').coupons[0];
+  assert.equal((await form('/setup/coupons',{...code,id:coupon.id,version:1,csrf:other.csrf},other.cookie)).status,422);
+  assert.equal((await submit('coupons',{...code,id:coupon.id,version:1,value:'100'})).status,303);
+  assert.equal((await submit('coupons',{action:'delete',id:coupon.id,version:1})).status,422);
+  assert.equal((await submit('coupons',{action:'delete',id:coupon.id,version:2})).status,303);
+  assert.equal(setup.store.couponSettings('Ada').coupons.length,0);
+
+  const subtitles = '/setup/subtitles/'+id;
+  const cues = '1\r\n00:00:01,200 --> 00:00:11,000\r\n<i>Hello</i>\r\n\r\n2\r\n00:00:12,000 --> 00:00:14,000\r\nLate dialogue';
+  const upload = (overrides={},name='captions.srt',content=cues,as=cookie) => {
+    const data = new FormData();
+    for (const [key,value] of Object.entries({action:'save',track:'',revision:original.revision,language:'en',
+      label:'English',kind:'subtitles',csrf,...overrides})) data.set(key,value);
+    data.set('file',new Blob([content]),name);
+    return fetch(origin+subtitles,{method:'POST',headers:{Origin:origin,Cookie:as},body:data,redirect:'manual'});
+  };
+  assert.equal((await upload({csrf:'wrong'})).status,403);
+  assert.equal((await upload({csrf:other.csrf},'captions.srt',cues,other.cookie)).status,404);
+  assert.equal((await upload({},'captions.vtt')).status,422);
+  assert.equal((await upload({},'broken.srt','bad cue')).status,422);
+  assert.equal((await upload({revision:'older'})).status,409);
+  assert.equal((await upload()).status,303);
+  assert.equal((await upload({label:'English SDH',kind:'captions'})).status,303);
+  const list = () => setup.store.subtitleList('Ada',id,original.revision);
+  const [dialogue,sdh] = list();
+  assert.equal(sdh.kind,'captions');
+  assert.match(await (await get(subtitles)).text(),/English SDH/);
+  assert.match(await (await get(preview)).text(),/kind="captions"/);
+  const clipped = await (await get(preview+'/'+sdh.id+'.vtt')).text();
+  assert.match(clipped,/Hello/);
+  assert.doesNotMatch(clipped,/Late dialogue|<i>/);
+  assert.equal((await upload({track:dialogue.id})).status,303);
+  assert.equal((await upload({track:dialogue.id})).status,409);
+  assert.equal((await get(preview+'/'+dialogue.id+'.vtt')).status,404);
+  assert.equal((await upload({action:'remove',track:sdh.id})).status,303);
+  assert.equal(list().length,1);
   assert.equal((await form('/setup/film/prices', { ...pricing, csrf: other.csrf }, other.cookie)).status, 404);
   assert.equal((await fetch(origin + preview, { headers: { Cookie: other.cookie } })).status, 404);
   assert.equal((await fetch(origin + preview + '/clip.mp4')).status, 401);

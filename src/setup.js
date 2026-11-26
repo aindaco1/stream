@@ -18,6 +18,8 @@ import { openFilm } from './media.js';
 import { filmPrices, priceFromInput, maxPreviewSeconds, previewSeconds, savedPreviewSeconds, rentalHours } from './prices.js';
 import { createPublicFilms } from './public-films.js';
 import { createThumbnails, maxThumbnailBytes, ThumbnailError } from './thumbnails.js';
+import { safeVtt } from './media-compat.js';
+import { readSrt, subtitleInfo, subtitleEditor, maxSrtBytes } from './film-subtitles.js';
 import { createFilmUploads, FilmUploadError, UPLOAD_PART_BYTES } from './film-upload.js';
 import { centerFrame } from './thumbnail-frame.js';
 import { verifyUploadAccess } from './r2-write.js';
@@ -32,10 +34,10 @@ import { reviewTaxFee } from './stripe-live-operations.js';
 import { createViewerCheckout } from './viewer-checkout.js';
 import { createStripeSetup, StripeSetupError } from './setup-stripe.js';
 import { creditProblem, escapeHtml, infoFields, posterChoice, selectedFields } from './film-embed.js';
-import { filmSection, renderBucketAccess, renderPlatformDashboard, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
+import { filmSection, renderBucketAccess, renderPlatformDashboard, watermarkLookupPage, renderStripeCountryForm, renderStripeReset, workspacePage } from './setup-view.js';
 
 const commonHeaders = { 'Content-Security-Policy': csp, 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY', 'X-Robots-Tag': 'noindex' };
-const previewPattern = /^\/setup\/preview\/([fp]-[a-f0-9-]{36})(\/clip\.mp4)?$/;
+const previewPattern = /^\/setup\/preview\/([fp]-[a-f0-9-]{36})(\/(?:clip\.mp4|(u-[a-f0-9-]{36})\.vtt))?$/;
 const callbackPattern = /^\/setup\/stripe\/(oauth|refresh|return)$/;
 const rightsVersion = 'film-distribution-v2';
 const rightsStatement = 'I own this film or have permission to distribute it through Stream.';
@@ -44,8 +46,7 @@ class SetupError extends Error {
   constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; }
 }
 
-async function readForm(req, limit = 8192, repeatable = []) {
-  if (req.headers['content-type']?.split(';')[0] !== 'application/x-www-form-urlencoded') throw new SetupError('Use the setup form.', 415);
+async function formBytes(req, limit) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -53,7 +54,11 @@ async function readForm(req, limit = 8192, repeatable = []) {
     if (size > limit) throw new SetupError('The form is too large.', 413);
     chunks.push(chunk);
   }
-  const fields = new URLSearchParams(Buffer.concat(chunks).toString());
+  return Buffer.concat(chunks);
+}
+async function readForm(req, limit = 8192, repeatable = []) {
+  if (req.headers['content-type']?.split(';')[0] !== 'application/x-www-form-urlencoded') throw new SetupError('Use the setup form.', 415);
+  const fields = new URLSearchParams((await formBytes(req,limit)).toString());
   const data = Object.fromEntries(fields);
   for (const name of repeatable) {
     if (fields.has(name)) data[name] = fields.getAll(name);
@@ -198,7 +203,23 @@ export async function createSetup({
         const report = store.platformReport(searchParams.get('maker'), Number(searchParams.get('page') || 1));
         if (!report) return reject(404, 'Filmmaker unavailable.');
         if (metricsOnly) return metrics(renderPlatformDashboard(session.csrf, report, true));
-        return html(200, renderPlatformDashboard(session.csrf, report, false, mode === 'live'), {'Content-Security-Policy': csp + "; connect-src 'self'"});
+        return html(200, renderPlatformDashboard(session.csrf, report, false, mode), {'Content-Security-Policy': csp + "; connect-src 'self'"});
+      }
+      if (path === basePath + '/watermark') {
+        if (method !== 'POST') return reject(405,'Use the rental watermark form.');
+        let form;
+        try { form = await readForm(req); } catch { return reject(400,'Use the rental watermark form.'); }
+        if (form.csrf !== session.csrf) return reject(403,'Reload the dashboard before looking up a rental.');
+        const code = form.code?.trim().toUpperCase();
+        if (!/^[0-9A-F]{8}$/.test(code ?? '')) return reject(400,'Enter the eight-character rental code.');
+        const result = store.rentalsForReference(code);
+        let customer;
+        if (result.matches?.length === 1) {
+          try { customer = await checkout.rentalCustomer(result.matches[0].orderId); }
+          catch { /* Keep the verified local payment reference available during a provider outage. */ }
+        }
+        return html(200, watermarkLookupPage(session.csrf, code, result, customer),
+          {'Cache-Control':'private, no-store', 'Referrer-Policy':'no-referrer'});
       }
       if (mode === 'live' && get && path === basePath + '/new-mexico.csv') {
         const month = searchParams.get('month');
@@ -251,6 +272,18 @@ export async function createSetup({
     if (get && path === '/setup') return redirect('/setup/settings');
     if (get && path === '/setup/settings') return display();
     const owner = session.owner;
+    if (path === '/setup/coupons') {
+      if (method !== 'POST') return reject(405,'Use the coupon form.');
+      let data;
+      try { data = await readForm(req); } catch { return reject(400,'Use the coupon form.'); }
+      if (data.csrf !== session.csrf) return reject(403,'Reload before changing a coupon.');
+      try { store.changeCoupon(owner,data); }
+      catch (error) {
+        if (error.code !== 'coupon_invalid') throw error;
+        return display(422,{initialSection:'coupons',error:error.message});
+      }
+      return redirect('/setup/settings?section=coupons#coupons');
+    }
     const step = (title, inner, options) => workspacePage(title, session.csrf, '<h1>' + escapeHtml(title) + '</h1>' + inner, options);
     const draftLocation = draft => draft.programTarget ? '/setup/program/' + draft.programTarget.id : '/setup/dashboard#' + draft.id;
     const newFilm = (status = 200, feedback = {}) => {
@@ -274,6 +307,32 @@ export async function createSetup({
       return html(status, filmmakerDashboard({ store, session, viewer, previewOrigin, searchParams,
         error, selectionFilm, listedFilmIds: publications.listedFilmIds(owner) }), { 'Content-Security-Policy': dashboardCsp(previewOrigin) });
     };
+    const subtitlePath = /^\/setup\/subtitles\/(f-[a-f0-9-]{36})$/.exec(path);
+    if (subtitlePath) {
+      const film = store.film(owner,subtitlePath[1]);
+      if (!film) return reject(404,'Film unavailable.');
+      if (get) return html(200,workspacePage('Subtitles',session.csrf,subtitleEditor(film,session.csrf,store.subtitleList(owner,film.id,film.revision)),{dashboard:true}));
+      if (method !== 'POST') return reject(405,'Use the subtitle form.');
+      const type = req.headers['content-type'] ?? '';
+      if (!type.startsWith('multipart/form-data;')) return reject(415,'Use the subtitle upload form.');
+      let data;
+      try { data = await new Response(await formBytes(req,maxSrtBytes+16384),{headers:{'Content-Type':type}}).formData(); }
+      catch (e) { return reject(e.statusCode ?? 400,'Choose an SRT file up to 512 KiB.'); }
+      if (data.get('csrf') !== session.csrf) return reject(403,'Reload before editing subtitles.');
+      const id = data.get('track'), action = data.get('action');
+      if (typeof id !== 'string' || !['save','remove'].includes(action) || (action === 'remove' && !id)) return reject(400,'Use the subtitle form.');
+      let track;
+      if (action === 'save') {
+        const file = data.get('file');
+        if (!file?.name || !/\.srt$/i.test(file.name)) return reject(422,'Choose an SRT file.');
+        try {
+          track = subtitleInfo(data.get('language'),data.get('label'),data.get('kind'));
+          track.vtt = readSrt(new Uint8Array(await file.arrayBuffer()),film.duration);
+        } catch (e) { return reject(422,e.message); }
+      }
+      if (!store.saveSubtitle(owner,film.id,data.get('revision'),id,track)) return reject(409,'This film or subtitle changed. Reload before saving.');
+      return redirect(path);
+    }
     const programPath = /^\/setup\/program\/(p-[a-f0-9-]{36})$/.exec(path);
     const program = programPath ? store.program(owner, programPath[1]) : null;
     if (programPath && !program) return reject(404, 'Program unavailable.');
@@ -350,12 +409,26 @@ export async function createSetup({
       const location = store.storageDraft(owner);
       return location ? bucketAccess(200, location) : redirect('/setup/settings#storage');
     }
+    function previewTracks(film) {
+      return store.subtitleList(owner,film.id,film.revision).map(t =>
+        `<track kind="${t.kind}" srclang="${escapeHtml(t.language)}" label="${escapeHtml(t.label)}" src="${path}/${t.id}.vtt">`).join('');
+    }
+    function sendPreviewTrack(film,seconds) {
+      const text = store.subtitleFile(owner,film.id,film.revision,preview[3]);
+      return text && seconds ? send(200,'text/vtt; charset=utf-8',safeVtt(text,seconds),commonHeaders) : reject(404,'Preview unavailable.');
+    }
     if (get && preview && isProgramId(preview[1])) {
       const saved = store.program(owner, preview[1]);
       if (!saved) return reject(404, 'Program unavailable.');
       try {
         const offer = publications.programPreview(owner, saved.id);
-        if (!preview[2]) return html(200, step(saved.title, renderPrivateProgram(saved, store.programLibrary(owner, saved.id), path), { dashboard: true, programPreview: true }));
+        const source = offer.previewSeconds && (!preview[2] || preview[3]) ? store.film(owner,offer.previewId) : null;
+        if (preview[3]) return source ? sendPreviewTrack(source,offer.previewSeconds) : reject(404,'Preview unavailable.');
+        if (!preview[2]) {
+          const films = store.programLibrary(owner,saved.id);
+          const tracks = source ? previewTracks(source) : '';
+          return html(200,step(saved.title, renderPrivateProgram(saved,films,path,tracks), {dashboard:true,programPreview:true}));
+        }
         if (!offer.previewSeconds) return reject(404, 'This program opens directly at its offers.');
         const key = saved.id + '/' + saved.version;
         if (!activePreviews.has(key)) {
@@ -372,9 +445,13 @@ export async function createSetup({
       const film = store.film(owner, preview[1]);
       const seconds = film && savedPreviewSeconds(film.previewSeconds, film.duration);
       if (!film || !seconds) return reject(404, 'Preview unavailable.');
+      if (preview[3]) return sendPreviewTrack(film,seconds);
       const poster = film.thumbnail ? ' poster="/setup/thumbnail/' + film.id + '/poster.jpg"' : '';
-      if (!preview[2]) return html(200, step(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata"' + poster + ' src="' +
-        path + '/clip.mp4"></video><p><a href="/setup/dashboard#' + film.id + '">Back to film</a></p>', { dashboard: true }));
+      if (!preview[2]) {
+        const tracks = previewTracks(film);
+        return html(200, step(film.title, '<p>Private ' + seconds + '-second preview</p><video controls playsinline preload="metadata"' + poster + ' src="' +
+        path + '/clip.mp4">' + tracks + '</video><p><a href="/setup/dashboard#' + film.id + '">Back to film</a></p>', { dashboard: true }));
+      }
       const key = film.id + '/' + seconds;
       if (!activePreviews.has(key)) {
         activePreviews.set(key, inspect(owner, film.bucket, film.objectKey, film.revision, seconds).finally(() => activePreviews.delete(key)));

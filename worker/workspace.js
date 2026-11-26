@@ -200,7 +200,7 @@ export async function workspaceResponse(
     if (admins) {
       const report = store.platformReport(url.searchParams.get('maker'), Number(url.searchParams.get('page') || 1));
       if (!report) return reject(404, 'Filmmaker unavailable.');
-      const markup = renderPlatformDashboard(session.csrf, report, analytics, full);
+      const markup = renderPlatformDashboard(session.csrf, report, analytics, full ? 'live' : 'signup');
       return response(200, markup, { ...headers, 'Content-Security-Policy': workspaceCsp + "; connect-src 'self'",
         ...(analytics && { 'X-Stream-Analytics': '1' }) });
     }

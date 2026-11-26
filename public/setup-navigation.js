@@ -47,6 +47,12 @@ if (sections) {
     responsiveSelect: { tabList: list, label: list.getAttribute('aria-label') },
     storage: null,
     onSelect(name) {
+      const pageLink = document.getElementById(name)?.querySelector('[data-load-section]');
+      if (pageLink) {
+        if (restoring) location.replace(pageLink.href);
+        else location.assign(pageLink.href);
+        return;
+      }
       if (!restoring && activeSection !== name) history.pushState(null, '', currentPage + '#' + name);
       activeSection = name;
     }

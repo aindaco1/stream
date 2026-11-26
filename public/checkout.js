@@ -29,7 +29,11 @@ async function postToken(film, path, token) {
   });
   if (!response.ok) {
     const error = new Error('Request unavailable');
-    if (response.status === 409 && json) error.code = (await response.json().catch(() => null))?.code;
+    if (json && [409,422].includes(response.status)) {
+      const problem = await response.json().catch(() => null);
+      error.code = problem?.code;
+      if (error.code === 'coupon_invalid' && typeof problem.message === 'string') error.message = problem.message;
+    }
     throw error;
   }
   return response.json();
@@ -84,6 +88,8 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
   const knownPurchase = slot && read('localStorage', slot + ':purchase');
   const knownRental = slot && read('localStorage', slot + ':rent');
   const activeKind = kinds.includes(attempts.active) ? attempts.active : 'rent';
+  const coupon = byId('coupon-code');
+  if (coupon) coupon.value = attempts[activeKind + 'Coupon'] || '';
   const tip = byId('tip-percent');
   // Orders opened before tips were available have a token and a zero tip.
   const priorTip = validToken(attempts[activeKind]) ? (attempts[activeKind + 'Tip'] ?? 0) : tip.defaultValue;
@@ -125,8 +131,9 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
   function startOrder(kind, attempt, percent, viewingAddress) {
     if (starts.has(attempt)) return starts.get(attempt);
     const programRevision = currentRevision?.();
-    const data = programRevision || viewingAddress
-      ? { token: attempt, tipPercent: percent, viewingAddress: viewingAddress || undefined, programRevision }
+    const couponCode = attempts[kind + 'Coupon'] || undefined;
+    const data = programRevision || viewingAddress || couponCode
+      ? { token: attempt, couponCode, tipPercent: percent, viewingAddress: viewingAddress || undefined, programRevision }
       : attempt + (percent ? ' ' + percent : '');
     const opening = postToken(film, kind === 'rent' ? 'checkout' : 'buy', data)
       .then(result => {
@@ -135,6 +142,13 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
           persist();
         }
         return result;
+      }).catch(error => {
+        if (error.code === 'coupon_invalid' && attempts[kind] === attempt) {
+          delete attempts[kind];
+          if (token === attempt) token = undefined;
+          persist();
+        }
+        throw error;
       }).finally(() => starts.delete(attempt));
     starts.set(attempt, opening);
     return opening;
@@ -205,6 +219,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     check.hidden = !payment.hidden || !token || token === unlocked?.token;
     panel.hidden = !available.length && check.hidden && refresh.hidden && (!salesClosed || unlocked);
     byId('tip-choice').hidden = !available.length;
+    if (coupon) coupon.closest('details').hidden = !available.length || !payment.hidden;
     displayOfferPrices(available, program, !payment.hidden);
     const terms = [];
     if (available.includes('rent')) terms.push('Rent for ' + rentalLength(hours) + ' from payment.');
@@ -295,7 +310,13 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     const run = generation;
     activeFormKind = kind;
     const percent = Number(tip.value);
-    const previous = attempts[kind];
+    const code = (coupon?.value || '').replace(/\s+/g,'').toUpperCase();
+    // Switching between Rent and Buy can reuse the last remaining coupon use.
+    const active = attempts.active;
+    const switchOffer = code && kinds.includes(active) && active !== kind && !validToken(attempts[kind]) &&
+      validToken(attempts[active]) && attempts[active] !== unlocked?.token && attempts[active + 'Coupon'] === code;
+    const previousKind = switchOffer ? active : kind;
+    const previous = attempts[previousKind];
     delay = 0;
     payment.hidden = false;
     document.body.classList.add('paying');
@@ -307,6 +328,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     byId('order-terms').textContent = kind === 'rent' ? rentalLabel + ' · ' + rentalLength(hours) + ' from payment' : purchaseLabel + ' · Watch and download';
     byId('order-price').textContent = '';
     byId('order-tip').hidden = true;
+    byId('order-discount').hidden = true;
     byId('order-tax').textContent = '';
     byId('payment-feedback').append(status);
     heading.focus({ preventScroll: true });
@@ -315,7 +337,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     clearTimeout(timer);
     try {
       const hasPrevious = validToken(previous);
-      const replace = hasPrevious && (editLocation || Number(attempts[kind + 'Tip'] || 0) !== percent);
+      const replace = hasPrevious && (switchOffer || editLocation || code !== (attempts[kind + 'Coupon'] || '') || Number(attempts[kind + 'Tip'] || 0) !== percent);
       let viewingAddress;
       const unconfirmedLocation = hasPrevious && attempts[kind + 'Nm'] && attempts[kind + 'Opened'] !== previous;
       if (manualNm && (!hasPrevious || replace || unconfirmedLocation)) {
@@ -326,7 +348,7 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
       if (replace) {
         // A closed form can still be waiting for Stripe to open the session.
         // Resolve its outcome before replacing the viewer's only recovery token.
-        if (attempts[kind + 'Opened'] !== previous) await startOrder(kind, previous, Number(attempts[kind + 'Tip'] || 0));
+        if (attempts[previousKind + 'Opened'] !== previous) await startOrder(previousKind, previous, Number(attempts[previousKind + 'Tip'] || 0));
         else await starts.get(previous);
         if (run !== generation) return;
         const prior = await postToken(film, 'abandon', previous);
@@ -340,11 +362,12 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
           schedule();
           return;
         }
-        delete attempts[kind];
+        delete attempts[previousKind];
       }
       const attempt = token = validToken(attempts[kind]) ? attempts[kind] : newToken();
       attempts[kind] = attempt;
       attempts[kind + 'Tip'] = percent;
+      attempts[kind + 'Coupon'] = code;
       if (!hasPrevious || replace || unconfirmedLocation) attempts[kind + 'Nm'] = Boolean(viewingAddress);
       attempts.active = kind;
       persist();
@@ -352,17 +375,23 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
       if (run !== generation) return;
       if (result.status === 'paid') { await inspect(true, true); return; }
       const marketplace = result.taxPolicy === 'marketplace-v1';
+      const free = Boolean(result.couponCode) && result.filmAmount === 0 && result.amount === 0 && result.uiMode === 'embedded_page';
       if (!result.clientSecret || !result.publishableKey ||
-          (marketplace ? result.account !== null || result.uiMode !== 'elements' : !result.account || result.taxPolicy)) {
+          (marketplace ? result.account !== null || (!free && result.uiMode !== 'elements') : !result.account || result.taxPolicy)) {
         throw new Error('Checkout unavailable');
       }
-      if (marketplace && (!Number.isSafeInteger(result.filmAmount) || result.filmAmount < 1 ||
+      if (marketplace && (!Number.isSafeInteger(result.filmAmount) || result.filmAmount < (free ? 0 : 1) ||
           !Number.isSafeInteger(result.tipAmount) || result.tipAmount < 0 || result.filmAmount + result.tipAmount !== result.amount)) {
         throw new Error('Invalid offer');
       }
       if (kind === 'rent' && Number.isInteger(result.rentalHours)) byId('order-terms').textContent =
         rentalLabel + ' · ' + rentalLength(result.rentalHours) + ' from payment';
       if (typeof result.title === 'string' && result.title) heading.textContent = result.title;
+      if (result.couponCode) {
+        byId('order-discount').textContent = 'Coupon ' + result.couponCode + ' · ' + currency.format((result.listAmount - result.filmAmount) / 100) + ' off';
+        byId('order-discount').hidden = false;
+      }
+      if (free) byId('order-price').textContent = currency.format(0);
       if (!marketplace && result.currency === 'usd' && Number.isSafeInteger(result.amount) && result.amount > 0) {
         byId('order-price').textContent = currency.format(result.amount / 100);
       }
@@ -405,7 +434,12 @@ export function attachViewerCheckout(film, returnedToken, onPaid, currentRevisio
     } catch (error) {
       if (run !== generation) return;
       closeForm();
-      if (program && error.code === 'program_revision_changed') {
+      if (error.code === 'coupon_invalid' && coupon) {
+        showOffer();
+        coupon.closest('details').open = true;
+        coupon.focus();
+        status.textContent = error.message;
+      } else if (program && error.code === 'program_revision_changed') {
         refresh.hidden = false;
         showOffer();
         status.textContent = 'This program has changed. Refresh to review the current lineup and price.';

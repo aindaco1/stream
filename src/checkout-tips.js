@@ -2,7 +2,9 @@ import { calculatePlatformTip } from '@dustwave/worker-core/platform-tip';
 import { isPrice } from './prices.js';
 
 export function tipFor(filmAmount, percent) {
-  if (!Number.isInteger(percent) || percent < 0 || percent > 15 || !isPrice(filmAmount)) return null;
+  if (!Number.isInteger(percent) || percent < 0 || percent > 15) return null;
+  if (filmAmount === 0) return 0;
+  if (!isPrice(filmAmount)) return null;
   const cents = calculatePlatformTip(filmAmount, percent);
   return isPrice(filmAmount + cents) ? cents : null;
 }

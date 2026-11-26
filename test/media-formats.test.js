@@ -131,10 +131,10 @@ test('rental references survive seeking and picture captions, with isolated visi
     await writeFile(path,await content);
     return path;
   };
-  const corner = (path,time,side) => ff(['-i',path,'-ss',String(time),'-vf',
-    'crop=80:32:'+(side === 'right' ? 80 : 0)+':0,format=gray','-frames:v','1','-f','rawvideo','pipe:1']);
+  const band = (path,time,side) => ff(['-i',path,'-ss',String(time),'-vf',
+    'crop=90:90:35:0,crop=90:32:0:'+(side === 'top' ? 10 : 49)+',format=gray','-frames:v','1','-f','rawvideo','pipe:1']);
   function changed(a,b) {
-    assert.equal(a.length,80*32);
+    assert.equal(a.length,90*32);
     assert.equal(b.length,a.length);
     return a.reduce((count,value,i)=>count+Number(Math.abs(value-b[i])>8),0);
   }
@@ -147,19 +147,19 @@ test('rental references survive seeking and picture captions, with isolated visi
       sample('b.ts',film.segment(0,{watermark:second})),
       sample('unmarked.mp4',film.preview(5))
     ]);
-    const clear = corner(plain,1,'right');
-    assert.ok(changed(corner(a,1,'right'),clear)>50, 'first minute starts with a readable mark on the right');
-    assert.ok(changed(corner(a,1,'right'),corner(b,1,'right'))>25, 'simultaneous viewers receive distinct references');
-    assert.ok(changed(corner(a,1,'left'),clear)<10);
-    assert.ok(changed(corner(a,5,'right'),clear)<10, 'the mark disappears after four seconds');
-    assert.ok(changed(corner(preview,1,'right'),clear)<10, 'the public preview stays clean');
+    const clear = band(plain,1,'top');
+    assert.ok(changed(band(a,1,'top'),clear)>50, 'first minute starts with a visible interior mark after a centered square crop');
+    assert.ok(changed(band(a,1,'top'),band(b,1,'top'))>25, 'simultaneous viewers receive distinct references');
+    assert.ok(changed(band(a,1,'bottom'),clear)<10);
+    assert.ok(changed(band(a,5,'top'),clear)<10, 'the mark disappears after four seconds');
+    assert.ok(changed(band(preview,1,'top'),clear)<10, 'the public preview stays clean');
     const captioned = await sample('captioned.ts',film.segment(0,{watermark:first,subtitleId:track.id}));
-    assert.ok(changed(corner(captioned,3,'right'),clear)>50);
+    assert.ok(changed(band(captioned,3,'top'),clear)>50);
     assert.ok(Math.abs(pixel(captioned,3)-pixel(a,3))>30,'selected picture subtitle is also visible');
     const index = film.segments.findIndex(s => s.start === 60);
     const late = await sample('late-mark.ts',film.segment(index,{watermark:first}));
-    assert.ok(changed(corner(late,1,'left'),clear)>50,'a seek to minute two switches to the left');
-    assert.ok(changed(corner(late,1,'right'),clear)<10);
+    assert.ok(changed(band(late,1,'bottom'),clear)>50,'a seek to minute two switches to the lower band');
+    assert.ok(changed(band(late,1,'top'),clear)<10);
     const quiet = await Promise.all([first,second].map(watermark => film.segment(1,{watermark})));
     assert.strictEqual(quiet[0],quiet[1], 'quiet intervals share a single in-flight encoding');
     assert.strictEqual(await film.segment(1,{watermark:second}), quiet[0], 'quiet screener intervals are reusable');
@@ -170,6 +170,23 @@ test('rental references survive seeking and picture captions, with isolated visi
     }
     assert.deepEqual(await readFile(original),originalBytes);
   } finally { film.close(); }
+});
+
+test('the complete rental mark stays inside a centered widescreen crop of square and 4:3 films', async () => {
+  for (const height of [320,240]) {
+    const source = join(dir,'square-' + height + '.mp4');
+    ff(['-f','lavfi','-i',`color=c=black:s=320x${height}:r=12:d=2`,'-c:v','libx264',source]);
+    const film = await openFilm(createFileSource(source));
+    try {
+      const marked = join(dir,'crop-' + height + '.ts');
+      await writeFile(marked,await film.segment(0,{watermark:'4AE79C32'}));
+      const frame = filter => ff(['-i',marked,'-ss','1','-vf',filter,'-frames:v','1','-f','rawvideo','pipe:1']);
+      const bright = bytes => bytes.reduce((n,pixel)=>n+Number(pixel>120),0);
+      const original = bright(frame('format=gray'));
+      assert.ok(original>80,'rental code is visible');
+      assert.equal(bright(frame('crop=320:180,format=gray')),original,'all bright lettering survives the crop');
+    } finally { film.close(); }
+  }
 });
 
 test('source sizes accept decimal 10 GB and reject one byte over without loading a file', async () => {

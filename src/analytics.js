@@ -40,13 +40,15 @@ function filmStats(filter = '', { titles = allTitles, includeLineup = false } = 
       (o.refundedAmount>0 OR o.revocationReason IS NOT NULL OR o.disputeStatus NOT IN ('won','prevented','warning_closed'))) AS transfersToReview
     FROM (${titles}) f LEFT JOIN film_counts c ON c.filmId=f.id
     ${includeLineup ? 'LEFT JOIN program_lineup_counts pc ON pc.filmId=f.id' : ''}
-    LEFT JOIN viewer_test_orders o ON o.filmId=f.id AND o.owner=f.owner AND o.paidAt IS NOT NULL AND o.intentId IS NOT NULL
+    LEFT JOIN viewer_test_orders o ON o.filmId=f.id AND o.owner=f.owner AND o.paidAt IS NOT NULL
+      AND (o.intentId IS NOT NULL OR (o.couponId IS NOT NULL AND o.amount=0))
     ${filter} GROUP BY f.id) amounts`;
 }
 
 export function analyticsReports(db, transaction) {
   db.exec(`CREATE INDEX IF NOT EXISTS film_owner ON films(owner);
-    CREATE INDEX IF NOT EXISTS sales_by_film ON viewer_test_orders(filmId,owner) WHERE paidAt IS NOT NULL AND intentId IS NOT NULL;`);
+    CREATE INDEX IF NOT EXISTS settled_orders_by_film ON viewer_test_orders(filmId,owner) WHERE paidAt IS NOT NULL;
+    DROP INDEX IF EXISTS sales_by_film;`);
   const totals = metrics.map(key => 'COALESCE(SUM(a.' + key + '),0) AS ' + key).join(', ');
   const byOwner = filmStats('WHERE f.owner=?');
   const pageSize = 25;

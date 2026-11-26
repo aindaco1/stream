@@ -327,9 +327,11 @@ test('public subtitles follow the preview cutoff and paid renditions follow the 
     { id: 's2', language: 'en', label: 'English', kind: 'subtitles', format: 'text', source: 'private-location' },
     { id: 's3', language: 'fr', label: 'Français', kind: 'subtitles', format: 'bitmap' }
   ];
+  const sidecar = {id:'u-11111111-1111-4111-8111-111111111111',kind:'captions',language:'en',label:'English SDH',format:'text'};
+  const sidecarText = 'WEBVTT\n\n00:00:08.000 --> 00:00:15.000\nA crossing cue\n\n00:00:16.000 --> 00:00:18.000\nPaid dialogue\n';
   let allowed = true, published = true, opens = 0;
   const reads = [];
-  const film = { subtitleTracks: tracks, segments: [{ duration: 2 }], close() {},
+  const film = { subtitleTracks: tracks, uploadedSubtitles:{list:()=>[sidecar], read:id=>id===sidecar.id ? sidecarText : null}, segments: [{ duration: 2 }], close() {},
     async preview(end, { subtitleId }) { reads.push(['preview', end, subtitleId]); return Buffer.from('private preview'); },
     async segment(index, { subtitleId }) { reads.push(['full', index, subtitleId]); return Buffer.from('private video'); },
     async subtitles(id, { end }) { return end ? 'WEBVTT\n\npreview ' + end : 'WEBVTT\n\nfull dialogue'; } };
@@ -352,8 +354,14 @@ test('public subtitles follow the preview cutoff and paid renditions follow the 
   assert.equal((await get('play/subtitles', 'other-film')).status, 403);
   assert.equal(opens, 0);
   const listed = await (await get('preview/subtitles')).json();
-  assert.deepEqual(listed.map(t => [t.id, t.format]), [['s2', 'text'], ['s3', 'bitmap']]);
+  assert.deepEqual(listed.map(t => [t.id, t.format]), [['s2', 'text'], ['s3', 'bitmap'],[sidecar.id,'text']]);
   assert.equal(listed[0].source, undefined);
+  const uploadedPath = '/subtitles/'+sidecar.id+'.vtt';
+  const uploadedPreview = await (await get('preview'+uploadedPath)).text();
+  assert.match(uploadedPreview,/00:00:10.000\nA crossing cue/);
+  assert.doesNotMatch(uploadedPreview,/Paid dialogue/);
+  assert.equal((await get('play'+uploadedPath)).status,403);
+  assert.equal(await (await get('play'+uploadedPath,'granted')).text(),sidecarText);
   const clipped = await get('preview/subtitles/s2.vtt');
   assert.match(clipped.headers.get('content-type'), /text\/vtt/);
   assert.equal(await clipped.text(), 'WEBVTT\n\npreview 10');

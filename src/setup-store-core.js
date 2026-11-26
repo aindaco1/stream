@@ -1,3 +1,5 @@
+import { couponStore } from './coupons.js';
+import { rentalReference } from './rental-reference.js';
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { programStore, isProgramId } from './program-store.js';
 import { analyticsReports } from './analytics.js';
@@ -6,7 +8,7 @@ import { mailbox } from './stream-email.js';
 import { agreementFor } from './filmmaker-agreement.js';
 import { recoveryStore } from './viewer-recovery.js';
 import { StripeSetupError, stripeSetupStateForMode } from './setup-stripe.js';
-import { filmPrices, rentalHours } from './prices.js';
+import { filmPrices, isPrice, rentalHours } from './prices.js';
 import { filmTaxFeeShare, tipFor } from './checkout-tips.js';
 
 
@@ -38,6 +40,10 @@ export function createSetupStore(db, key, paymentMode, transaction) {
   db.exec(`CREATE TABLE IF NOT EXISTS makers (
       id TEXT PRIMARY KEY, stripe TEXT NOT NULL DEFAULT '{}', bucket_id TEXT, draft TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS film_subtitles (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, filmId TEXT NOT NULL, revision TEXT NOT NULL,
+      language TEXT NOT NULL, label TEXT NOT NULL, kind TEXT NOT NULL, vtt TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS subtitles_by_film ON film_subtitles(owner,filmId,revision);
     CREATE TABLE IF NOT EXISTS platform_admins (id TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS invitations (digest TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS login_addresses (owner TEXT NOT NULL, audience TEXT NOT NULL, email TEXT NOT NULL,
@@ -147,6 +153,12 @@ export function createSetupStore(db, key, paymentMode, transaction) {
     if (!columns.has('refundedAmount')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN refundedAmount INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('disputeStatus')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN disputeStatus TEXT');
     if (!columns.has('revocationReason')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN revocationReason TEXT');
+    for (const [name,type] of [['couponId','TEXT'],['couponCode','TEXT'],['listAmount','INTEGER']]) {
+      if (!columns.has(name)) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN '+name+' '+type);
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS viewer_coupon ON viewer_test_orders(couponId,status) WHERE couponId IS NOT NULL');
+    if (!columns.has('rentalReference')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN rentalReference TEXT');
+    db.exec("CREATE INDEX IF NOT EXISTS paid_rental_reference ON viewer_test_orders(rentalReference) WHERE paidAt IS NOT NULL AND kind='rent'");
     if (!columns.has('ledgerVersion')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN ledgerVersion INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('withdrawalState')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN withdrawalState TEXT');
     if (!columns.has('withdrawalRetryAt')) db.exec('ALTER TABLE viewer_test_orders ADD COLUMN withdrawalRetryAt INTEGER NOT NULL DEFAULT 0');
@@ -154,6 +166,8 @@ export function createSetupStore(db, key, paymentMode, transaction) {
       CREATE UNIQUE INDEX IF NOT EXISTS viewer_transfer_id ON viewer_test_orders(transferId) WHERE transferId IS NOT NULL AND transferId!='no_proceeds';
       CREATE INDEX IF NOT EXISTS viewer_transfer_due ON viewer_test_orders(transferRetryAt,createdAt)
         WHERE taxPolicy='marketplace-v1' AND paidAt IS NOT NULL AND transferId IS NULL;
+      CREATE INDEX IF NOT EXISTS viewer_open_coupon_by_age ON viewer_test_orders(createdAt)
+        WHERE couponId IS NOT NULL AND status='pending';
       CREATE INDEX IF NOT EXISTS viewer_withdrawal_due ON viewer_test_orders(withdrawalRetryAt) WHERE withdrawalState='requested' AND sessionId IS NOT NULL;
       CREATE INDEX IF NOT EXISTS viewer_nm_report_period ON viewer_test_orders(paidAt) WHERE nmQuote IS NOT NULL AND paidAt IS NOT NULL;
       CREATE INDEX IF NOT EXISTS viewer_order_legacy_receipt ON viewer_test_orders(filmId,paidAt);
@@ -161,7 +175,9 @@ export function createSetupStore(db, key, paymentMode, transaction) {
         account TEXT NOT NULL,eventId TEXT NOT NULL,orderId TEXT NOT NULL,receivedAt INTEGER NOT NULL,
         PRIMARY KEY(account,eventId))`);
   });
-  const accessOrder = sql('SELECT filmId,owner,account,scope,revision,kind,intentId,paidAt,rentalHours,status,revocationReason,disputeStatus FROM viewer_test_orders WHERE orderId=?');
+  const staleCouponHolds = `SELECT orderId FROM viewer_test_orders WHERE couponId IS NOT NULL AND status='pending'
+    AND (sessionId IS NULL OR withdrawalState IS NULL) AND createdAt<=? ORDER BY createdAt LIMIT 32`;
+  const accessOrder = sql('SELECT filmId,owner,account,scope,revision,kind,intentId,amount,couponId,paidAt,rentalHours,status,revocationReason,disputeStatus FROM viewer_test_orders WHERE orderId=?');
   function bucketAccess(owner, config) {
     const id = connectionId(owner, config);
     const row = sql('SELECT sealed,config FROM buckets WHERE id=? AND owner=?').get(id, owner);
@@ -196,6 +212,7 @@ export function createSetupStore(db, key, paymentMode, transaction) {
     paymentMode,
     ...programStore(db, transaction, (owner,id) => store.film(owner,id)),
     ...recoveryStore(db, key, paymentMode),
+    ...couponStore(db,transaction),
     ...analyticsReports(db, transaction),
     invite(owner, audience = 'filmmaker') {
       const code = token();
@@ -291,11 +308,11 @@ export function createSetupStore(db, key, paymentMode, transaction) {
         AND (audience='filmmaker' OR EXISTS(SELECT 1 FROM platform_admins a WHERE a.id=sessions.owner))`).get(hash(value), Date.now(), audience);
     },
     signOut(value) { sql('DELETE FROM sessions WHERE digest=?').run(hash(value)); },
-    filmmakerSettings(owner) {
+    filmmakerSettings(owner, includeCoupons = false) {
       const row = sql(`SELECT m.stripe, b.config AS bucket, d.config AS draft FROM makers m
         LEFT JOIN buckets b ON b.id=m.bucket_id AND b.owner=m.id
         LEFT JOIN storage_drafts d ON d.owner=m.id WHERE m.id=?`).get(owner);
-      return { stripe: JSON.parse(row.stripe), r2: row.bucket && JSON.parse(row.bucket), draft: row.draft ? JSON.parse(row.draft) : {} };
+      return { ...(includeCoupons && { couponSettings: store.couponSettings(owner) }), stripe: JSON.parse(row.stripe), r2: row.bucket && JSON.parse(row.bucket), draft: row.draft ? JSON.parse(row.draft) : {} };
     },
     dashboardDraft(owner) {
       // A completed opening or closing clip is absent from the standalone film list.
@@ -397,7 +414,7 @@ export function createSetupStore(db, key, paymentMode, transaction) {
         .run(platform,quote.code,quote.ratePartsPerMillion,Number(inclusive),stripeId);
       return store.nmRateId(platform,quote,inclusive);
     },
-    reserveViewerOrder({ tokenHash, id, owner, account, scope, revision, platform, title, origin, kind, amount, tipPercent = 0, rentalHours: hours = 48, taxPolicy = 'none', nmQuote = null, viewingAddressTag = null, salesTerritory = null }) {
+    reserveViewerOrder({ tokenHash, couponCode, id, owner, account, scope, revision, platform, title, origin, kind, amount, tipPercent = 0, rentalHours: hours = 48, taxPolicy = 'none', nmQuote = null, viewingAddressTag = null, salesTerritory = null }) {
       return transaction(() => {
         const existing = store.viewerOrderForToken(tokenHash);
         if (existing) return existing;
@@ -408,8 +425,8 @@ export function createSetupStore(db, key, paymentMode, transaction) {
         const program = isProgramId(id) && store.program(owner,id);
         const film = program ? program.published && program.revision === revision && store.programVersion(id,revision) : store.film(owner,id);
         const currentRevision = program ? program.revision : film?.revision;
-        const tipAmount = tipFor(amount,tipPercent);
-        if (tipAmount === null || store.filmPublication(id)?.published === 0 || !store.ownsAccount(owner, account) || seller?.accountId !== account || !film || currentRevision !== revision ||
+        const listAmount = amount;
+        if (!isPrice(listAmount) || store.filmPublication(id)?.published === 0 || !store.ownsAccount(owner, account) || seller?.accountId !== account || !film || currentRevision !== revision ||
             filmPrices(film.prices)?.[kind] !== amount ||
             (kind === 'rent' && (rentalHours(film.rentalHours) !== hours || !Number.isInteger(hours)))) {
           const error = new Error('The film offer changed.');
@@ -423,13 +440,49 @@ export function createSetupStore(db, key, paymentMode, transaction) {
           error.code = 'viewer_rate_limit';
           throw error;
         }
-        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours,taxPolicy,nmQuote,viewingAddressTag,salesTerritory,taxBasicFeeCents) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'elements',1,?,?,?,?,?,?)")
-          .run(tokenHash, randomUUID(), id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, kind === 'rent' ? hours : 48, taxPolicy, nmQuote && JSON.stringify(nmQuote), viewingAddressTag, salesTerritory, taxPolicy === 'marketplace-v1' && !nmQuote ? null : 0);
+        const coupon = couponCode && store.couponForOrder(owner,id,kind,listAmount,couponCode);
+        if (coupon) amount = coupon.amount;
+        const tipAmount = tipFor(amount,tipPercent);
+        if (tipAmount === null) throw Object.assign(Error('Choose an available tip amount.'),{code:'viewer_tip_invalid'});
+        const orderId = randomUUID();
+        sql("INSERT INTO viewer_test_orders (tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,createdAt,kind,amount,tipPercent,tipAmount,uiMode,cardOnly,rentalHours,taxPolicy,nmQuote,viewingAddressTag,salesTerritory,taxBasicFeeCents,rentalReference,couponId,couponCode,listAmount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+          .run(tokenHash, orderId, id, owner, account, scope, revision, platform, title, origin, now, kind, amount, tipPercent, tipAmount, amount===0 ? 'embedded_page' : 'elements', amount===0 ? 0 : 1, kind === 'rent' ? hours : 48, taxPolicy, nmQuote && JSON.stringify(nmQuote), viewingAddressTag, salesTerritory, taxPolicy === 'marketplace-v1' && !nmQuote ? null : 0,
+            kind === 'rent' ? rentalReference(scope,orderId) : null,coupon?.id || null,coupon?.code || null,coupon ? listAmount : null);
         return store.viewerOrderForToken(tokenHash);
       });
     },
     viewerOrderForToken(digest) { return sql('SELECT * FROM viewer_test_orders WHERE tokenHash=?').get(digest); },
     viewerOrderById(id) { return sql('SELECT * FROM viewer_test_orders WHERE orderId=?').get(id); },
+    rentalsForReference(code) {
+      // Older settlements used the same code before it was indexed. Bound each
+      // administrative request and finish indexing before claiming a unique match.
+      return transaction(() => {
+        const eligible = "paidAt IS NOT NULL AND kind='rent'";
+        const missing = sql(`SELECT orderId,scope FROM viewer_test_orders WHERE ${eligible} AND rentalReference IS NULL LIMIT 101`).all();
+        if (missing.length) {
+          const save = sql('UPDATE viewer_test_orders SET rentalReference=? WHERE orderId=?');
+          for (const row of missing.slice(0,100)) save.run(rentalReference(row.scope,row.orderId),row.orderId);
+          if (missing.length > 100) return {incomplete:true};
+        }
+        const matches = sql(`SELECT orderId,title,owner,paidAt,COALESCE(intentId,sessionId) AS intentId FROM viewer_test_orders
+          WHERE ${eligible} AND rentalReference=? ORDER BY paidAt DESC`).all(code);
+        return {matches};
+      });
+    },
+    subtitleList(owner,filmId,revision) {
+      return sql("SELECT id,language,label,kind,'text' AS format FROM film_subtitles WHERE owner=? AND filmId=? AND revision=? ORDER BY label,id").all(owner,filmId,revision);
+    },
+    subtitleFile(owner,filmId,revision,id) {
+      return sql('SELECT vtt FROM film_subtitles WHERE owner=? AND filmId=? AND revision=? AND id=?').get(owner,filmId,revision,id)?.vtt;
+    },
+    saveSubtitle(owner,filmId,revision,previous,track) {
+      return transaction(() => {
+        if (store.film(owner,filmId)?.revision !== revision) return false;
+        if (previous && !sql('DELETE FROM film_subtitles WHERE owner=? AND filmId=? AND revision=? AND id=?').run(owner,filmId,revision,previous).changes) return false;
+        if (track) sql('INSERT INTO film_subtitles VALUES(?,?,?,?,?,?,?,?)').run('u-'+randomUUID(),owner,filmId,revision,track.language,track.label,track.kind,track.vtt);
+        return true;
+      });
+    },
     viewerAccessById(id) { return accessOrder.get(id); },
     viewerOrderBySession(id) { return sql('SELECT * FROM viewer_test_orders WHERE sessionId=?').get(id); },
     viewerOrderByPayment(account, intentId, chargeId) {
@@ -444,7 +497,7 @@ export function createSetupStore(db, key, paymentMode, transaction) {
       const now = Date.now();
       return Boolean(sql(`SELECT 1 FROM viewer_test_orders WHERE feeCheckAfter<=? AND stripeFeeCents IS NULL
         AND paidAt IS NOT NULL AND intentId IS NOT NULL LIMIT 1`).get(now) ||
-        store.requestedWithdrawals().length || store.pendingViewerTransfers().length ||
+        store.requestedWithdrawals().length || sql(staleCouponHolds).get(now-24*3600_000) || store.pendingViewerTransfers().length ||
         sql('SELECT 1 FROM viewer_test_orders WHERE taxBasicFeeCents IS NULL AND paidAt<=? LIMIT 1')
           .get(Math.floor(now / 86400000) * 86400 - 1));
     },
@@ -541,7 +594,7 @@ export function createSetupStore(db, key, paymentMode, transaction) {
       return rows.length > 0 && rows.every(row => row.status === 'paid' && !row.revocationReason);
     },
     bindViewerSession(orderId, sessionId) {
-      const result = sql('UPDATE viewer_test_orders SET sessionId=? WHERE orderId=? AND (sessionId IS NULL OR sessionId=?)')
+      const result = sql("UPDATE viewer_test_orders SET sessionId=? WHERE orderId=? AND ((sessionId IS NULL AND status='pending') OR sessionId=?)")
         .run(sessionId, orderId, sessionId);
       if (result.changes !== 1) throw new Error('Conflicting Checkout Session.');
     },
@@ -553,7 +606,14 @@ export function createSetupStore(db, key, paymentMode, transaction) {
     withdrawViewerOrder(orderId) {
       sql("UPDATE viewer_test_orders SET withdrawalState='requested' WHERE orderId=? AND status='pending' AND withdrawalState IS NULL").run(orderId);
     },
-    requestedWithdrawals(owner = null, filmId = null) {
+    requestedWithdrawals(owner = null, filmId = null, sweepCoupons = false) {
+      if (sweepCoupons) {
+        // A lost expiration webhook can leave a use held. Verify bound Sessions with Stripe.
+        sql(`UPDATE viewer_test_orders SET
+          status=CASE WHEN sessionId IS NULL THEN 'expired' ELSE status END,
+          withdrawalState=CASE WHEN sessionId IS NOT NULL THEN 'requested' ELSE withdrawalState END,
+          ledgerVersion=ledgerVersion+1 WHERE orderId IN (${staleCouponHolds})`).run(Date.now()-24*3600_000);
+      }
       return sql(`SELECT * FROM viewer_test_orders WHERE withdrawalState='requested' AND sessionId IS NOT NULL
         AND withdrawalRetryAt<=? AND (? IS NULL OR owner=?) AND (? IS NULL OR filmId=?) ORDER BY withdrawalRetryAt,createdAt LIMIT 32`)
         .all(Date.now(),owner,owner,filmId,filmId);
@@ -573,6 +633,17 @@ export function createSetupStore(db, key, paymentMode, transaction) {
     },
     expireViewerOrder(orderId) {
       sql("UPDATE viewer_test_orders SET status='expired',ledgerVersion=ledgerVersion+1 WHERE orderId=? AND status='pending' AND intentId IS NULL").run(orderId);
+    },
+    settleFreeCoupon(order,confirmedAt,email) {
+      return transaction(() => {
+        const saved = sql(`UPDATE viewer_test_orders SET paidAt=COALESCE(paidAt,?),status='paid',taxCents=0,tipTaxCents=0,
+        chargedTotalCents=0,taxBasicFeeCents=0,stripeFeeCents=0,transferId='no_proceeds',
+        verifiedAt=unixepoch(),ledgerVersion=ledgerVersion+1 WHERE orderId=? AND sessionId=? AND ledgerVersion=?
+        AND status IN ('pending','paid') AND couponId IS NOT NULL AND amount=0 AND tipAmount=0 AND intentId IS NULL AND revocationReason IS NULL RETURNING *`)
+        .get(confirmedAt,order.orderId,order.sessionId,order.ledgerVersion);
+        if (saved) store.rememberViewerEmail(saved.orderId,email);
+        return saved;
+      });
     },
     reconcileViewerPayment(order, { intentId, chargeId, paidAt, refundedAmount, disputeStatus, revocationReason, stripeFeeCents = null, chargeBalanceId = null,
       taxCents, tipTaxCents, chargedTotalCents }) {
