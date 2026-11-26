@@ -26,7 +26,13 @@ The live super-admin dashboard links **Review pending Stripe Tax fees** when an 
 
 For New Mexico filing, choose the reporting month in the live super-admin overview and select **Download totals**. The CSV uses New Mexico calendar months, reports paid film and tip receipts net of included tax, and separates the tax on each. Combine these manual district totals with Stripe's automatic-tax records and review flagged disputes or adjustments. The export sends no filing or payment.
 
-For coupon orders, subscribe both payment-event destinations to `checkout.session.expired` so an expired session releases its reserved use promptly. Scheduled reconciliation also checks for missed expirations. The read-only provider check validates the events listed in `viewerWebhookEvents`. Check the expiration subscription separately in each destination’s event list. On November 26 (UTC), both live destinations were enabled and neither subscribed to expiration events. Until those subscriptions change, scheduled reconciliation releases expired holds when it next checks the order.
+## Expired coupon holds
+
+Enable `checkout.session.expired` on both existing live destinations listed under **Open sales**. In Stripe Workbench, edit each destination’s event selection and add it alongside the existing events. Run `node scripts/check-live-stripe.js` with the live viewer environment. It exits unsuccessfully if either destination lacks a required event. Both `platformWebhookEnabled` and `connectWebhookEnabled` should be true.
+
+When Stripe delivers an expiration, Stream checks the Checkout Session in the matching account and releases the reserved use once Stripe confirms expiry. Closing a browser tab leaves the session open. If delivery is missed, the existing 15-minute maintenance check picks up holds at least 24 hours old and reconciles them with Stripe. To verify a real delivery, match a future expired Checkout Session to its successful delivery in the destination’s event log.
+
+On November 25, 2026 (Mountain time), Stripe’s API showed 15 subscribed events on each live Stream destination, including `checkout.session.expired`. The deployment check passed for both account scopes.
 
 ## Rehearsal evidence, November 21, 2026
 

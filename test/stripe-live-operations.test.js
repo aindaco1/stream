@@ -29,6 +29,14 @@ test('live readiness uses read-only Stripe endpoints and checks each configured 
   const result = await checkLiveStripe(env,read);
   assert.ok(result.connectWebhookEnabled && result.platformWebhookEnabled && result.feesReportAvailable && result.distinctSigningSecretsPresent);
   assert.deepEqual(result.activeTaxLocations,['US-NM']);
+  const withoutExpiration = viewerWebhookEvents.filter(type => type !== 'checkout.session.expired');
+  for (const [index, endpoint] of endpoints.entries()) {
+    endpoint.enabled_events = withoutExpiration;
+    const readiness = await checkLiveStripe(env,read);
+    assert.equal(readiness.connectWebhookEnabled,index !== 0);
+    assert.equal(readiness.platformWebhookEnabled,index !== 1);
+    endpoint.enabled_events = viewerWebhookEvents;
+  }
   endpoints[1].enabled_events=['checkout.session.completed'];
   assert.equal((await checkLiveStripe(env,read)).platformWebhookEnabled,false);
 });

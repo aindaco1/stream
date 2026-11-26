@@ -16,8 +16,7 @@ import { resolveNewMexicoQuote, newMexicoTotals } from './new-mexico-grt.js';
 
 const LEGACY_FLOW = 'stream-viewer-rental';
 const FLOW = 'stream-viewer-checkout';
-const sessionEvents = ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed'];
-const handledSessions = new Set([...sessionEvents,'checkout.session.expired']);
+const sessionEvents = new Set(['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed', 'checkout.session.expired']);
 export const viewerWebhookEvents = ['charge.updated', ...sessionEvents, ...adjustmentEvents];
 const CHECKOUT_API = { stripeVersion: '2026-10-28.endive' };
 const INTENT = /^pi_[a-zA-Z0-9]+$/;
@@ -552,7 +551,7 @@ export function createViewerCheckout({ store, env = process.env, fetchImpl = fet
       return {received:true};
     }
     if (adjustmentEvents.has(event.type)) { await adjustmentWebhook(event,platformEvent,eventAccount); return {received:true}; }
-    if (!handledSessions.has(event.type) ||
+    if (!sessionEvents.has(event.type) ||
         ![FLOW, LEGACY_FLOW].includes(object?.metadata?.flow) || sessionMode(object.id) !== mode) return { received: true };
     const order = store.viewerOrderById(object.metadata.order);
     if (!order || platformEvent !== isMarketplace(order) || eventAccount !== (platformEvent ? order.platform : order.account)) return { received: true };
