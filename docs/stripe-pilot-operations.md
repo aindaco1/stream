@@ -26,7 +26,7 @@ The live super-admin dashboard links **Review pending Stripe Tax fees** when an 
 
 For New Mexico filing, choose the reporting month in the live super-admin overview and select **Download totals**. The CSV uses New Mexico calendar months, reports paid film and tip receipts net of included tax, and separates the tax on each. Combine these manual district totals with Stripe's automatic-tax records and review flagged disputes or adjustments. The export sends no filing or payment.
 
-For coupon orders, subscribe both payment-event destinations to `checkout.session.expired` so an expired session releases its reserved use promptly. Scheduled reconciliation also checks for missed expirations. Before enabling coupons in production, complete a zero-total rental and purchase in Stripe’s sandbox and verify access, recovery and the absence of any charge or transfer.
+For coupon orders, subscribe both payment-event destinations to `checkout.session.expired` so an expired session releases its reserved use promptly. Scheduled reconciliation also checks for missed expirations. The read-only provider check validates the events listed in `viewerWebhookEvents`. Check the expiration subscription separately in each destination’s event list. On November 26 (UTC), both live destinations were enabled and neither subscribed to expiration events. Until those subscriptions change, scheduled reconciliation releases expired holds when it next checks the order.
 
 ## Rehearsal evidence, November 21, 2026
 
@@ -38,4 +38,10 @@ The inline checkout browser suite passed five desktop/mobile viewport sizes, inc
 
 The deployed viewer and filmmaker workspace passed their readiness checks. The media process decoded its test frame after a cold start and reported the worldwide checkout setting. The restricted Stream key confirmed that the platform can charge and pay out, that New Mexico is its active Stripe Tax registration, and that the itemized fee report is available.
 
-Stripe opened a live inline Checkout Session for a $2 rental and a 20¢ tip with automatic tax enabled. The session expired unpaid. Each public webhook endpoint acknowledged a locally signed configuration check using its own destination secret. Stripe does not send session-expiration events to these destinations. Verify Stripe’s delivery of the first actual payment event, viewer access, the filmmaker transfer and the subsequent bank payout against the real order.
+Stripe opened a live inline Checkout Session for a $2 rental and a 20¢ tip with automatic tax enabled. The session expired unpaid. Each public webhook endpoint acknowledged a locally signed configuration check using its own destination secret. On November 21, neither destination was subscribed to session-expiration events. Verify Stripe’s delivery of the first actual payment event, viewer access, the filmmaker transfer and the subsequent bank payout against the real order.
+
+## Coupon release verification, November 26, 2026 (UTC)
+
+A 100% coupon completed both a rental and a purchase in Stripe’s sandbox through the embedded checkout. Each order granted access and could be recovered with the checkout email. Only the purchase granted the original download. Both orders settled at $0 with no charge or filmmaker transfer.
+
+On production, the workspace and media runtime served the release, the coupon and subtitle tables were present in the live ledger, and the homepage film played and sought in the browser. The sandbox results cover complimentary orders. Verification of a real card payment, transfer and bank payout uses the settlement procedure above. [Stream release PR](https://github.com/aindaco1/stream/pull/42)

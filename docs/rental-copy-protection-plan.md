@@ -1,6 +1,6 @@
 # Rental copy protection
 
-**Decision for the first release.** Keep recurring DRM fees at zero. Keep ordinary rentals visually clean unless the filmmaker enables the existing **Rental screener watermark** setting. The local implementation adds a super-admin lookup and improves the existing mark’s crop resilience. The pacing trials below delayed legitimate playback requests, so the media service has no new limiter.
+**Hosted release, November 26, 2026 (UTC).** Filmmakers can enable **Rental screener watermark** on a film or program. The player moves the code inside the picture, and a super-admin can look up the associated rental. This uses the existing media renderer with no recurring DRM fee. Download pacing remains an experiment because it delayed ordinary seeks. [Release and remaining checks](../ROADMAP.md#live-in-the-hosted-pilot)
 
 ## What Stream already protects
 

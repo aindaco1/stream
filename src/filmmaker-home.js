@@ -43,7 +43,7 @@ export function filmmakerHome() {
         <p>A viewer who rented on a laptop can open their <strong>private rental link</strong> on another device. In Safari, they can <a href="/faq#tv">send the film to an AirPlay TV</a> on the same Wi-Fi and settle in for the screening.</p>
       </div>
       <div><h2>Let viewers choose the subtitles.</h2>
-        <p>Include subtitle tracks in your film and the player gives viewers a <strong>captions menu</strong>. They can choose a language or turn subtitles off as they watch. <a href="/faq#subtitles">See supported subtitle tracks</a>.</p>
+        <p>Upload an SRT file or use the tracks already in your film. Viewers can open the <strong>captions menu</strong> to choose dialogue subtitles or captions with sound cues. <a href="/faq#subtitles">See supported subtitle tracks</a>.</p>
       </div>
     </section>`, { landing: true });
 }
