@@ -297,6 +297,25 @@ test('a fully discounted maximum-price film clears manual tax and the default ti
   assert.equal((await c.status()).status,'paid');
 });
 
+test('a signed expiration releases a coupon use in either account scope and can be delivered twice',async t => {
+  for (const marketplace of [true,false]) {
+    const c = await context(t,{marketplace});
+    addCoupon(c,{value:'100',maxUses:'1'});
+    const order = {offer:c.offer,origin,kind:'rent',couponCode:'FEST'};
+    await c.checkout.start({...order,token:c.token});
+    assert.equal(c.store.couponSettings(c.offer.owner).coupons[0].uses,1);
+    Object.assign(c.first(),{status:'expired',payment_status:'no_payment_required'});
+    const event = {...c.event(),type:'checkout.session.expired'};
+    if (marketplace) delete event.account;
+    const signed = c.sign(event,undefined,marketplace ? 'whsec_platform' : secret);
+    await c.checkout.webhook(...signed,marketplace);
+    assert.equal(c.store.couponSettings(c.offer.owner).coupons[0].uses,0);
+    await c.checkout.start({...order,token:viewerToken()});
+    await c.checkout.webhook(...signed,marketplace);
+    assert.equal(c.store.couponSettings(c.offer.owner).coupons[0].uses,1);
+  }
+});
+
 test('a missed expiration webhook releases a coupon hold only after checking the provider',async t => {
   const c = await context(t,{marketplace:true});
   addCoupon(c,{value:'100',maxUses:'1'});
