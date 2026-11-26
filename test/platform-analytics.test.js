@@ -1,3 +1,5 @@
+import { DatabaseSync } from 'node:sqlite';
+import { rentalReference } from '../src/rental-reference.js';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +10,10 @@ import { createSetup } from '../src/setup.js';
 
 test('operator-only analytics has its own invitations, session, directory and sign-out', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'stream-admin-'));
-  const setup = await createSetup({ directory, env: {} });
+  const contacts = [];
+  const setup = await createSetup({ directory, env: {}, viewerCheckout:{
+    async rentalCustomer(id) { contacts.push(id); return 'viewer@example.test'; }
+  }});
   const { store } = setup;
   const app = await makeServer(null, { setup });
   await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
@@ -53,6 +58,35 @@ test('operator-only analytics has its own invitations, session, directory and si
   assert.equal((await post('/setup/admin', {}, cookie)).status, 404);
   assert.equal((await post('/setup/admin/sign-out', { csrf: 'wrong' }, cookie)).status, 403);
   const { csrf } = store.session(cookie.split('=')[1], 'admin');
+  const lookup = '/setup/admin/watermark';
+  const code = rentalReference('film','order');
+  assert.match(page,/Rental watermark lookup/);
+  assert.equal((await post(lookup,{code,csrf},ordinaryAsAdmin)).status,401);
+  assert.equal((await post(lookup,{code,csrf:'invalid'},cookie)).status,403);
+  assert.equal((await post(lookup,{code:'123XYZ',csrf},cookie)).status,400);
+  assert.equal((await fetch(origin+lookup,{method:'POST',headers:{Cookie:cookie,Origin:'https://elsewhere.example'},
+    body:new URLSearchParams({code,csrf})})).status,403);
+  assert.match(await (await post(lookup,{code,csrf},cookie)).text(),/No paid rental matches/);
+  const db = new DatabaseSync(join(directory,'setup.sqlite'));
+  const insert = db.prepare(`INSERT INTO viewer_test_orders(tokenHash,orderId,filmId,owner,account,scope,revision,platform,title,origin,
+    createdAt,kind,paidAt,intentId,rentalReference) VALUES(?,?,'film','Maker','acct','film','1','platform','Film',?,1,?,1,?,?)`);
+  for (let i=0;i<101;i++) insert.run('digest'+i,'old'+i,origin,'rent','pi_old'+i,null);
+  insert.run('digest','order',origin,'rent','pi_synthetic',null);
+  insert.run('buy','buyer',origin,'buy','pi_purchase',code);
+  assert.match(await (await post(lookup,{code,csrf},cookie)).text(),/Continue lookup/);
+  assert.deepEqual(contacts,[]);
+  const match = await post(lookup,{code:code.toLowerCase(),csrf},cookie);
+  assert.match(match.headers.get('cache-control'),/no-store/);
+  assert.match(await match.text(),/viewer@example.test/);
+  assert.deepEqual(contacts,['order']);
+  insert.run('other','another',origin,'rent','pi_collision',code);
+  const ambiguous = await (await post(lookup,{code,csrf},cookie)).text();
+  assert.match(ambiguous,/Several rentals share/);
+  assert.match(ambiguous,/pi_synthetic/);
+  assert.match(ambiguous,/pi_collision/);
+  assert.doesNotMatch(ambiguous,/viewer@example.test|pi_purchase/);
+  assert.deepEqual(contacts,['order']);
+  db.close();
   assert.equal((await post('/setup/admin/sign-out', { csrf }, cookie)).status, 303);
   assert.equal((await get('/setup/admin', cookie)).status, 303);
   assert.equal((await get('/setup/dashboard', ordinaryCookie)).status, 200);

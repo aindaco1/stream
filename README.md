@@ -2,6 +2,14 @@
 
 An open-source film player for filmmakers who keep their originals in their own storage. Filmmakers can [join the hosted pilot](https://streamyourfilm.com/). Each filmmaker connects a private Cloudflare R2 bucket, chooses the preview length and sets prices for a timed rental, a one-time purchase, or both. Viewers pay and watch in the filmmaker’s embed. A purchase also includes the original file. Stream reads the original from the filmmaker’s bucket and creates each playable segment on demand.
 
+The [Stream roadmap](ROADMAP.md) covers the next release, rental protection, smart TV apps and pilot priorities.
+
+## Filmmaker coupons
+
+In **Settings → Coupons**, create a percentage or fixed US-dollar discount for all titles or a single film or program. Choose rentals, purchases or both. Expiry dates run through the displayed UTC day. An optional use limit includes completed orders and holds for open checkout sessions. Editing or deleting a coupon affects future orders. Existing checkouts retain their quoted price.
+
+Viewers enter one code before choosing Rent or Buy. Stream calculates tips and tax on the discounted price. A fully discounted order uses a zero-total Stripe Checkout Session and unlocks after confirmation, with the usual rental window or purchase download. A partially discounted order must leave at least $0.50 before tips and tax.
+
 ## Film programs
 
 In **Dashboard → Create program**, choose at least two films, arrange their screening order, and optionally add an opening, closing video, and cover image. Choose one preview excerpt and set a rental price, purchase price, or both. The dashboard shows a private preview and a single embed code.
@@ -175,7 +183,9 @@ Stream accepts seekable MP4, MOV and MKV originals with H.264, H.265/HEVC, AV1 o
 
 Start a film or program rental and choose **AirPlay** in Safari or **Play on TV** in other browsers. Stream uses the browser’s device picker when it can play the protected HLS stream. If no compatible TV is available, **Watch on another device** provides a private link you can open in Safari for AirPlay. Both devices must be able to reach the public HTTPS player. The receiver gets a private URL that authorizes encrypted HLS for that rental and film revision. For programs, each title in the rented edition has its own receiver URL and encryption key. Use the player’s Previous and Next controls to change titles. The player remembers the viewer’s caption language across titles. Its requests use the existing order checks, and the URL expires after ten minutes of inactivity or at the end of the rental. Treat receiver URLs and media request paths as secrets when configuring proxy logs. A player restart clears receiver sessions. Press Play in the embed to reconnect with an active rental.
 
-A filmmaker can turn on **Rental screener watermark** in a film’s or program’s Prices and playback settings. Rental frames carry an anonymous order reference for four seconds each minute, alternating upper corners. This opt-in uses the on-demand H.264/AAC renderer. Free previews, purchased playback and downloads keep their usual picture. Published program editions retain their watermark setting.
+A filmmaker can turn on **Rental screener watermark** in a film’s or program’s Prices and playback settings. Rental frames carry an anonymous order reference for four seconds each minute, moving between interior positions within the overlap of common center crops. Super-admins can enter the code on Platform analytics to find the associated payment and checkout email. This opt-in uses the on-demand H.264/AAC renderer. Free previews, purchased playback and downloads keep their usual picture. Published program editions retain their watermark setting.
+
+On the filmmaker Dashboard, open a saved film and choose **Manage SRT subtitles**. Add, replace or remove individual UTF-8 SRT files (up to 512 KiB each). Set the language, label and track type for each upload. Two English tracks can provide ordinary subtitles and SDH. Tracks belong to that cut of the film and follow it into programs. Uploads are converted to WebVTT once. Preview cues stop at the preview cutoff. Purchased originals retain their original embedded tracks.
 
 Viewers can use the CC control on the video to choose a subtitle track or turn subtitles off. Compatible browsers also show a picture-in-picture control during playback. Text tracks are delivered as WebVTT. Selecting a picture track renders its images onto that playback rendition. Preview video and captions end at the filmmaker’s cutoff. Stream reads the private original through conditional byte ranges and keeps temporary playback data on the host. The host reserves two concurrent jobs for inspection and playback rendering, and one for longer previews or a full subtitle scan. The first selection of a language in a large file may need a scan of the original. Later requests can reuse its in-memory result. Short previews use their own read and time limits.
 

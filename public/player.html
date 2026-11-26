@@ -32,7 +32,7 @@
       <button type="button" id="play">Play {{preview}}-second preview</button>{{exampleOffers}}
     </div>
     <section id="purchase" aria-label="Film offers" hidden>
-      <p id="terms"></p>
+      <p id="terms"></p>{{watermarkNotice}}
       <div id="tip-choice">
         <label for="tip-percent">Optional tip</label>
         <input type="range" id="tip-percent" min="0" max="15" step="1" value="10" aria-describedby="tip-note">
@@ -45,6 +45,7 @@
         <button type="button" id="refresh-program" hidden>Refresh program</button>
         <button type="button" id="check-payment" class="secondary" hidden>Check payment</button>
       </div>
+      {{couponField}}
     </section>
     <section id="payment" aria-labelledby="checkout-heading" hidden>
       <div id="checkout-scroll">
@@ -52,6 +53,7 @@
           <div class="payment-nav"><h1 id="checkout-heading" tabindex="-1">{{title}}</h1>
             <button type="button" id="close-checkout">Back to film</button></div>
           <div class="order-line"><p id="order-terms"></p><strong id="order-price"></strong></div>
+          <p id="order-discount" hidden></p>
           <p id="order-tip" hidden></p>
           <p id="order-tax" aria-live="polite" aria-atomic="true"></p>
           <button id="change-location" class="text-action" type="button" hidden>Change viewing location</button>

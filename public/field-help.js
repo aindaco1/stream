@@ -3,7 +3,7 @@ const fieldHelp = {
   rentPrice: 'What a viewer pays to stream for a limited time. Enter at least $0.50, or leave it blank to offer purchases only.',
   rentalHours: 'How long a rental lasts from the moment the viewer pays. Start with 48 hours for a weekend screening. You can choose 1 to 720 hours.',
   previewSeconds: 'How much viewers can watch for free before checkout. Try 10 seconds to start, or 0 to show the price right away. The limit is 180 seconds or one second less than the preview video, whichever is shorter.',
-  screenerWatermark: 'Turn this on for a private screener to show a brief, anonymous rental code each minute. Leave it off for a clean picture.',
+  screenerWatermark: 'Turn this on for a private screener to show a brief, order-specific code each minute. Leave it off for a clean picture.',
   synopsis: 'Give viewers a sense of the story. One or two sentences usually fit well beside the player.',
   byline: 'Enter the name or names to print after “A film by.” Leave this blank if the director is already listed in Credits.',
   curator: 'Enter the name or names to print after “Curated by” on the program poster. Each film keeps its own director credit.',

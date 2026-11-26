@@ -10,6 +10,7 @@ import { exampleMedia } from './workspace-assets.js';
 import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { createRentalAuthority } from './rental.js';
+import { safeVtt } from './media-compat.js';
 import { airplayLeases, captionCues, captionMaster, captionSegment, screenerReference } from './airplay.js';
 import { openFilm } from './media.js';
 import { siteIcons } from './site-frame.js';
@@ -101,9 +102,10 @@ async function body(req, limit) {
 function viewingOrder(text) {
   let request;
   try { request = JSON.parse(text); } catch { return null; }
-  if (!request || Object.keys(request).some(key => !['token','tipPercent','viewingAddress','programRevision'].includes(key)) ||
+  if (!request || Object.keys(request).some(key => !['token','tipPercent','viewingAddress','programRevision','couponCode'].includes(key)) ||
       typeof request.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(request.token) ||
       !Number.isInteger(request.tipPercent) || request.tipPercent < 0 || request.tipPercent > 15) return null;
+  if (request.couponCode !== undefined && (typeof request.couponCode !== 'string' || request.couponCode.length>40)) return null;
   const { programRevision, viewingAddress:address } = request;
   if (programRevision !== undefined && (typeof programRevision !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(programRevision))) return null;
   if (address !== undefined) {
@@ -114,7 +116,7 @@ function viewingOrder(text) {
       if (typeof address[field] !== 'string' || !address[field].trim() || address[field].length > limit || /\p{Cc}/u.test(address[field])) return null;
     }
   }
-  return { token:request.token, tipPercent:request.tipPercent, viewingAddress:address, programRevision };
+  return { token:request.token, tipPercent:request.tipPercent, viewingAddress:address, programRevision, couponCode:request.couponCode };
 }
 
 function attachmentName(title, extension) {
@@ -446,6 +448,7 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
             try {
               result = await checkout.start({...input, offer, kind:action === 'buy' ? 'buy' : 'rent', origin});
             } catch (err) {
+              if (err.code === 'coupon_invalid') return send(422,'application/json',JSON.stringify({code:err.code,message:err.message}),checkoutHeaders);
               if (offer.type === 'program' && err.code === 'viewer_offer_changed') return changed();
               throw err;
             }
@@ -477,15 +480,21 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
       if (!read && !preflight) return fail(405);
       const subtitles = new URL(req.url, origin).searchParams.getAll('subtitle');
       const rendition = subtitles[0];
-      if (subtitles.length && (subtitles.length !== 1 || !/^s\d{1,5}$/.test(rendition))) return fail(400);
+      if (subtitles.length && (subtitles.length !== 1 || !/^(?:s\d{1,5}|u-[0-9a-f-]{36})$/.test(rendition))) return fail(400);
       const hasRendition = film => !rendition || film.subtitleTracks?.some(track => track.id === rendition && track.format === 'bitmap');
+      const tracksFor = film => [...(film.subtitleTracks || []), ...(film.uploadedSubtitles?.list() || [])];
+      function textFor(film,id,options = {}) {
+        if (!id.startsWith('u-')) return film.subtitles(id,options);
+        const vtt = film.uploadedSubtitles?.read(id);
+        return vtt && options.end !== undefined ? safeVtt(vtt,options.end) : vtt;
+      }
       async function sendSubtitles(film, options, allowed) {
         if (!allowed()) return fail(403);
-        const tracks = film.subtitleTracks || [];
-        if (!trackId) return send(200, 'application/json', JSON.stringify(tracks.map(({ id, language, label, kind, format, forced }) =>
+        if (!trackId) return send(200, 'application/json', JSON.stringify(tracksFor(film).map(({ id, language, label, kind, format, forced }) =>
           ({ id, language, label, kind, format, forced }))));
-        if (!tracks.some(track => track.id === trackId && track.format !== 'bitmap')) return fail(404);
-        const vtt = await film.subtitles(trackId, options);
+        if (!trackId.startsWith('u-') && !film.subtitleTracks?.some(track => track.id === trackId && track.format !== 'bitmap')) return fail(404);
+        const vtt = await textFor(film,trackId,options);
+        if (!vtt) return fail(404);
         return allowed() ? send(200, 'text/vtt; charset=utf-8', vtt) : fail(403);
       }
       if (action === 'preview.mp4' || action.startsWith('preview/')) {
@@ -535,10 +544,11 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         return authorized() && access.expiresAt > Date.now() / 1000 && live?.scope === spec.scope && live.revision === spec.revision;
       });
       const hlsType = 'application/vnd.apple.mpegurl';
-      const receiverText = receiver && rendition && film.subtitleTracks?.find(track => track.id === rendition && track.format === 'text');
+      const receiverText = receiver && rendition && (rendition.startsWith('u-') ? tracksFor(film) : film.subtitleTracks)?.find(track => track.id === rendition && track.format === 'text');
       if (receiverText) {
         if (asset === 'captions.vtt') {
-          const track = await film.subtitles(rendition);
+          const track = await textFor(film,rendition);
+          if (!track) return fail(404);
           return authorized() ? send(200, 'text/vtt; charset=utf-8', track) : fail(403);
         }
         if (asset === 'index.m3u8') return send(200, hlsType, captionMaster(receiverText));
@@ -550,7 +560,9 @@ export async function makeServer(openMaker, { setup, publicOrigin, catalog, chec
         if (!tracks) { tracks = new Map(); receiverCues.set(film, tracks); }
         let cues = tracks.get(rendition);
         if (!cues) {
-          cues = captionCues(await film.subtitles(rendition));
+          const text = await textFor(film,rendition);
+          if (!text) return fail(404);
+          cues = captionCues(text);
           if (tracks.size >= 2) tracks.delete(tracks.keys().next().value);
           tracks.set(rendition, cues);
         }

@@ -24,6 +24,8 @@ export function renderPlayer(template, { published, style, fields, program, post
     checkout: String(payable), salesTerritory: escapeHtml(checkout?.salesTerritory ?? ''),
     manualNm: String(payable && checkout?.manualNmEnabled === true), preview: published ? previewSeconds ?? 10 : 0,
     emailRecovery: String(Boolean(recovery && payable)), published: String(Boolean(published)),
+    couponField: payable && !example ? '<details id="coupon-choice"><summary>Have a coupon?</summary><label>Coupon code<input id="coupon-code" type="text" maxlength="40" autocapitalize="characters" autocomplete="off" spellcheck="false"></label></details>' : '',
+    watermarkNotice: published?.screenerWatermark && published.prices?.rent ? '<p>This rental briefly displays a code linked to your order.</p>' : '',
     rent: published?.prices?.rent ?? '', buy: published?.prices?.buy ?? '', rentalHours: published?.rentalHours ?? 48
   };
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key]);

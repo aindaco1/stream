@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@dustwave/admin-shell": "file:shared/dust-wave-platform/packages/admin-shell",
+    "@dustwave/coupon-core": "file:shared/dust-wave-platform/packages/coupon-core",
     "@dustwave/tax-core": "file:shared/dust-wave-platform/packages/tax-core",
     "@dustwave/worker-core": "file:shared/dust-wave-platform/packages/worker-core",
     "aws4fetch": "1.0.20",

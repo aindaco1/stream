@@ -7,12 +7,13 @@ export const dashboardCsp = previewOrigin =>
   workspaceCsp.replace("img-src 'self'", "img-src 'self' blob:") + "; connect-src 'self'; frame-src " + previewOrigin;
 
 export function filmmakerSettings({ store, session, provider, salesTerritory, path, searchParams, feedback }) {
-  const { r2, stripe, draft } = store.filmmakerSettings(session.owner);
+  const coupons = searchParams.get('section') === 'coupons' || feedback?.initialSection === 'coupons';
+  const { r2, stripe, draft, couponSettings } = store.filmmakerSettings(session.owner,coupons);
   const mode = store.paymentMode;
   const state = stripeSetupStateForMode(stripe, mode);
   return renderSettingsPage({
-    filmmaker: { name: session.email || session.owner }, csrf: session.csrf,
-    initialSection: path.startsWith('/setup/stripe/') ? 'payments' : 'storage',
+    couponSettings, filmmaker: { name: session.email || session.owner }, csrf: session.csrf,
+    initialSection: coupons ? 'coupons' : path.startsWith('/setup/stripe/') ? 'payments' : 'storage',
     stripe: {
       configured: provider.configured, mode, existingAvailable: provider.existingOAuth,
       availability: mode === 'live' ? checkoutAvailability(salesTerritory) : '',

@@ -36,7 +36,7 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
       <div class="extra-title"${film ? '' : ' hidden'}><label>${title} title in this program<input name="${role}Title" type="text" maxlength="160" placeholder="${esc(film?.title)}" value="${esc(member?.title || film?.title)}"></label>
         ${hidden(role + 'TitleFor',film?.id)}</div>
       <div class="film-actions"><button class="secondary" name="action" value="upload-${role}">${film ? 'Replace ' + role + ' video' : 'Add a new ' + role + ' video'}</button>
-      <button class="secondary" name="action" value="remove-${role}"${film ? '' : ' hidden'}>Remove ${role}</button></div></div>`;
+      <button class="secondary" name="action" value="remove-${role}"${film ? '' : ' hidden'}>Remove ${role}</button>${film ? '<a href="/setup/subtitles/'+esc(film.id)+'">Manage '+role+' subtitles</a>' : ''}</div></div>`;
   }
   function filmRow(film) {
     const checked = selected.has(film.id);
@@ -83,12 +83,12 @@ export function renderProgramEditor(program, films, csrf, error, notice) {
       '<p><a href="/setup/settings#storage">Connect storage</a> to upload a program thumbnail.</p>'}`;
 }
 
-export function renderPrivateProgram(program, films, path) {
+export function renderPrivateProgram(program, films, path, tracks = '') {
   const byId = new Map(films.map(film => [film.id, film]));
   const first = program.members.find(item => item.role === 'film');
   const posterId = program.thumbnail ? program.id : byId.get(first?.filmId)?.thumbnail ? first.filmId : '';
   const poster = posterId ? `/setup/thumbnail/${esc(posterId)}/poster.jpg` : '';
-  const video = program.previewSeconds ? `<video controls playsinline preload="metadata"${poster ? ` poster="${poster}"` : ''} src="${esc(path)}/clip.mp4"></video>` :
+  const video = program.previewSeconds ? `<video controls playsinline preload="metadata"${poster ? ` poster="${poster}"` : ''} src="${esc(path)}/clip.mp4">${tracks}</video>` :
     (poster ? `<img class="program-poster" src="${poster}" alt="Program thumbnail">` : '');
   const items = program.members.map(item => {
     const film = byId.get(item.filmId);

@@ -26,6 +26,8 @@ The live super-admin dashboard links **Review pending Stripe Tax fees** when an 
 
 For New Mexico filing, choose the reporting month in the live super-admin overview and select **Download totals**. The CSV uses New Mexico calendar months, reports paid film and tip receipts net of included tax, and separates the tax on each. Combine these manual district totals with Stripe's automatic-tax records and review flagged disputes or adjustments. The export sends no filing or payment.
 
+For coupon orders, subscribe both payment-event destinations to `checkout.session.expired` so an expired session releases its reserved use promptly. Scheduled reconciliation also checks for missed expirations. Before enabling coupons in production, complete a zero-total rental and purchase in Stripe’s sandbox and verify access, recovery and the absence of any charge or transfer.
+
 ## Rehearsal evidence, November 21, 2026
 
 After restarting the sandbox viewer, an unauthenticated Helium session stopped *Shorts test* at exactly 10 seconds and displayed both offers. A separate paid sandbox rental started at the intro in 2.56 seconds. Playback resumed after seeking to 92 seconds in 0.69 seconds and back to 24 seconds in 0.98 seconds. The viewer moved through all five titles, retained English captions on returning to the subtitled title, and fetched 44 paid segments with no recorded player errors, stalls or dropped frames. This used the open-web rehearsal tunnel and an existing Stripe sandbox rental.

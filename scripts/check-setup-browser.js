@@ -786,6 +786,17 @@ async function checkFilmUpload(page, movies) {
   report.filmUpload = { parts: 2, bytes: object.data.length, privatePreviewSeconds: 10, thumbnailIsolated: true };
 }
 
+async function uploadSdh(page) {
+  const upload = page.getByRole('heading',{name:'Add a subtitle track'}).locator('..');
+  await upload.getByLabel('Track label').fill('English SDH');
+  await upload.getByLabel('Language tag').fill('en');
+  await upload.getByLabel('Track type').selectOption('captions');
+  await upload.getByLabel('SRT file').setInputFiles({name:'captions.srt',mimeType:'text/plain',
+    buffer:Buffer.from('1\n00:00:01,000 --> 00:00:15,000\n[Footsteps]')});
+  await upload.getByRole('button',{name:'Add track'}).click();
+  await page.getByText('English SDH · en').waitFor();
+}
+
 async function checkProgramEditor(page) {
   assert.equal(await page.locator('#films').getByRole('button', {name:'Create program'}).count(), 0);
   await page.locator('#programs button.primary').filter({hasText:'Create program'}).click();
@@ -834,6 +845,10 @@ async function checkProgramEditor(page) {
   await form.getByLabel('Closing video', {exact:true}).selectOption('');
   await form.getByLabel('Opening video', {exact:true}).selectOption(intro);
   await form.getByLabel('Preview video').selectOption({label:'Meet the director'});
+  const captions = await page.context().newPage();
+  await captions.goto(new URL('/setup/subtitles/'+intro,page.url()).href);
+  await uploadSdh(captions);
+  await captions.close();
   await form.getByLabel('Opening title in this program').fill('Before the screening');
   await form.getByLabel('Curated by').fill('Maya & Lee');
   const img = await sharp({create:{width:320,height:180,channels:3,background:'#898989'}}).jpeg().toBuffer();
@@ -843,6 +858,8 @@ async function checkProgramEditor(page) {
   await page.getByText('Thumbnail saved.',{exact:true}).waitFor();
   await form.getByRole('button', {name:'Save and preview'}).click();
   await page.waitForFunction(() => document.querySelector('video')?.duration === 4);
+  await page.locator('video').evaluate(video=>{video.textTracks[0].mode='showing';});
+  await page.waitForFunction(()=>document.querySelector('video').textTracks[0]?.cues?.[0]?.endTime === 4);
   const entry = page.locator('.private-lineup li').first();
   assert.equal(await entry.locator('h3').innerText(), 'Before the screening');
   assert.match(await entry.locator('.program-runtime').innerText(), /^Opening · /);
@@ -1069,7 +1086,7 @@ try {
       await signIn(page, origin, owner);
       await page.locator('#storage[role=tabpanel]').waitFor();
       assert.equal(await page.locator('#payments').isVisible(), false);
-      assert.deepEqual(await page.locator('.subtabs [role=tab]').allTextContents(), ['Storage', 'Payments']);
+      assert.deepEqual(await page.locator('.subtabs [role=tab]').allTextContents(), ['Storage', 'Payments', 'Coupons']);
       if (first) assert.equal(await page.getByRole('combobox', { name: 'Appearance' }).inputValue(), 'dark');
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       if (evidence && (first || mode === 'reuse')) {
@@ -1104,8 +1121,34 @@ try {
       await openWorkspace(page, 'Dashboard');
       const filmRow = page.locator('details.dashboard-film');
       if (!await filmRow.evaluate(el => el.open)) await filmRow.locator('summary').first().click();
+      if (first) {
+        await page.getByRole('link',{name:'Manage SRT subtitles'}).click();
+        await uploadSdh(page);
+        await openSection(page,'coupons');
+        const create = page.locator('#coupons form').last();
+        await create.getByLabel('Code',{exact:true}).fill('FEST100');
+        await create.getByLabel('Discount value').fill('100');
+        await create.getByRole('combobox',{name:/^Title/}).selectOption(privatePath.split('/').pop());
+        await create.getByRole('button',{name:'Create coupon'}).click();
+        const saved = page.locator('#coupons details').filter({hasText:'FEST100'});
+        await saved.locator('summary').click();
+        await saved.getByLabel('Maximum uses',{exact:false}).fill('3');
+        await saved.getByRole('button',{name:'Save changes'}).click();
+        await saved.locator('summary').click();
+        assert.equal(await saved.getByLabel('Maximum uses',{exact:false}).inputValue(),'3');
+        await saved.getByRole('button',{name:'Delete coupon'}).click();
+        await page.waitForURL('**/setup/settings?section=coupons#coupons');
+        await saved.waitFor({state:'detached'});
+        await openWorkspace(page,'Dashboard');
+        if (!await filmRow.evaluate(el=>el.open)) await filmRow.locator('summary').first().click();
+      }
       await page.getByRole('link', { name: 'Watch private preview' }).click();
       await page.waitForFunction(() => document.querySelector('video')?.duration === 10);
+      if (first) {
+        await page.locator('video').evaluate(video=>{video.textTracks[0].mode='showing';});
+        await page.waitForFunction(()=>document.querySelector('video').textTracks[0]?.cues?.[0]?.text === '[Footsteps]');
+        assert.equal(await page.locator('video').evaluate(video=>video.textTracks[0].cues[0].endTime),10);
+      }
       await page.getByRole('link', { name: 'Back to film' }).click();
       assert.equal(await page.getByRole('link', { name: 'Watch private preview' }).getAttribute('href'), privatePath);
       await page.getByRole('button', { name: 'Add a film' }).click();

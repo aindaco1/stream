@@ -237,7 +237,7 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
   if (!Number.isFinite(previewSeconds) || previewSeconds < 0 || previewSeconds > maxPreviewSeconds()) throw new Error('Unsupported preview length.');
   const head = await source.head();
   const revision = revisionFor(head);
-  const probeCache = source.probeCache;
+  const { probeCache, uploadedSubtitles } = source;
   let media = probeCache?.get(revision, head.size);
   if (!media) {
     source = await withMediaPrefix(source, head);
@@ -323,6 +323,7 @@ export async function openFilm(source, { previewSeconds = 10 } = {}) {
     });
   }
   return Object.freeze({
+    uploadedSubtitles,
     probe: { size: head.size, media }, extension: media.extension, revision, duration, segments,
     subtitleTracks: Object.freeze(media.subtitleTracks.map(Object.freeze)),
     unsupportedSubtitleTracks: Object.freeze(media.unsupportedSubtitleTracks.map(Object.freeze)),

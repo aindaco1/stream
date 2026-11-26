@@ -108,6 +108,10 @@ export function createPublicFilms({ store, env = process.env, authority, platfor
       throw error;
     }
     return {
+      uploadedSubtitles: {
+        list: () => store.subtitleList(entry.spec.owner,entry.spec.id,entry.spec.revision),
+        read: id => store.subtitleFile(entry.spec.owner,entry.spec.id,entry.spec.revision,id)
+      },
       probeCache: store.filmProbeCache?.(entry.spec.owner, entry.spec.id),
       async head() {
         const live = validate(entry);

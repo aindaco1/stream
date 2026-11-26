@@ -1,3 +1,4 @@
+import { rentalReference } from '../src/rental-reference.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
@@ -58,12 +59,12 @@ async function context(t, { legacy = false, marketplace = false, live = false } 
   const purchased = Math.floor(Date.now() / 1000) - 300;
   function addSession(suffix, amount, markers, uiMode, allowedMethods = null) {
     const id = 'cs_' + mode + '_' + suffix, pi = 'pi_' + suffix;
-    sessions.set(id, { id, object:'checkout.session', status:'open', payment_status:'unpaid', payment_intent:pi,
+    sessions.set(id, { id, object:'checkout.session', status:'open', payment_status:'unpaid', payment_intent:amount ? pi : null,
       livemode:live, mode:'payment', currency:'usd', amount_total:amount, amount_subtotal:amount,
       metadata:markers, client_reference_id:markers.order, ui_mode:uiMode,
       allowed_payment_method_types:allowedMethods,
       client_secret:uiMode !== 'hosted' && !behavior.missingSecret ? id+'_secret_rehearsal' : null });
-    intents.set(pi, {id:pi, object:'payment_intent', livemode:live, status:'succeeded', amount, amount_received:amount, currency:'usd', metadata:{...markers},
+    if (amount) intents.set(pi, {id:pi, object:'payment_intent', livemode:live, status:'succeeded', amount, amount_received:amount, currency:'usd', metadata:{...markers},
       latest_charge:{id:'ch_' + suffix,object:'charge',livemode:live,status:'succeeded',paid:true,captured:true,refunded:false,disputed:false,
         amount, amount_captured:amount,amount_refunded:0,currency:'usd',created:purchased,payment_intent:pi,payment_method_details:{type:'card'}}});
     return id;
@@ -171,7 +172,7 @@ async function context(t, { legacy = false, marketplace = false, live = false } 
             markers.grt_location = form.get('metadata[grt_location]');
             assert.equal(form.get('automatic_tax[enabled]'),'false');
             assert.equal(form.get('line_items[0][tax_rates][0]'),'txr_film');
-            assert.equal(form.get('line_items[1][tax_rates][0]'),'txr_tip');
+            assert.equal(form.get('line_items[1][tax_rates][0]'),tipAmount ? 'txr_tip' : null);
           } else {
             assert.equal(form.get('automatic_tax[liability][type]'),'self');
             assert.equal(form.get('automatic_tax[enabled]'),'true');
@@ -183,7 +184,7 @@ async function context(t, { legacy = false, marketplace = false, live = false } 
         }
         assert.equal(markers.order,order);
         assert.equal(markers.amount,String(amount));
-        for (const [k,v] of Object.entries(markers)) assert.equal(v,form.get('payment_intent_data[metadata][' + k + ']'));
+        for (const [k,v] of Object.entries(markers)) assert.equal(amount ? v : null,form.get('payment_intent_data[metadata][' + k + ']'));
         id = addSession(suffix, amount, markers, uiMode, methods.length ? methods : null);
         if (marketplace) {
           Object.assign(sessions.get(id),{automatic_tax:{enabled:true,liability:{type:'self'},status:'requires_location_inputs'},
@@ -191,7 +192,7 @@ async function context(t, { legacy = false, marketplace = false, live = false } 
           if (form.has('shipping_address_collection[allowed_countries][0]')) {
             sessions.get(id).shipping_address_collection = {allowed_countries:['US']};
           }
-          intents.get(sessions.get(id).payment_intent).transfer_group = form.get('payment_intent_data[transfer_group]');
+          if (amount) intents.get(sessions.get(id).payment_intent).transfer_group = form.get('payment_intent_data[transfer_group]');
           const lines = [filmAmount,...(tipAmount ? [tipAmount] : [])].map((unit_amount,index) => {
             const prefix = 'line_items[' + index + '][price_data]';
             const price = {unit_amount,currency:'usd',product:{tax_code:form.get(prefix+'[product_data][tax_code]')},
@@ -199,7 +200,10 @@ async function context(t, { legacy = false, marketplace = false, live = false } 
             return {price,quantity:1,currency:'usd',amount_tax:0,amount_discount:0,amount_total:unit_amount};
           });
           lineItems.set(id,lines);
-          if (markers.grt_policy) {
+          if (markers.grt_policy && amount === 0) {
+            sessions.get(id).automatic_tax = {enabled:false};
+            assert.equal(lines.length,1);
+          } else if (markers.grt_policy) {
             assert.deepEqual([filmAmount,tipAmount],[99,10]);
             for (const [i,line] of lines.entries()) {
               line.amount_tax = i ? 1 : 8;
@@ -243,6 +247,159 @@ async function context(t, { legacy = false, marketplace = false, live = false } 
   return { folder, store, env, origin, fetchImpl, offer, token, checkout, calls, first, sessions, intents, refunds, disputes, transfers, lineItems, behavior, purchased, sign, event, pay,
     start: (kind = 'rent') => checkout.start({ offer,token,origin,kind }), status: () => checkout.status({offer,token}) };
 }
+
+function addCoupon(c, fields = {}) {
+  const data = {action:'save',code:'FEST',type:'percent',value:'25',kind:'both',titleId:'',ends:'',maxUses:'',...fields};
+  c.store.changeCoupon(c.offer.owner,data);
+  return data;
+}
+
+test('discounted pricing is frozen by order, with atomic capped reservations and no duplicate use on retry', async t => {
+  const c = await context(t);
+  const settings = () => c.store.couponSettings(c.offer.owner).coupons[0];
+  const data = addCoupon(c,{kind:'rent',titleId:c.offer.id,maxUses:'1'});
+  const request = {offer:c.offer,origin,kind:'rent',tipPercent:10,couponCode:' fest ',token:c.token};
+  const start = overrides => c.checkout.start({...request,...overrides});
+  await assert.rejects(start({kind:'buy'}),{code:'coupon_invalid'});
+  const rival = viewerToken();
+  const results = await Promise.allSettled([start({}),start({token:rival})]);
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal(results.find(r=>r.status==='rejected').reason.code,'coupon_invalid');
+  const winner = results[0].status === 'fulfilled' ? c.token : rival;
+  const loser = winner === rival ? c.token : rival;
+  const opened = await start({token:winner});
+  assert.deepEqual([opened.listAmount,opened.filmAmount,opened.tipAmount,opened.amount],[99,74,7,81]);
+  assert.equal(settings().uses,1);
+  assert.deepEqual(await c.checkout.abandon({offer:c.offer,token:winner}),{status:'expired'});
+  assert.equal(settings().uses,0);
+  const held = await start({token:loser});
+  const {id,version} = settings();
+  c.store.changeCoupon(c.offer.owner,{...data,id,version,type:'amount',value:'0.15'});
+  c.store.changeCoupon(c.offer.owner,{action:'delete',id,version:version+1});
+  assert.deepEqual(await start({token:loser}),held);
+  await assert.rejects(start({token:viewerToken()}),{code:'coupon_invalid'});
+  Object.assign(c.sessions.get(c.store.viewerOrderById(held.orderId).sessionId),{status:'complete',payment_status:'paid'});
+  assert.equal((await c.checkout.status({offer:c.offer,token:loser})).status,'paid');
+});
+
+test('a fully discounted maximum-price film clears manual tax and the default tip', async t => {
+  const c = await context(t,{marketplace:true});
+  const {offer,store} = c;
+  offer.prices = {rent:99999999,buy:null};
+  store.setFilmPrices(offer.owner,offer.id,offer.prices);
+  addCoupon(c,{value:'100'});
+  const nmQuote = {code:'02-701',ratePartsPerMillion:76250,validFrom:'2026-07-01',validThrough:'2027-06-30'};
+  store.reserveViewerOrder({...offer,tokenHash:await sha256Hex(c.token),platform:'acct_platform',origin,kind:'rent',
+    amount:offer.prices.rent,tipPercent:10,taxPolicy:'marketplace-v1',nmQuote,couponCode:'FEST'});
+  const result = await c.checkout.start({offer,origin,token:c.token,couponCode:'FEST',tipPercent:10});
+  assert.deepEqual([result.filmAmount,result.taxCents,result.tipAmount,result.chargedTotalCents],[0,0,0,0]);
+  Object.assign(c.first(),{status:'complete',payment_status:'no_payment_required'});
+  assert.equal((await c.status()).status,'paid');
+});
+
+test('a missed expiration webhook releases a coupon hold only after checking the provider',async t => {
+  const c = await context(t,{marketplace:true});
+  addCoupon(c,{value:'100',maxUses:'1'});
+  const request = {offer:c.offer,token:c.token,origin,kind:'rent',couponCode:'FEST'};
+  const first = await c.checkout.start(request);
+  const db = new DatabaseSync(join(c.folder,'setup.sqlite'));
+  db.prepare('UPDATE viewer_test_orders SET createdAt=? WHERE orderId=?').run(Date.now()-25*3600_000,first.orderId);
+  db.close();
+  Object.assign(c.first(),{status:'expired',payment_status:'no_payment_required'});
+  assert.equal(c.store.needsPaymentSweep(),true);
+  assert.equal(c.store.viewerOrderById(first.orderId).withdrawalState,null);
+  await c.checkout.closeWithdrawnSessions();
+  assert.equal(c.store.viewerOrderById(first.orderId).status,'expired');
+  assert.equal(c.store.couponSettings(c.offer.owner).coupons[0].uses,0);
+  assert.equal((await c.checkout.start({...request,token:viewerToken()})).amount,0);
+});
+
+test('coupon scope, minimum charge, end date and ownership are enforced at redemption', async t => {
+  const c = await context(t);
+  const program = c.store.createProgram(c.offer.owner);
+  addCoupon(c,{titleId:program.id});
+  assert.throws(()=>c.store.couponForOrder(c.offer.owner,c.offer.id,'rent',99,'FEST'),{code:'coupon_invalid'});
+  assert.equal(c.store.couponForOrder(c.offer.owner,program.id,'buy',800,'FEST').amount,600);
+  assert.throws(()=>c.store.couponForOrder('Someone else',program.id,'buy',800,'FEST'),{code:'coupon_invalid'});
+  addCoupon(c,{code:'EXPIRED',ends:'2000-01-01'});
+  addCoupon(c,{code:'SMALL',type:'amount',value:'0.98'});
+  for (const couponCode of ['EXPIRED','SMALL','MISSING']) {
+    await assert.rejects(c.checkout.start({offer:c.offer,origin,token:c.token,couponCode}),{code:'coupon_invalid',statusCode:422});
+  }
+  assert.equal(c.sessions.size,0);
+});
+
+test('free rentals and purchases require a confirmed zero-total session and preserve entitlements and recovery', async t => {
+  for (const marketplace of [false,true]) for (const kind of ['rent','buy']) {
+    const c = await context(t,{marketplace,live:marketplace});
+    addCoupon(c,{type:kind === 'rent' ? 'percent' : 'amount',value:kind === 'rent' ? '100' : '10',maxUses:'1'});
+    const { orderId,amount,uiMode,tipAmount } = await c.checkout.start({offer:c.offer,origin:c.origin,token:c.token,kind,tipPercent:15,couponCode:'FEST'});
+    assert.deepEqual([amount,tipAmount,uiMode],[0,0,'embedded_page']);
+    const access = {offer:c.offer,kind,orderId};
+    assert.equal(c.checkout.accessAllowed(access),false);
+    const session = c.first();
+    Object.assign(session,{status:'complete',payment_status:'no_payment_required',customer_details:{email:'viewer@example.test'}});
+    if (marketplace) session.automatic_tax.status = 'complete';
+    const event = c.event();
+    if (marketplace) delete event.account;
+    const notify = () => c.checkout.webhook(...c.sign(event,undefined,marketplace ? 'whsec_platform' : secret),marketplace);
+    session.amount_total = 1;
+    await assert.rejects(notify(),{statusCode:409});
+    assert.equal(c.checkout.accessAllowed(access),false);
+    session.amount_total = 0;
+    await notify();
+    const order = c.store.viewerOrderById(orderId);
+    const paid = await c.status();
+    assert.equal(paid.kind,kind);
+    assert.deepEqual([order.chargedTotalCents,order.stripeFeeCents,order.transferId,order.intentId],[0,0,'no_proceeds',null]);
+    assert.equal(c.store.couponSettings(c.offer.owner).coupons[0].uses,1);
+    assert.equal(c.checkout.accessAllowed(access),true);
+    assert.equal(await c.checkout.verifyPurchase({offer:c.offer,orderId}),kind==='buy');
+    const film = {film:c.offer.scope,revision:c.offer.revision};
+    const grant = await c.offer.authority.exchange(paid.receipt,film);
+    assert.equal(grant.rentalExpiresAt,kind==='rent' ? order.paidAt+48*3600 : null);
+    if (kind==='rent') await assert.rejects(c.offer.authority.verifyDownloadGrant(grant.grant,film));
+    else assert.equal((await c.offer.authority.verifyDownloadGrant(grant.grant,film)).orderId,orderId);
+    assert.ok(c.store.reserveRecovery(c.offer,'viewer@example.test'));
+    const stats = c.store.platformReport(c.offer.owner).total;
+    assert.deepEqual([stats.rentals,stats.purchases,stats.netRevenue,stats.processingFees],[Number(kind==='rent'),Number(kind==='buy'),0,0]);
+    assert.equal(c.intents.size,0);
+    assert.equal(c.transfers.length,0);
+  }
+});
+
+test('watermark traces a settled rental to the verified checkout contact without changing access', async t => {
+  for (const marketplace of [false,true]) {
+    const c = await context(t,{marketplace});
+    const {orderId} = await c.start();
+    const code = rentalReference(c.offer.scope,orderId);
+    assert.deepEqual(c.store.rentalsForReference(code).matches,[]);
+    c.pay();
+    if (marketplace) {
+      c.first().automatic_tax.status = 'complete';
+      c.first().total_details.amount_tax = 0;
+    }
+    c.first().customer_details = {email:'renter@example.test'};
+    await c.status();
+    const [match] = c.store.rentalsForReference(code).matches;
+    assert.equal(match.orderId,orderId);
+    assert.equal(match.title,c.offer.title);
+    const before = c.store.viewerOrderById(orderId);
+    const callCount = c.calls.length;
+    assert.equal(await c.checkout.rentalCustomer(orderId),'renter@example.test');
+    assert.deepEqual(c.calls.slice(callCount).map(({method,recipient})=>[method,recipient]),[['GET',marketplace ? null : c.offer.account]]);
+    delete c.first().customer_details;
+    c.intents.get(before.intentId).latest_charge.billing_details = {email:'billing@example.test'};
+    assert.equal(await c.checkout.rentalCustomer(orderId),'billing@example.test');
+    assert.deepEqual(c.store.viewerOrderById(orderId),before);
+    c.first().payment_intent = 'pi_wrong';
+    await assert.rejects(c.checkout.rentalCustomer(orderId));
+    const db = new DatabaseSync(join(c.folder,'setup.sqlite'));
+    db.prepare("UPDATE viewer_test_orders SET rentalReference=NULL,status='expired' WHERE orderId=?").run(orderId);
+    assert.equal(c.store.rentalsForReference(code).matches[0].orderId,orderId,'an existing or expired rental has its original code');
+    db.close();
+  }
+});
 
 async function priorOrder(c,kind,uiMode = 'elements') {
   const order = c.store.reserveViewerOrder({ ...c.offer, tokenHash:await sha256Hex(c.token),
@@ -1240,6 +1397,10 @@ test('one paid program keeps its edition, filmmaker proceeds, title position and
   assert.equal((await post(offer + '/v/' + editionB + '/session', owned.receipt)).status, 403);
   const standalone = base + '/film/' + ids[0];
   assert.equal((await post(standalone + '/session', owned.receipt)).status, 403);
+  addCoupon(c,{code:'PROGRAM',titleId:id,kind:'buy',type:'amount',value:'2'});
+  const discount = await post(offer+'/buy',JSON.stringify({token:viewerToken(),tipPercent:0,programRevision:editionB,couponCode:'PROGRAM'}),'application/json');
+  assert.equal(discount.status,200);
+  assert.equal((await discount.json()).filmAmount,600);
   store.unpublishProgram(owner, id);
   assert.equal((await buy(editionB, viewerToken())).status, 404);
   const shell = await fetch(base + '/embed/' + id);

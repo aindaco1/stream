@@ -30,7 +30,7 @@ export function filmmakerHome() {
     </section>
     <section class="home-notes" aria-label="Screeners and screenings">
       <div><h2>Send a rental screener.</h2>
-        <p>Sending a film to a programmer or a critic? Turn on <a href="/faq#watermark">rental watermarking</a>. A small, anonymous rental reference appears in an upper corner for <strong>four seconds each minute</strong>.</p>
+        <p>Sending a film to a programmer or a critic? Turn on <a href="/faq#watermark">rental watermarking</a>. A small rental code changes position inside the picture and appears for <strong>four seconds each minute</strong>.</p>
         <p>Your viewer’s name and email stay private. The preview, purchased film and original download keep their clean picture.</p>
       </div>
       <div><h2>Make it a double feature.</h2>

@@ -11,6 +11,8 @@
 !shared/
 !shared/dust-wave-platform/
 !shared/dust-wave-platform/packages/
+!shared/dust-wave-platform/packages/coupon-core/
+!shared/dust-wave-platform/packages/coupon-core/**
 !shared/dust-wave-platform/packages/admin-shell/
 !shared/dust-wave-platform/packages/admin-shell/**
 !shared/dust-wave-platform/packages/tax-core/

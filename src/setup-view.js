@@ -1,3 +1,4 @@
+import { couponPanel } from './coupons.js';
 import { reportingMonth } from './nm-tax-report.js';
 import { bucketSelection, hasVideoExtension } from './bucket-videos.js';
 import { sumFilmStats } from './analytics.js';
@@ -114,7 +115,7 @@ export function filmSection({ r2, rights, draft, csrf }) {
   }
   return `
     <details class="film-guide"><summary>Supported video settings</summary>
-      <p>Choose an MP4, MOV or MKV up to 10 GB and four hours long. Supported video formats are H.264, H.265 (HEVC), AV1 and VP9. Include subtitle tracks in the file if you want viewers to be able to turn them on. <a href="/setup/faq#tv">Recommended export settings for TV viewing</a></p>
+      <p>Choose an MP4, MOV or MKV up to 10 GB and four hours long. Supported video formats are H.264, H.265 (HEVC), AV1 and VP9. You can include embedded subtitles or upload SRT tracks after saving the film. <a href="/setup/faq#tv">Recommended export settings for TV viewing</a></p>
     </details>
     <form method="post" action="/setup/film" data-film-form>${fields}
       <label>${draft.programTarget ? 'Video title' : 'Film title'}<input id="film-title" name="title" type="text" maxlength="160" required value="${escapeHtml(draft.title)}"></label>
@@ -141,13 +142,13 @@ export function filmSection({ r2, rights, draft, csrf }) {
 }
 
 function sectionTabs(label, initial, sections) {
-  const links = sections.map(({ id, name }) => `<a href="#${id}" id="tab-${id}" data-tab="${id}">${name}</a>`).join('');
+  const links = sections.map(({ id, name, href }) => `<a href="${href || '#'+id}" id="tab-${id}" data-tab="${id}">${name}</a>`).join('');
   const panels = sections.map(({ id, content }) => `<div class="workspace-panel" id="${id}">${content}</div>`).join('');
   return `<div class="workspace-sections" data-initial="${initial}">
     <nav class="tab-bar subtabs" aria-label="${label}">${links}</nav>${panels}</div>`;
 }
 
-export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {}, draft = {}, error, notice, initialSection, chooseBucket = false }) {
+export function renderSettingsPage({ couponSettings, filmmaker = {}, csrf, stripe = {}, r2 = {}, draft = {}, error, notice, initialSection, chooseBucket = false }) {
   const initial = initialSection || 'storage';
   return workspacePage('Settings', csrf, `<div class="workspace-intro"><h1>Settings</h1>
       ${filmmaker.name ? `<p class="account">Signed in as ${escapeHtml(filmmaker.name)}</p>` : ''}</div>
@@ -157,7 +158,9 @@ export function renderSettingsPage({ filmmaker = {}, csrf, stripe = {}, r2 = {},
         { id: 'storage', name: 'Storage', content: storageCard(r2, draft, csrf, chooseBucket) +
           '<a href="/setup/faq#storage">Storage setup and pricing FAQ</a>' },
         { id: 'payments', name: 'Payments', content: stripeCard(stripe, csrf) +
-          '<a href="/setup/faq#payments">Stripe setup, fees and payouts FAQ</a>' }
+          '<a href="/setup/faq#payments">Stripe setup, fees and payouts FAQ</a>' },
+        { id:'coupons', name:'Coupons', href:'/setup/settings?section=coupons#coupons', content: couponSettings ? couponPanel(csrf,couponSettings)
+          : '<a data-load-section href="/setup/settings?section=coupons#coupons">Manage coupons</a>' }
       ])}`);
 }
 
@@ -220,7 +223,32 @@ function analyticsGuide(admin = false) {
   return `<p class="hint"><a href="${faq}#dashboard-analytics">How these numbers are calculated</a></p>`;
 }
 
-export function renderPlatformDashboard(csrf, report, metricsOnly = false, live = false) {
+function watermarkForm(csrf, code = '', incomplete = false) {
+  return `<form class="film-form" method="post" action="/setup/admin/watermark">
+    ${hidden('csrf',csrf)}<label>Rental code<input name="code" required pattern="[A-Fa-f0-9]{8}" minlength="8" maxlength="8"
+      spellcheck="false" autocomplete="off" value="${escapeHtml(code)}" placeholder="8 characters"></label>
+    <button>${incomplete ? 'Continue lookup' : 'Find rental'}</button></form>`;
+}
+
+export function watermarkLookupPage(csrf, code, {incomplete, matches}, customer) {
+  let result;
+  if (incomplete) result = '<p>Older rentals are being indexed. Continue the lookup to check the next group.</p>';
+  else if (!matches.length) result = '<p>No paid rental matches this code.</p>';
+  else {
+    const rows = matches.map(row => `<li><strong>${escapeHtml(row.title)}</strong> · ${escapeHtml(row.owner)} ·
+      ${new Date(row.paidAt * 1000).toISOString().slice(0,10)} UTC · Stripe reference <code>${escapeHtml(row.intentId)}</code></li>`).join('');
+    let detail;
+    if (matches.length > 1) detail = 'Several rentals share this code. Check the film and payment details before identifying a customer.';
+    else if (customer === undefined) detail = 'Stripe could not verify the checkout contact. Retry the lookup or review the payment in Stripe.';
+    else if (customer === null) detail = 'Stripe has no email for this payment.';
+    else detail = 'Email on the Stripe payment: <strong>' + escapeHtml(customer) + '</strong>';
+    result = `<p>${detail}</p><ul>${rows}</ul><p class="hint">The code identifies the rental associated with the footage. A viewer may have shared access to that rental.</p>`;
+  }
+  return workspacePage('Rental watermark lookup',csrf,`<a href="/setup/admin">Platform analytics</a>
+    <h1>Rental watermark lookup</h1>${result}${watermarkForm(csrf,code,incomplete)}`,{admin:true});
+}
+
+export function renderPlatformDashboard(csrf, report, metricsOnly = false, mode = 'test') {
   const { owner, rows, page, pages, total, makers } = report;
   const url = (maker, number = 1) => {
     const query = new URLSearchParams();
@@ -246,16 +274,17 @@ export function renderPlatformDashboard(csrf, report, metricsOnly = false, live 
       <h1>${platform ? 'Platform analytics' : escapeHtml(owner)}</h1>
       <p class="account">${platform ? makers + ' filmmakers · ' : ''}${total.films} films${total.programs ? ' · ' + total.programs + ' programs' : ''}</p></div>
     <section class="film-card"><h2>Overview</h2>${overview}${analyticsGuide(true)}
-      ${live && platform ? `<form class="film-actions report-download" method="get" action="/setup/admin/new-mexico.csv">
+      ${mode === 'live' && platform ? `<form class="film-actions report-download" method="get" action="/setup/admin/new-mexico.csv">
         <label>New Mexico sales month<input type="month" name="month" required value="${reportingMonth()}"></label>
         <button type="submit">Download totals</button></form>
         <small>These totals cover orders where Stream calculated New Mexico tax. Use Stripe’s tax report for orders calculated by Stripe. Review any flagged adjustments before filing.</small>` : ''}
-      ${live && platform && total.pendingTaxFees ? '<p><a href="/setup/admin/tax-fees">Review pending Stripe Tax fees</a></p>' : ''}
+      ${mode === 'live' && platform && total.pendingTaxFees ? '<p><a href="/setup/admin/tax-fees">Review pending Stripe Tax fees</a></p>' : ''}
       ${total.transfersToReview ? '<p class="hint">Review the affected marketplace charges in Stripe. An adjustment can hold an unpaid transfer or require a reversal after funds were sent.</p>' : ''}</section>
     <section class="film-list"><h2>${platform ? 'Filmmakers' : total.programs ? 'Films and programs' : 'Films'}</h2>
       ${tableRows ? `<label class="analytics-columns"><input type="checkbox"> Show detailed metrics</label><div class="analytics-table" role="region" aria-label="${platform ? 'Filmmaker' : 'Film'} analytics" tabindex="0"><table><thead><tr>
         <th scope="col">${platform ? 'Filmmaker' : 'Film'}</th>${platform ? '<th scope="col">Films</th>' : ''}${headers}</tr></thead><tbody>${tableRows}</tbody></table></div>` : '<p>No results yet.</p>'}
-      ${paging}</section>`, { admin: true });
+      ${paging}</section>
+    ${platform && mode !== 'signup' ? '<section class="film-card"><h2>Rental watermark lookup</h2><p>Enter the eight-character code visible in the footage to find the rental.</p>' + watermarkForm(csrf) + '</section>' : ''}`, { admin: true });
 }
 
 function creditEditor(film, limit) {
@@ -343,7 +372,7 @@ export function renderDashboard({ csrf, owner, error, films, programs = [], orig
       <summary><span class="film-title">${escapeHtml(film.title)}</span><span class="film-meta">${film.published ? 'Published' : 'Private'} · ${formatDuration(film.duration)}</span></summary>
       <div class="film-panel">${preview}
       ${film.unsupportedSubtitles?.length ? '<p class="hint">The player could not use these subtitle tracks: ' + film.unsupportedSubtitles.map(escapeHtml).join(', ') + '. Include a text, DVD or Blu-ray subtitle track when preparing the film.</p>' : ''}
-      ${reports.get(film.id)}${thumbnailEditor(film, csrf)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, style, infoSaved && selectionFilm === film.id)}
+      ${reports.get(film.id)}<p><a href="/setup/subtitles/${escapeHtml(film.id)}">Manage SRT subtitles</a></p>${thumbnailEditor(film, csrf)}${priceEditor(film, csrf)}${filmInfoEditor(film, csrf, fields, style, infoSaved && selectionFilm === film.id)}
       ${film.published ? embedBuilder(film, origin + path, previewOrigin + path, fields, style) : ''}
       <form class="film-publication" action="/setup/dashboard/publication" method="post">${hidden('csrf', csrf)}${hidden('filmId', film.id)}
         <p class="hint">${terms}</p><button type="submit" class="${film.published ? 'secondary' : 'primary'}" name="visibility" value="${film.published ? 'private' : 'public'}">

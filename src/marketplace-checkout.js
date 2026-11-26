@@ -66,11 +66,11 @@ export function matchesMarketplaceSession(session, order) {
   if (expected) {
     const countries = session.shipping_address_collection?.allowed_countries;
     if (!Array.isArray(countries) || countries.length !== expected.length || !expected.every(code => countries.includes(code))) return false;
-    if (order.salesTerritory && session.payment_status === 'paid' &&
+    if (order.salesTerritory && session.status === 'complete' && ['paid','no_payment_required'].includes(session.payment_status) &&
         !expected.includes(session.collected_information?.shipping_details?.address?.country)) return false;
   }
   // Until the billing address is complete, Checkout can return provisional amounts.
-  if (tax.status !== 'complete') return session.payment_status === 'unpaid';
+  if (tax.status !== 'complete') return session.payment_status === 'unpaid' || (order.couponId && order.amount===0 && ['open','expired'].includes(session.status));
   const taxCents = session.total_details.amount_tax;
   if (!cents(session.amount_total) || !cents(taxCents) || !cents(session.amount_subtotal)) return false;
   const included = base + taxCents - session.amount_total;

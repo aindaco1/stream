@@ -42,7 +42,8 @@ test('a paid receiver can read encrypted HLS and captions until access is withdr
   }};
   const get = id => ({id, type:id === 'program' ? 'program' : 'film', revision:'one', scope:'maker/' + id,
     authority, screenerWatermark:true});
-  const media = {segments:[{start:0,end:4,duration:4},{start:4,end:8,duration:4}],
+  const sidecar = {id:'u-11111111-1111-4111-8111-111111111111',format:'text',label:'English SDH',language:'en',kind:'captions'};
+  const media = {uploadedSubtitles:{list:()=>[sidecar],read:id=>id===sidecar.id ? 'WEBVTT\n\n00:00:03.000 --> 00:00:06.000\n[Footsteps]\n' : null},segments:[{start:0,end:4,duration:4},{start:4,end:8,duration:4}],
     subtitleTracks:[{id:'s1',format:'text'},{id:'s2',format:'bitmap'}],
     subtitles:() => 'WEBVTT\n\n00:00:03.000 --> 00:00:06.000\nAcross a cut\n',
     segment(i, options) { renders.push(options); return Buffer.from('title segment ' + i); }, close() {}};
@@ -92,6 +93,8 @@ test('a paid receiver can read encrypted HLS and captions until access is withdr
   assert.match(await (await read('captions.m3u8?subtitle=s1')).text(),/1\.vtt\?subtitle=s1/);
   assert.match(await (await read('1.vtt?subtitle=s1')).text(),/LOCAL:00:00:04.000,MPEGTS:0[\s\S]*Across a cut/);
   assert.equal(await (await read('captions.vtt?subtitle=s1')).text(),media.subtitles());
+  assert.match(await (await read('index.m3u8?subtitle='+sidecar.id)).text(),/NAME="English SDH"/);
+  assert.match(await (await read('1.vtt?subtitle='+sidecar.id)).text(),/LOCAL:00:00:04.000[\s\S]*Footsteps/);
   assert.equal((await read('captions.vtt?subtitle=s2')).status,404);
   assert.equal((await read('1.vtt?subtitle=s3')).status,404);
   paid = false;
@@ -104,7 +107,7 @@ test('anonymous screener references distinguish rentals and are off for other ac
   const spec = {scope:'publisher/title',screenerWatermark:true};
   const rent = {access:'rent',orderId:'first'};
   const mark = screenerReference(spec,rent);
-  assert.match(mark,/^[0-9A-F]{8}$/);
+  assert.equal(mark,'9814274B','previously issued codes must remain traceable');
   assert.notEqual(mark,screenerReference(spec,{...rent,orderId:'second'}));
   assert.equal(screenerReference({...spec,screenerWatermark:false},rent),undefined);
   assert.equal(screenerReference(spec,{access:'buy',orderId:'first'}),undefined);

@@ -79,28 +79,42 @@ export function createRentalAuthority(secret, { now = Date.now, live = false } =
     return { scope, created: charge.created };
   }
 
+  function signRental(scope, orderId, start, hours) {
+    const current = Math.floor(now() / 1000);
+    if (!Number.isSafeInteger(start) || start <= 0 || start > current ||
+        !Number.isInteger(hours) || rentalHours(hours) !== hours || start + hours * 3600 <= current) throw denied();
+    const duration = hours * 3600;
+    return signExpiringToken({ type: 'rental-v1', scope, ...(orderId && { order: orderId }) }, signingKey, {
+      now: start * 1000, ttlSeconds: duration, maxTtlSeconds: duration
+    });
+  }
+
+  function signPurchase(scope, orderId) {
+    return signExpiringToken({ type: 'purchase-v1', scope, order: orderId }, signingKey, {
+      now: now(), ttlSeconds: PURCHASE_RECEIPT_SECONDS, maxTtlSeconds: PURCHASE_RECEIPT_SECONDS
+    });
+  }
+
   return {
     async issueReceipt(intent, film, { amount = 99, paidAt, orderId, rentalHours: hours = 48, paymentState, agreedSubtotal } = {}) {
       const { scope, created } = confirmedCharge(intent, film, amount, 'rent', paymentState, agreedSubtotal);
-      if ((live && !validOrder(orderId)) || rentalHours(hours) !== hours || hours === null ||
+      if ((live && !validOrder(orderId)) || (paidAt !== undefined && paidAt < created) ||
           (orderId !== undefined && (!validOrder(orderId) || intent.metadata.order !== orderId))) throw denied();
-      const duration = hours * 3600;
-      // Hosted orders can settle after charge creation. Their stored, verified
-      // settlement time remains the clock origin across retries and renewals.
-      const start = paidAt === undefined ? created : paidAt;
-      const current = Math.floor(now() / 1000);
-      if (!Number.isSafeInteger(start) || start < created || start > current || start + duration <= current) throw denied();
-      return signExpiringToken({ type: 'rental-v1', scope, ...(orderId && { order: orderId }) }, signingKey, {
-        now: start * 1000, ttlSeconds: duration, maxTtlSeconds: duration
-      });
+      return signRental(scope,orderId,paidAt === undefined ? created : paidAt,hours);
     },
 
     async issuePurchaseReceipt(intent, film, { amount, orderId, paymentState, agreedSubtotal } = {}) {
       const { scope } = confirmedCharge(intent, film, amount, 'buy', paymentState, agreedSubtotal);
       if (!validOrder(orderId) || intent.metadata.order !== orderId) throw denied();
-      return signExpiringToken({ type: 'purchase-v1', scope, order: orderId }, signingKey, {
-        now: now(), ttlSeconds: PURCHASE_RECEIPT_SECONDS, maxTtlSeconds: PURCHASE_RECEIPT_SECONDS
-      });
+      return signPurchase(scope,orderId);
+    },
+
+    async issueCouponReceipt(order, film) {
+      if (order.status !== 'paid' || !order.couponId || !order.sessionId || !validOrder(order.orderId) ||
+          order.amount !== 0 || order.chargedTotalCents !== 0 || order.intentId || order.revocationReason ||
+          order.scope !== film.film || order.revision !== film.revision || !['rent','buy'].includes(order.kind)) throw denied();
+      const scope = rentalScope(film);
+      return order.kind === 'buy' ? signPurchase(scope,order.orderId) : signRental(scope,order.orderId,order.paidAt,order.rentalHours);
     },
 
     async exchange(receipt, film) {
